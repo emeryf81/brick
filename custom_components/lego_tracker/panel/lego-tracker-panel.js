@@ -244,17 +244,23 @@ class LegoTrackerPanel extends HTMLElement {
     let s; try { s = await this._hass.callWS({ type: "lego_tracker/set", set_number: num }); } catch (e) { dlg.innerHTML = `<div class="empty">${esc(e.message)}</div><button class="b" id="x">Sluiten</button>`; dlg.querySelector("#x").onclick = () => dlg.close(); return; }
     const series = Object.entries(s.history).filter(([, h]) => h.length).map(([rid, h], i) => ({ name: s.offers[rid]?.label || rid, color: COLORS[i % COLORS.length], points: h }));
     if (s.rrp && series.length) { const all = series.flatMap((x) => x.points.map((p) => p[0])); series.push({ name: "Adviesprijs", color: "#888", dashed: true, points: [[Math.min(...all), s.rrp], [Math.max(...all), s.rrp]] }); }
-    const rows = Object.entries(s.offers).map(([rid, o]) => `<tr><td>${esc(o.label)}</td><td>${EUR(o.price)}${o.error ? `<div class="err">${esc(o.error)}</div>` : ""}</td><td>${EUR(o.low)}</td><td>${o.checked ? new Date(o.checked * 1000).toLocaleString("nl-BE") : "–"}</td><td><a href="${esc(o.url)}" target="_blank" rel="noreferrer noopener">open ↗</a></td></tr>`).join("");
+    const rows = Object.entries(s.offers).map(([rid, o]) => `<tr><td>${esc(o.label)}</td><td>${EUR(o.price)}${o.error ? `<div class="err">${esc(o.error)}</div>` : ""}</td><td>${EUR(o.low)}</td><td>${o.checked ? new Date(o.checked * 1000).toLocaleString("nl-BE") : "–"}</td><td><a href="${esc(o.url)}" target="_blank" rel="noreferrer noopener">open ↗</a></td><td style="white-space:nowrap"><input class="mp" data-rid="${rid}" type="number" step="0.01" placeholder="prijs" style="width:80px"> <button class="b alt mpb" data-rid="${rid}">✓</button></td></tr>`).join("");
     const c = s.collection || {};
     dlg.innerHTML = `<h2 style="margin-top:0">${esc(s.set_number)} · ${esc(s.name || "")}</h2><div class="m">${esc(s.theme || "")}${s.subtheme ? " / " + esc(s.subtheme) : ""}${s.pieces ? " · " + s.pieces + " stenen" : ""}${s.year ? " · " + s.year : ""}</div>
       ${lineChart(series)}
-      <h3>Winkels</h3>${rows ? `<table><tr><th>Winkel</th><th>Nu</th><th>Laagste</th><th>Laatst gecontroleerd</th><th></th></tr>${rows}</table>` : `<div class="empty">Nog geen winkel-links. Koppel er een via "Toevoegen".</div>`}
+      <h3>Winkels</h3>${rows ? `<table><tr><th>Winkel</th><th>Nu</th><th>Laagste</th><th>Laatst gecontroleerd</th><th></th><th>Handmatig</th></tr>${rows}</table>` : `<div class="empty">Nog geen winkel-links. Koppel er een via "Toevoegen".</div>`}
       <h3>Bewerken</h3><div class="form"><label>Thema<input id="e_theme" value="${esc(s.theme || "")}"></label><label>Subthema<input id="e_sub" value="${esc(s.subtheme || "")}"></label>
       <label>Adviesprijs<input id="e_rrp" type="number" step="0.01" value="${s.rrp ?? ""}"></label><label>In bezit<select id="e_owned"><option value="0">Nee</option><option value="1" ${s.owned ? "selected" : ""}>Ja</option></select></label>
       <label>Aantal<input id="e_qty" type="number" min="1" value="${c.qty ?? 1}"></label><label>Betaald<input id="e_paid" type="number" step="0.01" value="${c.paid ?? ""}"></label></div>
       <button class="b" id="save">Opslaan</button> <button class="b alt" id="rm">Set verwijderen</button> <button class="b alt" id="x">Sluiten</button>`;
     const q = (id) => dlg.querySelector("#" + id);
     q("x").onclick = () => dlg.close();
+    dlg.querySelectorAll(".mpb").forEach((btn) => btn.onclick = async () => {
+      const rid = btn.dataset.rid, val = parseFloat(dlg.querySelector(`.mp[data-rid="${rid}"]`).value);
+      if (!(val > 0)) return alert("Geef een prijs in");
+      try { await this.svc("report_price", { set_number: num, retailer: rid, price: val }); } catch (e) { return alert(e.message); }
+      await this.load(); this.openSet(num);
+    });
     q("save").onclick = async () => {
       const f = { theme: q("e_theme").value.trim(), subtheme: q("e_sub").value.trim(), owned: q("e_owned").value === "1", qty: +q("e_qty").value || 1 };
       if (q("e_rrp").value) f.rrp = +q("e_rrp").value; if (q("e_paid").value) f.paid = +q("e_paid").value;

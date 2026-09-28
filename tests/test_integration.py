@@ -87,3 +87,22 @@ async def test_config_flow(hass: HomeAssistant):
         "discount_threshold": 30, "retailers": ["bol", "kruidvat_be"], "update_hours": 6, "digest_time": "08:00:00", "min_history_days": 3})
     assert r["type"] == "create_entry" and r["options"]["discount_threshold"] == 30
 
+
+
+async def test_report_price_by_url_and_manual(hass: HomeAssistant, entry):
+    from homeassistant.exceptions import ServiceValidationError
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281", "name": "Bonsai", "rrp": 49.99}, blocking=True)
+    await hass.services.async_call(DOMAIN, "set_offer", {"set_number": "10281", "retailer": "amazon_nl", "url": "B08XYZ1234"}, blocking=True)
+    # userscript style: only a URL (with extras) and a price
+    await hass.services.async_call(DOMAIN, "report_price", {"url": "https://www.amazon.nl/LEGO-Bonsai/dp/B08XYZ1234/ref=x?th=1", "price": 35.5}, blocking=True)
+    await hass.async_block_till_done()
+    assert float(hass.states.get("sensor.lego_price_tracker_10281_bonsai").state) == 35.5
+    # manual entry from the panel: set + retailer, offer created on the fly
+    await hass.services.async_call(DOMAIN, "report_price", {"set_number": "10281", "retailer": "bol", "price": 33.0}, blocking=True)
+    await hass.async_block_till_done()
+    assert float(hass.states.get("sensor.lego_price_tracker_10281_bonsai").state) == 33.0
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(DOMAIN, "report_price", {"url": "https://www.bol.com/nl/nl/p/unknown/1/", "price": 10}, blocking=True)

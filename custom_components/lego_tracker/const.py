@@ -15,6 +15,7 @@ CONF_RETAILERS = "retailers"
 CONF_DIGEST_TIME = "digest_time"
 CONF_BRICKSET_KEY = "brickset_api_key"
 CONF_MIN_HISTORY_DAYS = "min_history_days"
+CONF_IMPERSONATE = "use_impersonation"
 
 DEFAULT_DISCOUNT_THRESHOLD = 25
 DEFAULT_UPDATE_HOURS = 6

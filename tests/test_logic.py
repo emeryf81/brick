@@ -143,3 +143,12 @@ def test_search_result_finders():
     az = '<div data-asin="B0ABCDEFGH"><span>LEGO Icons Bonsai Boom 10281</span></div><div data-asin="B0ZZZZZZZZ"><span>Other</span></div>'
     assert parsers.find_search_result("amazon_be", az, "10281") == "https://www.amazon.com.be/dp/B0ABCDEFGH"
     assert parsers.find_search_result("bol", '<a href="/nl/nl/p/lego-icons-bonsai-10281/9300000?x=1">', "10281") == "https://www.bol.com/nl/nl/p/lego-icons-bonsai-10281/9300000"
+
+
+def test_url_key_and_retailer_detection():
+    assert parsers.retailer_from_url("https://www.amazon.com.be/dp/B08XYZ1234?th=1") == "amazon_be"
+    assert parsers.retailer_from_url("https://www.bol.com/nl/nl/p/x/1/") == "bol"
+    assert parsers.retailer_from_url("https://example.com/") is None
+    a = parsers.url_key("amazon_nl", "https://www.amazon.nl/LEGO-Bonsai/dp/B08XYZ1234/ref=x?y=1")
+    assert a == parsers.url_key("amazon_nl", "https://www.amazon.nl/dp/B08XYZ1234")
+    assert parsers.url_key("bol", "https://www.bol.com/nl/nl/p/x/1/?bltgh=q") == parsers.url_key("bol", "https://www.bol.com/nl/nl/p/x/1")

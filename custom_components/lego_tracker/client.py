@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import random
+import time
 from typing import Any
 
 import aiohttp
@@ -14,44 +15,138 @@ from .parsers import Parsed, find_search_result, parse_page, search_url
 
 _LOGGER = logging.getLogger(__name__)
 
-HEADERS_POOL = [
-    {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "nl-BE,nl;q=0.9,en;q=0.8",
-    },
-    {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "nl-NL,nl;q=0.9,en;q=0.8",
-    },
-]
+BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "nl-BE,nl;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Sec-Ch-Ua": '"Chromium";v="131", "Not_A Brand";v="24"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+}
+ORIGINS = {
+    "amazon_nl": "https://www.amazon.nl/", "amazon_de": "https://www.amazon.de/",
+    "amazon_be": "https://www.amazon.com.be/", "bol": "https://www.bol.com/nl/nl/",
+    "kruidvat_be": "https://www.kruidvat.be/nl/",
+}
+# After a block we stop asking that retailer for a while: hammering makes bot protection stricter.
+COOLDOWN_HOURS = (1, 3, 6, 12, 24)
+CURL_REQUIREMENT = "curl_cffi>=0.7.0"
 
 
 class Fetcher:
-    """Polite fetcher: one request at a time per retailer, jittered delay."""
+    """Polite fetcher: one request at a time per retailer, jittered delay, block cooldown.
 
-    def __init__(self, session: aiohttp.ClientSession) -> None:
-        self._session = session
+    Transport is either aiohttp, or curl_cffi impersonating Chrome's TLS/HTTP2 fingerprint
+    (much less likely to be blocked). curl_cffi is installed on demand and is optional.
+    """
+
+    def __init__(self, hass: Any, use_impersonation: bool = True) -> None:
+        self._hass = hass
+        self._use_impersonation = use_impersonation
+        self._curl_ok: bool | None = None
+        self._sessions: dict[str, Any] = {}
+        self._warmed: set[str] = set()
         self._locks: dict[str, asyncio.Lock] = {}
         self.min_delay = 4.0
+        self.blocks: dict[str, int] = {}
+        self.blocked_until: dict[str, float] = {}
+
+    @property
+    def transport(self) -> str:
+        return "curl_cffi (Chrome impersonation)" if self._curl_ok else "aiohttp"
+
+    async def async_setup(self) -> None:
+        if not self._use_impersonation:
+            self._curl_ok = False
+            return
+        try:
+            import curl_cffi  # noqa: F401
+        except ImportError:
+            try:
+                from homeassistant.requirements import async_process_requirements
+
+                await async_process_requirements(self._hass, "lego_tracker", [CURL_REQUIREMENT], is_built_in=False)
+                import curl_cffi  # noqa: F401
+            except Exception as err:  # noqa: BLE001 - optional dependency, never fatal
+                _LOGGER.warning("curl_cffi unavailable, falling back to aiohttp (more likely to be blocked): %s", err)
+                self._curl_ok = False
+                return
+        self._curl_ok = True
+
+    async def async_close(self) -> None:
+        for sess in self._sessions.values():
+            try:
+                res = sess.close()
+                if asyncio.iscoroutine(res):
+                    await res
+            except Exception:  # noqa: BLE001
+                pass
+        self._sessions.clear()
+
+    def _session(self, retailer: str) -> Any:
+        """One cookie jar per retailer, so consent/session cookies persist between polls."""
+        if retailer not in self._sessions:
+            if self._curl_ok:
+                from curl_cffi.requests import AsyncSession
+
+                self._sessions[retailer] = AsyncSession(impersonate="chrome", timeout=30)
+            else:
+                from homeassistant.helpers.aiohttp_client import async_create_clientsession
+
+                self._sessions[retailer] = async_create_clientsession(self._hass)
+        return self._sessions[retailer]
+
+    async def _request(self, retailer: str, url: str, referer: str | None = None) -> tuple[int, str]:
+        headers = dict(BROWSER_HEADERS)
+        if referer:
+            headers.update({"Referer": referer, "Sec-Fetch-Site": "same-origin"})
+        sess = self._session(retailer)
+        if self._curl_ok:
+            resp = await sess.get(url, headers=headers, allow_redirects=True)
+            return resp.status_code, resp.text
+        async with sess.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=30), allow_redirects=True) as resp:
+            return resp.status, await resp.text(errors="replace")
 
     async def _get(self, retailer: str, url: str) -> tuple[int, str]:
+        if self._curl_ok is None:
+            await self.async_setup()
         lock = self._locks.setdefault(retailer, asyncio.Lock())
         async with lock:
+            origin = ORIGINS.get(retailer)
+            if origin and retailer not in self._warmed:   # look like a visitor: home page first
+                self._warmed.add(retailer)
+                try:
+                    await self._request(retailer, origin)
+                except Exception:  # noqa: BLE001
+                    pass
+                await asyncio.sleep(2 + random.random() * 2)
             await asyncio.sleep(self.min_delay + random.random() * 3)
-            async with self._session.get(
-                url, headers=random.choice(HEADERS_POOL), timeout=aiohttp.ClientTimeout(total=30), allow_redirects=True
-            ) as resp:
-                return resp.status, await resp.text(errors="replace")
+            return await self._request(retailer, url, referer=origin)
+
+    def cooldown_left(self, retailer: str) -> float:
+        return max(0.0, self.blocked_until.get(retailer, 0) - time.time())
+
+    def _note_block(self, retailer: str) -> None:
+        n = self.blocks.get(retailer, 0)
+        self.blocked_until[retailer] = time.time() + COOLDOWN_HOURS[min(n, len(COOLDOWN_HOURS) - 1)] * 3600
+        self.blocks[retailer] = n + 1
 
     async def fetch_offer(self, retailer: str, url: str) -> tuple[Parsed | None, str | None]:
         """Returns (parsed, error)."""
+        if (left := self.cooldown_left(retailer)) > 0:
+            return None, f"paused {left / 3600:.1f} h after being blocked (use report_price / userscript, or wait)"
         try:
             status, page = await self._get(retailer, url)
-        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+        except Exception as err:  # noqa: BLE001 - aiohttp and curl_cffi raise different types
             return None, f"network: {err}"
         if status in (403, 429, 503):
+            self._note_block(retailer)
             return None, f"blocked (HTTP {status})"
         if status == 404:
             return None, "not found (HTTP 404)"
@@ -59,18 +154,23 @@ class Fetcher:
             return None, f"HTTP {status}"
         parsed = parse_page(retailer, page)
         if parsed.blocked:
+            self._note_block(retailer)
             return None, "blocked (captcha / bot protection)"
         if parsed.price is None and not parsed.unavailable:
             return None, "price not found on page (markup changed?)"
+        self.blocks[retailer] = 0
         return parsed, None
 
     async def discover(self, retailer: str, set_number: str) -> str | None:
         url = search_url(retailer, set_number)
-        if not url:
+        if not url or self.cooldown_left(retailer) > 0:
             return None
         try:
             status, page = await self._get(retailer, url)
-        except (aiohttp.ClientError, asyncio.TimeoutError):
+        except Exception:  # noqa: BLE001
+            return None
+        if status in (403, 429, 503) or (status < 400 and parse_page(retailer, page).blocked):
+            self._note_block(retailer)
             return None
         return find_search_result(retailer, page, set_number) if status < 400 else None
 

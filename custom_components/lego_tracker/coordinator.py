@@ -14,7 +14,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .client import Fetcher, brickset_lookup
 from .const import (
-    CONF_BRICKSET_KEY, CONF_DISCOUNT_THRESHOLD, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
+    CONF_BRICKSET_KEY, CONF_DISCOUNT_THRESHOLD, CONF_IMPERSONATE, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
     CONF_UPDATE_HOURS, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS, DEFAULT_RETAILERS,
     DEFAULT_UPDATE_HOURS, DOMAIN, EVENT_HIGH_DISCOUNT, EVENT_NEW_LOW, RETAILERS, STORAGE_KEY,
     STORAGE_VERSION,
@@ -23,7 +23,7 @@ from .models import (
     collection_series, collection_summary, compute_set_status, new_store, normalize_set_number,
     record_price, today_iso,
 )
-from .parsers import normalize_url
+from .parsers import normalize_url, retailer_from_url, url_key
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.entry = entry
         self._store = Store[dict[str, Any]](hass, STORAGE_VERSION, STORAGE_KEY)
         self.store: dict[str, Any] = new_store()
-        self.fetcher = Fetcher(async_get_clientsession(hass))
+        self.fetcher = Fetcher(hass, bool(self.opt(entry, CONF_IMPERSONATE, True)))
         self._alerted: set[tuple[str, str]] = set()
 
     # ---------------------------------------------------------------- options
@@ -55,6 +55,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     # ---------------------------------------------------------------- storage
     async def async_load(self) -> None:
+        await self.fetcher.async_setup()
         if (data := await self._store.async_load()):
             self.store = {**new_store(), **data}
 
@@ -63,6 +64,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_shutdown(self) -> None:
         await self._store.async_save(self.store)
+        await self.fetcher.async_close()
         await super().async_shutdown()
 
     # -------------------------------------------------------------- computing
@@ -184,6 +186,36 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         elif coll or fields.get("owned"):
             self.store["collection"].setdefault(num, {"qty": 1}).update(coll)
         self.push_update()
+
+    def report_price(self, price: float, *, url: str | None = None, set_number: str | None = None,
+                     retailer: str | None = None) -> str:
+        """Accept a price observed elsewhere (userscript, n8n, automation). Returns the set number."""
+        if url and not retailer:
+            retailer = retailer_from_url(url)
+        num = normalize_set_number(set_number) if set_number else None
+        found: tuple[str, str] | None = None
+        if url and retailer:
+            key = url_key(retailer, url)
+            for n, offers in self.store["offers"].items():
+                o = offers.get(retailer)
+                if o and o.get("url") and url_key(retailer, o["url"]) == key and (num is None or n == num):
+                    found = (n, retailer)
+                    break
+        if found is None and num and retailer:
+            if num not in self.store["sets"]:
+                raise ValueError(f"Set {num} is not tracked yet; add it first.")
+            offer = self.store["offers"].setdefault(num, {}).setdefault(retailer, {"url": url or "", "history": []})
+            if url and not offer.get("url"):
+                offer["url"] = normalize_url(retailer, url)
+            found = (num, retailer)
+        if found is None:
+            raise ValueError("No matching offer: pass the product url of a tracked offer, or set_number + retailer.")
+        num, retailer = found
+        before = self.compute()["statuses"].get(num, {})
+        record_price(self.store["offers"][num][retailer], price)
+        self._fire_events(num, before, self.compute()["statuses"].get(num, {}))
+        self.push_update()
+        return num
 
     def series(self) -> list[dict[str, float]]:
         return collection_series(self.store)

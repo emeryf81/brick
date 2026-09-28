@@ -2,7 +2,7 @@
 
 Custom integration (HACS-compatibel) die LEGO-sets en hun prijzen volgt bij **Amazon.nl, Amazon.de, Amazon.com.be, bol.com en Kruidvat.be**, met een dagelijks dashboard, prijsgrafieken en collectiewaarde.
 
-> Status: 0.1.0, eerste versie. Getest met unit tests en integratietests tegen een echte Home Assistant-core (2026.2.3): config flow, options flow, herladen, services, sensoren, websocket en CSV-import. Het paneel is in Chromium gerenderd met nagemaakte data. **Nog niet gedaan:** een run op jouw HA OS 2026.9 en een controle van de winkel-parsers tegen de live sites. Verwacht dat je die parsers moet bijstellen.
+> Status: 0.1.0, eerste versie. Getest met unit- en integratietests (33) tegen een echte Home Assistant-core (2026.2.3): config flow, options flow, herladen, services, sensoren, websocket en CSV-import. Het paneel is in Chromium gerenderd met nagemaakte data. **Nog niet gedaan:** een run op jouw HA OS 2026.9 en een controle van de winkel-parsers tegen de live sites. Verwacht dat je die parsers moet bijstellen.
 
 ## Wat het doet
 - **Sidebar-paneel "LEGO"** met tabbladen:
@@ -37,10 +37,22 @@ data:
 
 **Collectiegroei**: de waarde wordt herrekend uit de eigen prijshistoriek (goedkoopste nieuwprijs × aantal). Zolang een set geen prijshistoriek heeft, wordt de geïmporteerde waarde (bv. de BrickEconomy-waarde uit je CSV) of anders de adviesprijs gebruikt. BrickEconomy heeft geen publieke gratis API, daarom is er geen rechtstreekse koppeling; de CSV-waarde is de brug.
 
-## Beperkingen, eerlijk
-- Amazon en bol.com **staan scraping niet toe** in hun voorwaarden en blokkeren bots (captcha/403). De integratie is bewust traag (4–7 s tussen requests per winkel, 6 u interval) en meldt "blocked" per aanbieding in het paneel. Dit is voor persoonlijk gebruik; gebruik een redelijk interval. Wil je stabieler, dan zijn officiële feeds (Amazon PA-API, bol Partner API) een betere bron; de parsers zitten in `parsers.py` en zijn te vervangen.
-- Winkel-markup verandert; parsers proberen JSON-LD → meta tags → winkel-specifieke markup. Zie `tests/test_logic.py` voor voorbeelden.
-- Één winkel wordt sequentieel bevraagd; bij honderden sets duurt een volledige ronde lang.
+## Blokkades (captcha / HTTP 403) en wat ertegen helpt
+Amazon en bol.com herkennen Python-scrapers vooral aan de **TLS-vingerafdruk**, niet aan de headers. Drie lagen, in deze volgorde:
+
+1. **Chrome nabootsen (standaard aan, optie "Chrome-browser nabootsen")**: de integratie installeert bij de eerste start `curl_cffi` en doet requests met Chrome's vingerafdruk, met een startpagina-bezoek, cookies per winkel en echte browser-headers. Als de installatie mislukt, valt ze terug op aiohttp (waarschuwing in het HA-log). Het paneel-log toont welk transport actief is.
+2. **Pauze na een blokkade**: wordt een winkel geblokkeerd, dan wordt die 1 u, 3 u, 6 u, 12 u, daarna 24 u niet meer bevraagd. Doorhameren maakt de bescherming strenger. De aanbieding toont "paused … after being blocked".
+3. **Prijzen aanleveren van buitenaf** (werkt altijd):
+   - **Userscript** `tools/lego-tracker.user.js` (Tampermonkey/Violentmonkey): draait in *jouw eigen browser* op de productpagina's die je bezoekt en stuurt de prijs naar HA. Menu "HA instellen" → HA-URL en een long-lived access token. Alleen al gevolgde producten worden bijgewerkt.
+   - **Service `lego_tracker.report_price`** (`price` + `url`, of `price` + `set_number` + `retailer`): voor n8n, een automation of een ander script.
+   - **Handmatig** in het detailvenster van een set (veld "Handmatig").
+
+Betere bronnen dan scrapen, als het blijft haperen: bol.com Marketing Catalog API (gratis partneraccount) en Amazon PA-API (vereist een partneraccount met verkopen). Die zijn nog niet ingebouwd, want ik kon ze niet verifiëren; `parsers.py` en `client.py` zijn de plek om ze in te pluggen.
+
+## Overige beperkingen
+- Amazon en bol.com **staan scraping niet toe** in hun voorwaarden. Gebruik het voor persoonlijk gebruik met een redelijk interval (standaard 6 u, 4–7 s tussen requests).
+- Winkel-markup verandert; parsers proberen JSON-LD → meta tags → winkel-specifieke markup. Zie `tests/test_logic.py`.
+- Eén winkel wordt sequentieel bevraagd; bij honderden sets duurt een volledige ronde lang.
 
 ## Ontwikkelen
 ```

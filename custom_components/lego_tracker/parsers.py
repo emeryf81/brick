@@ -222,3 +222,22 @@ def find_search_result(retailer: str, page: str, set_number: str) -> str | None:
             if set_number in href or "lego" in href.lower():
                 return "https://www.kruidvat.be" + href.split("?")[0]
     return None
+
+
+def retailer_from_url(url: str) -> str | None:
+    host = urlparse(url).netloc.lower()
+    for rid, dom in (("amazon_nl", "amazon.nl"), ("amazon_de", "amazon.de"), ("amazon_be", "amazon.com.be"),
+                     ("bol", "bol.com"), ("kruidvat_be", "kruidvat.be")):
+        if host.endswith(dom):
+            return rid
+    return None
+
+
+def url_key(retailer: str, url: str) -> str:
+    """Stable identity of a product page (ASIN for Amazon, path without query otherwise)."""
+    if retailer in AMAZON_DOMAINS:
+        m = re.search(r"/(?:dp|gp/product)/([A-Z0-9]{10})", url)
+        if m:
+            return m.group(1)
+    parsed = urlparse(url)
+    return parsed.path.rstrip("/").lower()
