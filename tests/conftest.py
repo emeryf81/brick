@@ -1,5 +1,6 @@
 """Load the HA-independent modules without importing Home Assistant."""
 import importlib.util
+import pytest
 import sys
 import types
 from pathlib import Path
@@ -13,3 +14,11 @@ for name in ("const", "models", "parsers", "csv_import"):
     mod = importlib.util.module_from_spec(spec)
     sys.modules[f"lego_pkg.{name}"] = mod
     spec.loader.exec_module(mod)
+
+
+pytest_plugins = ["pytest_homeassistant_custom_component"]
+
+
+@pytest.fixture(autouse=True)
+def _enable_custom_integrations(enable_custom_integrations):
+    yield

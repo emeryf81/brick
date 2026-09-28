@@ -2,7 +2,7 @@
 
 Custom integration (HACS-compatibel) die LEGO-sets en hun prijzen volgt bij **Amazon.nl, Amazon.de, Amazon.com.be, bol.com en Kruidvat.be**, met een dagelijks dashboard, prijsgrafieken en collectiewaarde.
 
-> Status: 0.1.0, eerste versie. De logica (prijsberekening, deals, CSV-import, parsers) heeft unit tests. Het Home Assistant-gedeelte (config flow, sensoren, panel) is nog **niet in een draaiende HA getest**, en de winkel-parsers zijn nog niet tegen de live sites gecontroleerd. Verwacht dat je ze moet bijstellen.
+> Status: 0.1.0, eerste versie. Getest met unit tests en integratietests tegen een echte Home Assistant-core (2026.2.3): config flow, options flow, herladen, services, sensoren, websocket en CSV-import. Het paneel is in Chromium gerenderd met nagemaakte data. **Nog niet gedaan:** een run op jouw HA OS 2026.9 en een controle van de winkel-parsers tegen de live sites. Verwacht dat je die parsers moet bijstellen.
 
 ## Wat het doet
 - **Sidebar-paneel "LEGO"** met tabbladen:
@@ -44,5 +44,8 @@ data:
 
 ## Ontwikkelen
 ```
-pip install pytest && python -m pytest tests
+# logica-tests (Python 3.11+)
+pip install pytest && python -m pytest tests/test_logic.py
+# volledige suite met Home Assistant (Python 3.13)
+pip install pytest-homeassistant-custom-component home-assistant-frontend && python -m pytest tests
 ```

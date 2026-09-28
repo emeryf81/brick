@@ -17,7 +17,7 @@ function lineChart(series, { height = 220, money = true } = {}) {
   let g = "";
   for (let i = 0; i <= 4; i++) {
     const v = y0 + ((y1 - y0) * i) / 4, y = sy(v);
-    g += `<line x1="${P.l}" x2="${W - P.r}" y1="${y}" y2="${y}" class="grid"/><text x="${P.l - 6}" y="${y + 4}" text-anchor="end" class="axis">${money ? Math.round(v) : v.toFixed(0)}</text>`;
+    g += `<line x1="${P.l}" x2="${W - P.r}" y1="${y}" y2="${y}" class="gl"/><text x="${P.l - 6}" y="${y + 4}" text-anchor="end" class="axis">${money ? Math.round(v) : v.toFixed(0)}</text>`;
   }
   for (let i = 0; i <= 3; i++) {
     const t = x0 + ((x1 - x0) * i) / 3;
@@ -42,43 +42,43 @@ function spark(vals) {
 }
 
 const STYLE = `
-:host{display:block;background:var(--primary-background-color);color:var(--primary-text-color);min-height:100vh;font-family:var(--paper-font-body1_-_font-family,Roboto,sans-serif)}
+:host{display:block;background:var(--primary-background-color,#f4f4f6);color:var(--primary-text-color,#1b1b1f);min-height:100vh;font-family:var(--paper-font-body1_-_font-family,Roboto,sans-serif)}
 .wrap{max-width:1200px;margin:0 auto;padding:16px}
 header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}
 h1{margin:0;font-size:22px;flex:1}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
-.tile{background:var(--card-background-color);border-radius:12px;padding:12px;box-shadow:var(--ha-card-box-shadow,0 1px 3px #0003)}
-.tile b{display:block;font-size:22px;margin-top:2px}.tile small{color:var(--secondary-text-color)}
-.tabs{display:flex;gap:4px;border-bottom:1px solid var(--divider-color);margin-bottom:12px;overflow-x:auto}
-.tab{padding:10px 16px;cursor:pointer;border:0;background:none;color:var(--secondary-text-color);font-size:15px;border-bottom:3px solid transparent;white-space:nowrap}
-.tab.on{color:var(--primary-color);border-color:var(--primary-color);font-weight:600}
+.tile{background:var(--card-background-color,#fff);border-radius:12px;padding:12px;box-shadow:var(--ha-card-box-shadow,0 1px 3px #0003)}
+.tile b{display:block;font-size:22px;margin-top:2px}.tile small{color:var(--secondary-text-color,#666)}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--divider-color,#d0d0d6);margin-bottom:12px;overflow-x:auto}
+.tab{padding:10px 16px;cursor:pointer;border:0;background:none;color:var(--secondary-text-color,#666);font-size:15px;border-bottom:3px solid transparent;white-space:nowrap}
+.tab.on{color:var(--primary-color,#0055bf);border-color:var(--primary-color,#0055bf);font-weight:600}
 .bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
-input,select,textarea,button.b{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--divider-color);background:var(--card-background-color);color:inherit}
-button.b{cursor:pointer;background:var(--primary-color);color:var(--text-primary-color,#fff);border:0}button.b.alt{background:var(--card-background-color);color:inherit;border:1px solid var(--divider-color)}
+input,select,textarea,button.b{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--divider-color,#d0d0d6);background:var(--card-background-color,#fff);color:inherit}
+button.b{cursor:pointer;background:var(--primary-color,#0055bf);color:var(--text-primary-color,#fff);border:0}button.b.alt{background:var(--card-background-color,#fff);color:inherit;border:1px solid var(--divider-color,#d0d0d6)}
 .chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
-.chip{padding:5px 12px;border-radius:99px;background:var(--card-background-color);border:1px solid var(--divider-color);cursor:pointer;font-size:13px}
-.chip.on{background:var(--primary-color);color:var(--text-primary-color,#fff);border-color:transparent}
+.chip{padding:5px 12px;border-radius:99px;background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#d0d0d6);cursor:pointer;font-size:13px}
+.chip.on{background:var(--primary-color,#0055bf);color:var(--text-primary-color,#fff);border-color:transparent}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
-.card{background:var(--card-background-color);border-radius:12px;padding:10px;cursor:pointer;position:relative;box-shadow:var(--ha-card-box-shadow,0 1px 3px #0003);display:flex;flex-direction:column;gap:4px}
+.card{background:var(--card-background-color,#fff);border-radius:12px;padding:10px;cursor:pointer;position:relative;box-shadow:var(--ha-card-box-shadow,0 1px 3px #0003);display:flex;flex-direction:column;gap:4px}
 .card img{width:100%;height:120px;object-fit:contain;border-radius:8px;background:#fff}
-.card .ph{height:120px;display:flex;align-items:center;justify-content:center;font-size:34px;background:var(--secondary-background-color);border-radius:8px}
-.card .n{font-weight:600;font-size:14px;min-height:36px}.card .m{color:var(--secondary-text-color);font-size:12px}
+.card .ph{height:120px;display:flex;align-items:center;justify-content:center;font-size:34px;background:var(--secondary-background-color,#e8e8ec);border-radius:8px}
+.card .n{font-weight:600;font-size:14px;min-height:36px}.card .m{color:var(--secondary-text-color,#666);font-size:12px}
 .card .p{font-size:20px;font-weight:700}.spark{width:100%;height:28px}
 .badges{position:absolute;top:14px;left:14px;display:flex;flex-direction:column;gap:4px}
 .badge{font-size:11px;font-weight:700;padding:3px 7px;border-radius:6px;color:#fff;background:#237841;width:fit-content}
 .badge.disc{background:#e3000b}.badge.own{background:#0055bf}
-.chart{width:100%;height:auto}.grid line{stroke:var(--divider-color)}.axis{font-size:10px;fill:var(--secondary-text-color)}
+.chart{width:100%;height:auto}.gl{stroke:var(--divider-color,#d0d0d6)}.axis{font-size:10px;fill:var(--secondary-text-color,#666)}
 .legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;margin-top:4px}.lg i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px}
-.empty{padding:24px;text-align:center;color:var(--secondary-text-color)}
-table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--divider-color)}
-a{color:var(--primary-color)}.err{color:#e3000b;font-size:12px}
-dialog{border:0;border-radius:14px;padding:16px;max-width:820px;width:96vw;background:var(--card-background-color);color:var(--primary-text-color)}
+.empty{padding:24px;text-align:center;color:var(--secondary-text-color,#666)}
+table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--divider-color,#d0d0d6)}
+a{color:var(--primary-color,#0055bf)}.err{color:#e3000b;font-size:12px}
+dialog{border:0;border-radius:14px;padding:16px;max-width:820px;width:96vw;background:var(--card-background-color,#fff);color:var(--primary-text-color,#1b1b1f)}
 dialog::backdrop{background:#0008}
 .form{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin-bottom:10px}
-.form label{display:flex;flex-direction:column;font-size:12px;color:var(--secondary-text-color);gap:3px}
-.section{background:var(--card-background-color);border-radius:12px;padding:14px;margin-bottom:14px}
+.form label{display:flex;flex-direction:column;font-size:12px;color:var(--secondary-text-color,#666);gap:3px}
+.section{background:var(--card-background-color,#fff);border-radius:12px;padding:14px;margin-bottom:14px}
 .section h3{margin:0 0 8px}.msg{margin-top:8px;font-size:13px}
-.hbar{display:flex;align-items:center;gap:8px;font-size:13px;margin:3px 0}.hbar span.f{height:10px;background:var(--primary-color);border-radius:4px;display:inline-block}
+.hbar{display:flex;align-items:center;gap:8px;font-size:13px;margin:3px 0}.hbar span.f{height:10px;background:var(--primary-color,#0055bf);border-radius:4px;display:inline-block}
 `;
 
 class LegoTrackerPanel extends HTMLElement {
