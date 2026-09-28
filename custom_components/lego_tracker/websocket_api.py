@@ -64,6 +64,12 @@ def ws_overview(hass, connection, msg):
         "retailers": {k: v[0] for k, v in RETAILERS.items()},
         "sets": [_card(coord, n) for n in coord.store["sets"]],
         "summary": (coord.data or coord.compute())["summary"],
+        "wishlist": (coord.data or coord.compute())["wishlist"],
+        "health": {
+            "errors": sum(s["offers_error"] for s in (coord.data or coord.compute())["statuses"].values()),
+            "paused_hours": {RETAILERS[r][0]: round(coord.fetcher.cooldown_left(r) / 3600, 1)
+                             for r in coord.retailers if coord.fetcher.cooldown_left(r) > 0},
+        },
     })
 
 

@@ -152,3 +152,44 @@ def test_url_key_and_retailer_detection():
     a = parsers.url_key("amazon_nl", "https://www.amazon.nl/LEGO-Bonsai/dp/B08XYZ1234/ref=x?y=1")
     assert a == parsers.url_key("amazon_nl", "https://www.amazon.nl/dp/B08XYZ1234")
     assert parsers.url_key("bol", "https://www.bol.com/nl/nl/p/x/1/?bltgh=q") == parsers.url_key("bol", "https://www.bol.com/nl/nl/p/x/1")
+
+
+def test_trend_price_per_piece_and_target():
+    now = time.time()
+    offer = {}
+    for days_ago, price in ((40, 100.0), (20, 90.0), (6, 80.0), (0, 60.0)):
+        models.record_price(offer, price, now=now - days_ago * DAY)
+    st = models.compute_set_status({"rrp": 100, "pieces": 600, "target_price": 65}, {"bol": offer},
+                                   threshold=25, min_history_days=3, now=now)
+    assert st["price_per_piece"] == 0.1
+    assert st["change_7d"] == -33.3 and st["change_30d"] == -40.0
+    assert st["target_hit"] is True
+    st = models.compute_set_status({"target_price": 50}, {"bol": offer}, threshold=25, min_history_days=3, now=now)
+    assert st["target_hit"] is False and st["price_per_piece"] is None
+
+
+def test_wishlist_summary_excludes_owned():
+    store = models.new_store()
+    store["sets"] = {"1": {"rrp": 100}, "2": {"rrp": 50}, "3": {"rrp": 20}}
+    store["collection"]["1"] = {"qty": 1}
+    statuses = {"1": {"best_price": 10}, "2": {"best_price": 40}, "3": {}}
+    w = models.wishlist_summary(store, statuses)
+    assert w == {"sets": 2, "priced": 1, "cost": 40.0, "rrp": 50.0, "saving": 10.0}
+
+
+def test_export_import_roundtrip():
+    store = models.new_store()
+    store["sets"]["10281"] = {"set_number": "10281", "name": "Bonsai; Tree", "theme": "Botanicals", "pieces": 878, "rrp": 49.99}
+    store["collection"]["10281"] = {"qty": 2, "paid": 39.99, "added": "2024-05-01"}
+    text = models.rows_to_csv(models.collection_rows(store, {}), models.COLLECTION_COLUMNS)
+    rows, warnings = csv_import.parse_collection_csv(text)
+    assert not warnings and rows[0]["set_number"] == "10281" and rows[0]["qty"] == 2
+    assert rows[0]["paid"] == 39.99 and rows[0]["name"] == "Bonsai; Tree" and rows[0]["added"] == "2024-05-01"
+
+
+def test_validate_backup():
+    good = {"sets": {"10281": {}}, "offers": {}, "collection": {}, "snapshots": []}
+    assert models.validate_backup(good)["sets"] == {"10281": {}}
+    for bad in ([], {"nope": 1}, {"sets": {"abc": {}}}, {"sets": {}, "offers": []}):
+        with pytest.raises(ValueError):
+            models.validate_backup(bad)

@@ -10,7 +10,8 @@
           "digest_time": "Tijdstip dagelijkse samenvatting",
           "min_history_days": "Minimaal aantal dagen historiek voor een 'laagste prijs ooit'",
           "brickset_api_key": "Brickset API-sleutel (optioneel, vult naam/thema/adviesprijs/afbeelding aan)",
-          "use_impersonation": "Chrome-browser nabootsen (installeert curl_cffi; veel minder blokkades)"
+          "use_impersonation": "Chrome-browser nabootsen (installeert curl_cffi; veel minder blokkades)",
+          "notify_service": "Notify-service voor deals (bv. notify.mobile_app_telefoon, optioneel)"
         }
       }
     },
@@ -29,7 +30,8 @@
           "digest_time": "Tijdstip dagelijkse samenvatting",
           "min_history_days": "Minimaal aantal dagen historiek voor een 'laagste prijs ooit'",
           "brickset_api_key": "Brickset API-sleutel (optioneel, vult naam/thema/adviesprijs/afbeelding aan)",
-          "use_impersonation": "Chrome-browser nabootsen (installeert curl_cffi; veel minder blokkades)"
+          "use_impersonation": "Chrome-browser nabootsen (installeert curl_cffi; veel minder blokkades)",
+          "notify_service": "Notify-service voor deals (bv. notify.mobile_app_telefoon, optioneel)"
         }
       }
     }
@@ -53,6 +55,15 @@
       },
       "collection_growth": {
         "name": "Collectiegroei"
+      },
+      "wishlist_cost": {
+        "name": "Wishlist-kost (beste prijzen)"
+      },
+      "targets_reached": {
+        "name": "Sets onder streefprijs"
+      },
+      "offers_with_errors": {
+        "name": "Aanbiedingen met fout"
       }
     }
   }

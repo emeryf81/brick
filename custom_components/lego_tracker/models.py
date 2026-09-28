@@ -121,6 +121,9 @@ def compute_set_status(
         "all_time_low": None, "is_all_time_low": False,
         "discount_rrp": None, "discount_avg": None,
         "high_discount": False, "history_days": 0, "offers_live": 0,
+        "price_per_piece": None, "change_7d": None, "change_30d": None,
+        "target_price": lego_set.get("target_price"), "target_hit": False,
+        "offers_error": sum(1 for o in offers.values() if o.get("error")),
     }
     status["offers_live"] = sum(1 for o in offers.values() if o.get("available"))
     if series:
@@ -145,6 +148,15 @@ def compute_set_status(
     if len(recent) >= 3:
         avg = median(recent)
         status["discount_avg"] = round((avg - price) / avg * 100, 1)
+    pieces = lego_set.get("pieces")
+    if pieces:
+        status["price_per_piece"] = round(price / pieces, 4)
+    for key, days in (("change_7d", 7), ("change_30d", 30)):
+        old = price_at(series, now - days * DAY)
+        if old:
+            status[key] = round((price - old) / old * 100, 1)
+    target = lego_set.get("target_price")
+    status["target_hit"] = bool(target) and price <= float(target)
     ref = status["discount_rrp"] if status["discount_rrp"] is not None else status["discount_avg"]
     status["high_discount"] = ref is not None and ref >= threshold
     return status
@@ -237,3 +249,67 @@ def collection_summary(store: dict[str, Any], statuses: dict[str, dict[str, Any]
 
 def today_iso(now: float | None = None) -> str:
     return date.fromtimestamp(now or time.time()).isoformat()
+
+
+def wishlist_summary(store: dict[str, Any], statuses: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Sets that are tracked but not owned: what they cost now vs. list price."""
+    cost = rrp = 0.0
+    priced = count = 0
+    for num, s in store["sets"].items():
+        if num in store["collection"]:
+            continue
+        count += 1
+        price = statuses.get(num, {}).get("best_price")
+        if price:
+            priced += 1
+            cost += price
+            rrp += s.get("rrp") or price
+    return {"sets": count, "priced": priced, "cost": round(cost, 2), "rrp": round(rrp, 2),
+            "saving": round(rrp - cost, 2)}
+
+
+COLLECTION_COLUMNS = ["Number", "Name", "Theme", "Subtheme", "Year", "Pieces", "Qty", "Paid", "Value", "Purchase Date",
+                      "Condition", "Retail Price"]
+
+
+def collection_rows(store: dict[str, Any], statuses: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rows in the same layout `csv_import` understands, so export -> import round-trips."""
+    rows = []
+    for num, entry in store["collection"].items():
+        s = store["sets"].get(num, {})
+        unit, _ = collection_value(entry, statuses.get(num, {}), s)
+        rows.append({
+            "Number": num, "Name": s.get("name", ""), "Theme": s.get("theme", ""), "Subtheme": s.get("subtheme", ""),
+            "Year": s.get("year", ""), "Pieces": s.get("pieces", ""), "Qty": entry.get("qty", 1),
+            "Paid": entry.get("paid", ""), "Value": round(unit, 2) if unit else "",
+            "Purchase Date": entry.get("added", ""), "Condition": entry.get("condition", ""),
+            "Retail Price": s.get("rrp", ""),
+        })
+    return sorted(rows, key=lambda r: r["Number"])
+
+
+def rows_to_csv(rows: list[dict[str, Any]], columns: list[str]) -> str:
+    import csv
+    import io
+
+    out = io.StringIO()
+    w = csv.DictWriter(out, fieldnames=columns, lineterminator="\n")
+    w.writeheader()
+    w.writerows(rows)
+    return out.getvalue()
+
+
+def validate_backup(data: Any) -> dict[str, Any]:
+    """Sanity-check an imported backup and return a clean store."""
+    if not isinstance(data, dict) or not isinstance(data.get("sets"), dict):
+        raise ValueError("Not a LEGO Price Tracker backup (missing 'sets').")
+    clean = new_store()
+    for key in clean:
+        if key in data:
+            if type(data[key]) is not type(clean[key]):
+                raise ValueError(f"Backup field {key!r} has the wrong type.")
+            clean[key] = data[key]
+    for num in clean["sets"]:
+        if not str(num).isdigit():
+            raise ValueError(f"Invalid set number {num!r} in backup.")
+    return clean

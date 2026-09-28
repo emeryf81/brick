@@ -20,6 +20,13 @@ SUMMARY = (
                             state_class=SensorStateClass.MEASUREMENT),
     SensorEntityDescription(key="high_discounts", translation_key="high_discounts", icon="mdi:sale",
                             state_class=SensorStateClass.MEASUREMENT),
+    SensorEntityDescription(key="targets_reached", translation_key="targets_reached", icon="mdi:bullseye-arrow",
+                            state_class=SensorStateClass.MEASUREMENT),
+    SensorEntityDescription(key="wishlist_cost", translation_key="wishlist_cost", icon="mdi:cart-heart",
+                            native_unit_of_measurement="EUR", state_class=SensorStateClass.MEASUREMENT,
+                            suggested_display_precision=2),
+    SensorEntityDescription(key="offers_with_errors", translation_key="offers_with_errors", icon="mdi:alert-circle-outline",
+                            state_class=SensorStateClass.MEASUREMENT),
     SensorEntityDescription(key="collection_value", translation_key="collection_value", icon="mdi:cash-multiple",
                             native_unit_of_measurement="EUR", state_class=SensorStateClass.MEASUREMENT,
                             suggested_display_precision=2),
@@ -75,6 +82,12 @@ class SummarySensor(CoordinatorEntity[LegoCoordinator], SensorEntity):
             return len(self._deals("is_all_time_low"))
         if key == "high_discounts":
             return len(self._deals("high_discount"))
+        if key == "targets_reached":
+            return len(self._deals("target_hit"))
+        if key == "wishlist_cost":
+            return d["wishlist"]["cost"]
+        if key == "offers_with_errors":
+            return sum(s["offers_error"] for s in d["statuses"].values())
         return {"collection_value": d["summary"]["value"], "collection_cost": d["summary"]["cost"],
                 "collection_growth": d["summary"]["growth_pct"]}[key]
 
@@ -82,7 +95,14 @@ class SummarySensor(CoordinatorEntity[LegoCoordinator], SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any] | None:
         key = self.entity_description.key
         sets = self.coordinator.store["sets"]
-        flag = {"all_time_lows": "is_all_time_low", "high_discounts": "high_discount"}.get(key)
+        if key == "offers_with_errors":
+            paused = {RETAILERS[r][0]: round(self.coordinator.fetcher.cooldown_left(r) / 3600, 1)
+                      for r in self.coordinator.retailers if self.coordinator.fetcher.cooldown_left(r) > 0}
+            return {"paused_hours": paused, "transport": self.coordinator.fetcher.transport}
+        if key == "wishlist_cost":
+            return self.coordinator.data["wishlist"]
+        flag = {"all_time_lows": "is_all_time_low", "high_discounts": "high_discount",
+                "targets_reached": "target_hit"}.get(key)
         if flag:
             st = self.coordinator.data["statuses"]
             return {"sets": [{"set_number": n, "name": sets[n].get("name"), "price": st[n]["best_price"],
@@ -131,7 +151,9 @@ class SetPriceSensor(CoordinatorEntity[LegoCoordinator], SensorEntity):
             "set_number": self._num, "theme": s.get("theme"), "subtheme": s.get("subtheme"), "rrp": s.get("rrp"),
             "best_retailer": RETAILERS.get(st.get("best_retailer"), ("",))[0] or None,
             "url": st.get("best_url"), "all_time_low": st.get("all_time_low"),
-            "is_all_time_low": st.get("is_all_time_low"), "discount_rrp": st.get("discount_rrp"),
+            "is_all_time_low": st.get("is_all_time_low"), "target_price": s.get("target_price"),
+            "target_hit": st.get("target_hit"), "price_per_piece": st.get("price_per_piece"),
+            "change_7d": st.get("change_7d"), "change_30d": st.get("change_30d"), "discount_rrp": st.get("discount_rrp"),
             "high_discount": st.get("high_discount"), "owned": self._num in self.coordinator.store["collection"],
             "entity_picture": s.get("image"),
             "prices": {RETAILERS[r][0]: o.get("last_price") for r, o in offers.items() if r in RETAILERS and o.get("available")},

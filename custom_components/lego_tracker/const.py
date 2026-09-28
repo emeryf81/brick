@@ -16,6 +16,7 @@ CONF_DIGEST_TIME = "digest_time"
 CONF_BRICKSET_KEY = "brickset_api_key"
 CONF_MIN_HISTORY_DAYS = "min_history_days"
 CONF_IMPERSONATE = "use_impersonation"
+CONF_NOTIFY = "notify_service"
 
 DEFAULT_DISCOUNT_THRESHOLD = 25
 DEFAULT_UPDATE_HOURS = 6
@@ -35,6 +36,7 @@ DEFAULT_RETAILERS = list(RETAILERS)
 EVENT_DIGEST = f"{DOMAIN}_daily_digest"
 EVENT_NEW_LOW = f"{DOMAIN}_new_all_time_low"
 EVENT_HIGH_DISCOUNT = f"{DOMAIN}_high_discount"
+EVENT_TARGET_HIT = f"{DOMAIN}_target_price_reached"
 
 # Max price observations kept per offer (one per day is ~10 years).
 MAX_HISTORY = 4000

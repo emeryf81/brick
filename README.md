@@ -4,17 +4,36 @@ LEGO Price Tracker voor Home Assistant
 
 Custom integration (HACS-compatibel) die LEGO-sets en hun prijzen volgt bij **Amazon.nl, Amazon.de, Amazon.com.be, bol.com en Kruidvat.be**, met een dagelijks dashboard, prijsgrafieken en collectiewaarde.
 
-> Status: 0.2.0. Getest met unit- en integratietests (33) tegen een echte Home Assistant-core (2026.2.3): config flow, options flow, herladen, services, sensoren, websocket en CSV-import. Het paneel is in Chromium gerenderd met nagemaakte data. **Nog niet gedaan:** een run op jouw HA OS 2026.9 en een controle van de winkel-parsers tegen de live sites. Verwacht dat je die parsers moet bijstellen.
+> Status: 0.3.0. Getest met unit- en integratietests (39) tegen een echte Home Assistant-core (2026.2.3): config flow, options flow, herladen, services, sensoren, websocket en CSV-import. Het paneel is in Chromium gerenderd met nagemaakte data. **Nog niet gedaan:** een run op jouw HA OS 2026.9 en een controle van de winkel-parsers tegen de live sites. Verwacht dat je die parsers moet bijstellen.
 
 ## Wat het doet
-- **Sidebar-paneel "LEGO"** met tabbladen:
-  - **Vandaag**: sets op *laagste prijs ooit* en sets met *korting ≥ drempel* (schuifregelaar, standaard 25%).
-  - **Alle sets**: filter op thema/subthema (Botanicals, Technic, Creator, Icons, City, Friends, …), zoeken, sorteren, "in bezit / wishlist".
-  - **Collectie**: groeigrafiek (waarde vs. aankoopkost), waarde per thema, lijst met winst/verlies per set.
-  - **Toevoegen / import**: set toevoegen, winkel-link koppelen, CSV-import.
-  - Klik op een set: prijsgrafiek per winkel (met adviesprijs), laagste prijs per winkel, links, bewerken.
-- **Sensoren**: aantal gevolgde sets, aantal sets op record-laag, aantal met hoge korting, collectiewaarde/-kost/-groei, plus **één prijssensor per set** (Home Assistant maakt daar zelf historiek- en statistiekgrafieken van, bruikbaar in Lovelace).
-- **Dagelijkse samenvatting** op een instelbaar uur: event `lego_tracker_daily_digest` + persistent notification. Ook events `lego_tracker_new_all_time_low` en `lego_tracker_high_discount` voor je eigen automations (bv. push-melding).
+- **Sidebar-paneel "LEGO"** (toont bovenaan de draaiende versie en het gebruikte request-type) met tabbladen:
+  - **Vandaag**: 🔻 laagste prijs ooit · 🎯 streefprijs bereikt · 🏷️ korting ≥ drempel (schuifregelaar) · 📉 sterk gedaald in 30 dagen. Een waarschuwingsbalk toont aanbiedingen zonder prijs en gepauzeerde winkels.
+  - **Alle sets**: filter op thema **en subthema** (Botanicals, Technic, Creator, Icons, City, Friends, …), zoeken, sorteren op korting / prijs / **prijs per steen** / grootste daling, "in bezit / wishlist". Elke kaart toont trend (7/30 dagen), ct per steen en streefprijs.
+  - **Wishlist**: sets die je nog niet hebt, met totaalprijs nu, totale adviesprijs en besparing.
+  - **Collectie**: groeigrafiek (waarde vs. aankoopkost), waarde per thema, winst/verlies per set, CSV-export.
+  - **Toevoegen / import**: set toevoegen (met streefprijs), **meerdere setnummers plakken**, winkels opnieuw zoeken, winkel-link koppelen, CSV-import, **back-up en herstel (JSON)**.
+  - Klik op een set: prijsgrafiek per winkel met **hover-tooltip** en bereik (30 d / 90 d / 1 jaar / alles), adviesprijs-lijn, laagste prijs per winkel, links, handmatige prijs, bewerken (thema, streefprijs, notitie, bezit).
+- **Streefprijs per set**: bereikt de beste prijs je streefprijs, dan volgt een event én (optioneel) een melding.
+- **Meldingen**: kies in de opties een notify-service (bv. `notify.mobile_app_telefoon`) en krijg een push bij nieuwe laagste prijs, hoge korting, streefprijs en de dagelijkse samenvatting (met link naar de winkel).
+- **Sensoren**: gevolgde sets, sets op record-laag, sets met hoge korting, sets onder streefprijs, wishlist-kost, aanbiedingen met fout (met pauze-info), collectiewaarde/-kost/-groei, plus **één prijssensor per set** (attributen: prijs per steen, trend 7/30 dagen, streefprijs, per winkel). Home Assistant maakt daar zelf historiek- en statistiekgrafieken van.
+- **Events** voor automations: `lego_tracker_new_all_time_low`, `lego_tracker_high_discount`, `lego_tracker_target_price_reached`, `lego_tracker_daily_digest`.
+- **Diagnostics-download** (zonder geheimen) voor foutzoeken.
+
+## Services
+`add_set`, `add_sets`, `remove_set`, `set_offer`, `report_price`, `discover_offers`, `refresh`, `import_collection`, `export_collection` (CSV terug als response), `export_data` / `import_data` (volledige JSON-back-up), `send_digest`. Zie *Ontwikkelaarstools → Acties*.
+
+Voorbeeld-automation:
+```yaml
+trigger:
+  - platform: event
+    event_type: lego_tracker_target_price_reached
+action:
+  - service: notify.mobile_app_telefoon
+    data:
+      title: "{{ trigger.event.data.name }}"
+      message: "€{{ trigger.event.data.price }} bij {{ trigger.event.data.retailer }}"
+```
 
 ## Installatie
 1. HACS → Custom repositories → deze repo, categorie *Integration* (of kopieer `custom_components/lego_tracker` naar je `config/`).
