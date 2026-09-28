@@ -1,8 +1,10 @@
-# LEGO Price Tracker voor Home Assistant
+# lot – Lego Organizing Tool
+
+LEGO Price Tracker voor Home Assistant
 
 Custom integration (HACS-compatibel) die LEGO-sets en hun prijzen volgt bij **Amazon.nl, Amazon.de, Amazon.com.be, bol.com en Kruidvat.be**, met een dagelijks dashboard, prijsgrafieken en collectiewaarde.
 
-> Status: 0.1.0, eerste versie. Getest met unit- en integratietests (33) tegen een echte Home Assistant-core (2026.2.3): config flow, options flow, herladen, services, sensoren, websocket en CSV-import. Het paneel is in Chromium gerenderd met nagemaakte data. **Nog niet gedaan:** een run op jouw HA OS 2026.9 en een controle van de winkel-parsers tegen de live sites. Verwacht dat je die parsers moet bijstellen.
+> Status: 0.2.0. Getest met unit- en integratietests (33) tegen een echte Home Assistant-core (2026.2.3): config flow, options flow, herladen, services, sensoren, websocket en CSV-import. Het paneel is in Chromium gerenderd met nagemaakte data. **Nog niet gedaan:** een run op jouw HA OS 2026.9 en een controle van de winkel-parsers tegen de live sites. Verwacht dat je die parsers moet bijstellen.
 
 ## Wat het doet
 - **Sidebar-paneel "LEGO"** met tabbladen:
@@ -61,5 +63,3 @@ pip install pytest && python -m pytest tests/test_logic.py
 # volledige suite met Home Assistant (Python 3.13)
 pip install pytest-homeassistant-custom-component home-assistant-frontend && python -m pytest tests
 ```
-# lot
-Lego Organizing Tool
