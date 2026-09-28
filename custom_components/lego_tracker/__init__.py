@@ -45,6 +45,11 @@ SERVICE_SCHEMAS = {
         vol.Optional("csv_text"): cv.string, vol.Optional("file_path"): cv.string,
         vol.Optional("replace", default=False): cv.boolean, vol.Optional("track_prices", default=True): cv.boolean,
     }),
+    "report_price": vol.Schema({
+        vol.Required("price"): vol.All(vol.Coerce(float), vol.Range(min=0.01, max=100000)),
+        vol.Optional("url"): cv.string, vol.Optional("set_number"): cv.string,
+        vol.Optional("retailer"): vol.In(list(RETAILERS)),
+    }),
     "send_digest": vol.Schema({}),
 }
 
@@ -118,7 +123,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def _register_frontend(hass: HomeAssistant) -> None:
     panel_dir = Path(__file__).parent / "panel"
     await hass.http.async_register_static_paths([StaticPathConfig(STATIC_URL, str(panel_dir), False)])
-    version = "0.1.0"
+    version = "0.2.0"
     await panel_custom.async_register_panel(
         hass, webcomponent_name=PANEL_ELEMENT, frontend_url_path=PANEL_URL,
         sidebar_title="LEGO", sidebar_icon="mdi:toy-brick",
@@ -178,11 +183,18 @@ def _register_services(hass: HomeAssistant) -> None:
             hass.async_create_task(_discover_offers(c, [r["set_number"] for r in rows]))
         return {**result, "warnings": warnings[:20]}
 
+    async def report_price(call: ServiceCall) -> None:
+        try:
+            _coordinator(hass).report_price(call.data["price"], url=call.data.get("url"),
+                                            set_number=call.data.get("set_number"), retailer=call.data.get("retailer"))
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+
     async def send_digest(call: ServiceCall) -> None:
         await _send_digest(hass, _coordinator(hass))
 
     for name, handler in (("add_set", add_set), ("remove_set", remove_set), ("set_offer", set_offer),
-                          ("refresh", refresh), ("send_digest", send_digest)):
+                          ("refresh", refresh), ("report_price", report_price), ("send_digest", send_digest)):
         hass.services.async_register(DOMAIN, name, handler, SERVICE_SCHEMAS[name])
     hass.services.async_register(DOMAIN, "import_collection", import_collection,
                                  SERVICE_SCHEMAS["import_collection"], supports_response=SupportsResponse.OPTIONAL)

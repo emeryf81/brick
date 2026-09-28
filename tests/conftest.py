@@ -16,9 +16,18 @@ for name in ("const", "models", "parsers", "csv_import"):
     spec.loader.exec_module(mod)
 
 
-pytest_plugins = ["pytest_homeassistant_custom_component"]
+try:
+    import pytest_homeassistant_custom_component  # noqa: F401
+except ImportError:  # logic-only run (tests/test_logic.py)
+    collect_ignore = ["test_integration.py", "test_fetcher.py"]
+else:
+    pytest_plugins = ["pytest_homeassistant_custom_component"]
 
+    @pytest.fixture(autouse=True)
+    def _enable_custom_integrations(enable_custom_integrations):
+        yield
 
-@pytest.fixture(autouse=True)
-def _enable_custom_integrations(enable_custom_integrations):
-    yield
+    @pytest.fixture(autouse=True)
+    def _allow_local_sockets(socket_enabled):
+        """Fetcher tests talk to a local aiohttp server."""
+        yield

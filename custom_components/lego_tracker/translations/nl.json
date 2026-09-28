@@ -9,7 +9,8 @@
           "update_hours": "Ververs-interval (uren)",
           "digest_time": "Tijdstip dagelijkse samenvatting",
           "min_history_days": "Minimaal aantal dagen historiek voor een 'laagste prijs ooit'",
-          "brickset_api_key": "Brickset API-sleutel (optioneel, vult naam/thema/adviesprijs/afbeelding aan)"
+          "brickset_api_key": "Brickset API-sleutel (optioneel, vult naam/thema/adviesprijs/afbeelding aan)",
+          "use_impersonation": "Chrome-browser nabootsen (installeert curl_cffi; veel minder blokkades)"
         }
       }
     },
@@ -27,7 +28,8 @@
           "update_hours": "Ververs-interval (uren)",
           "digest_time": "Tijdstip dagelijkse samenvatting",
           "min_history_days": "Minimaal aantal dagen historiek voor een 'laagste prijs ooit'",
-          "brickset_api_key": "Brickset API-sleutel (optioneel, vult naam/thema/adviesprijs/afbeelding aan)"
+          "brickset_api_key": "Brickset API-sleutel (optioneel, vult naam/thema/adviesprijs/afbeelding aan)",
+          "use_impersonation": "Chrome-browser nabootsen (installeert curl_cffi; veel minder blokkades)"
         }
       }
     }
