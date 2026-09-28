@@ -61,3 +61,5 @@ pip install pytest && python -m pytest tests/test_logic.py
 # volledige suite met Home Assistant (Python 3.13)
 pip install pytest-homeassistant-custom-component home-assistant-frontend && python -m pytest tests
 ```
+# lot
+Lego Organizing Tool
