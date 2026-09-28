@@ -1,6 +1,7 @@
 """Data coordinator: owns the store, polls retailers, computes statuses."""
 from __future__ import annotations
 
+import copy
 import logging
 import time
 from datetime import timedelta
@@ -14,13 +15,13 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .client import Fetcher, brickset_lookup
 from .const import (
-    CONF_BRICKSET_KEY, CONF_DISCOUNT_THRESHOLD, CONF_IMPERSONATE, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
+    CONF_BRICKSET_KEY, CONF_DISCOUNT_THRESHOLD, CONF_IMPERSONATE, CONF_NOTIFY, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
     CONF_UPDATE_HOURS, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS, DEFAULT_RETAILERS,
-    DEFAULT_UPDATE_HOURS, DOMAIN, EVENT_HIGH_DISCOUNT, EVENT_NEW_LOW, RETAILERS, STORAGE_KEY,
+    DEFAULT_UPDATE_HOURS, DOMAIN, EVENT_HIGH_DISCOUNT, EVENT_NEW_LOW, EVENT_TARGET_HIT, RETAILERS, STORAGE_KEY,
     STORAGE_VERSION,
 )
 from .models import (
-    collection_series, collection_summary, compute_set_status, new_store, normalize_set_number,
+    collection_rows, collection_series, collection_summary, COLLECTION_COLUMNS, rows_to_csv, validate_backup, wishlist_summary, compute_set_status, new_store, normalize_set_number,
     record_price, today_iso,
 )
 from .parsers import normalize_url, retailer_from_url, url_key
@@ -75,7 +76,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                     threshold=self.threshold, min_history_days=min_days)
             for num, s in self.store["sets"].items()
         }
-        return {"statuses": statuses, "summary": collection_summary(self.store, statuses)}
+        return {"statuses": statuses, "summary": collection_summary(self.store, statuses),
+                "wishlist": wishlist_summary(self.store, statuses)}
 
     async def _async_update_data(self) -> dict[str, Any]:
         await self.refresh_all()
@@ -126,24 +128,49 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         s = self.store["sets"][num]
         payload = {"set_number": num, "name": s.get("name"), "theme": s.get("theme"),
                    "price": after.get("best_price"), "retailer": after.get("best_retailer"),
-                   "url": after.get("best_url"), "discount": after.get("discount_rrp")}
+                   "url": after.get("best_url"), "discount": after.get("discount_rrp"),
+                   "target_price": s.get("target_price")}
         day = today_iso()
-        if after.get("is_all_time_low") and not before.get("is_all_time_low") and (num, "low" + day) not in self._alerted:
-            self._alerted.add((num, "low" + day))
-            self.hass.bus.async_fire(EVENT_NEW_LOW, payload)
-        if after.get("high_discount") and not before.get("high_discount") and (num, "disc" + day) not in self._alerted:
-            self._alerted.add((num, "disc" + day))
-            self.hass.bus.async_fire(EVENT_HIGH_DISCOUNT, payload)
+        label = f"{num} {s.get('name') or ''}".strip()
+        where = RETAILERS.get(after.get("best_retailer"), ("",))[0]
+        price = after.get("best_price")
+        for flag, event, text in (
+            ("is_all_time_low", EVENT_NEW_LOW, f"🔻 {label}: laagste prijs ooit, €{price} bij {where}"),
+            ("high_discount", EVENT_HIGH_DISCOUNT, f"🏷️ {label}: -{after.get('discount_rrp')}% (€{price}) bij {where}"),
+            ("target_hit", EVENT_TARGET_HIT, f"🎯 {label}: streefprijs €{s.get('target_price')} bereikt (€{price}) bij {where}"),
+        ):
+            key = (num, flag + day)
+            if after.get(flag) and not before.get(flag) and key not in self._alerted:
+                self._alerted.add(key)
+                self.hass.bus.async_fire(event, payload)
+                self.hass.async_create_task(self.async_notify("LEGO deal", text, payload.get("url")))
+
+    async def async_notify(self, title: str, message: str, url: str | None = None) -> None:
+        """Send to the configured notify service (e.g. notify.mobile_app_pixel), if any."""
+        target = (self.opt(self.entry, CONF_NOTIFY, "") or "").strip()
+        if not target:
+            return
+        domain, _, name = target.partition(".")
+        if not name:
+            domain, name = "notify", target
+        data: dict[str, Any] = {"title": title, "message": message}
+        if url:
+            data["data"] = {"url": url, "clickAction": url}
+        try:
+            await self.hass.services.async_call(domain, name, data, blocking=False)
+        except Exception as err:  # noqa: BLE001 - a broken notifier must not break polling
+            _LOGGER.warning("Notify service %s failed: %s", target, err)
 
     # ------------------------------------------------------------------ edits
     async def add_set(self, set_number: str, *, name: str | None = None, theme: str | None = None,
-                      subtheme: str | None = None, rrp: float | None = None, pieces: int | None = None,
+                      subtheme: str | None = None, rrp: float | None = None, pieces: int | None = None, target_price: float | None = None,
                       owned: dict | None = None, discover: bool = True) -> str:
         num = normalize_set_number(set_number)
         s = self.store["sets"].setdefault(num, {"set_number": num})
         meta = await brickset_lookup(async_get_clientsession(self.hass),
                                      self.opt(self.entry, CONF_BRICKSET_KEY, ""), num) or {}
-        for key, val in {"name": name, "theme": theme, "subtheme": subtheme, "rrp": rrp, "pieces": pieces}.items():
+        for key, val in {"name": name, "theme": theme, "subtheme": subtheme, "rrp": rrp, "pieces": pieces,
+                         "target_price": target_price}.items():
             if val:
                 s[key] = val
         for key in ("name", "theme", "subtheme", "year", "pieces", "image", "rrp"):
@@ -178,8 +205,12 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def update_set(self, set_number: str, fields: dict[str, Any]) -> None:
         num = normalize_set_number(set_number)
-        allowed = {"name", "theme", "subtheme", "rrp", "pieces", "year", "image"}
-        self.store["sets"][num].update({k: v for k, v in fields.items() if k in allowed and v not in (None, "")})
+        allowed = {"name", "theme", "subtheme", "rrp", "pieces", "year", "image", "target_price", "notes"}
+        s = self.store["sets"][num]
+        s.update({k: v for k, v in fields.items() if k in allowed and v not in (None, "")})
+        for k in ("target_price", "notes"):            # explicit clear: empty string / 0
+            if k in fields and fields[k] in ("", 0, None):
+                s.pop(k, None)
         coll = {k: fields[k] for k in ("qty", "paid", "current_value", "added", "condition") if k in fields}
         if fields.get("owned") is False:
             self.store["collection"].pop(num, None)
@@ -216,6 +247,40 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._fire_events(num, before, self.compute()["statuses"].get(num, {}))
         self.push_update()
         return num
+
+    async def discover_offers(self, set_number: str | None = None) -> int:
+        """(Re)try to find shop pages for sets that have no offer at some retailer."""
+        nums = [normalize_set_number(set_number)] if set_number else list(self.store["sets"])
+        found = 0
+        for num in nums:
+            offers = self.store["offers"].setdefault(num, {})
+            for rid in self.retailers:
+                if rid not in offers and (url := await self.fetcher.discover(rid, num)):
+                    offers[rid] = {"url": url, "history": []}
+                    found += 1
+        self.push_update()
+        return found
+
+    def export_csv(self) -> str:
+        return rows_to_csv(collection_rows(self.store, self.compute()["statuses"]), COLLECTION_COLUMNS)
+
+    def export_backup(self) -> dict[str, Any]:
+        return {"version": 1, "exported": today_iso(), **copy.deepcopy(self.store)}
+
+    def import_backup(self, data: Any, merge: bool = False) -> dict[str, int]:
+        clean = validate_backup(copy.deepcopy(data))
+        if merge:
+            for num, s in clean["sets"].items():
+                self.store["sets"].setdefault(num, s)
+            for num, offers in clean["offers"].items():
+                self.store["offers"].setdefault(num, {}).update(
+                    {r: o for r, o in offers.items() if r not in self.store["offers"].get(num, {})})
+            for num, e in clean["collection"].items():
+                self.store["collection"].setdefault(num, e)
+        else:
+            self.store = clean
+        self.push_update()
+        return {"sets": len(self.store["sets"]), "collection": len(self.store["collection"])}
 
     def series(self) -> list[dict[str, float]]:
         return collection_series(self.store)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -35,11 +36,22 @@ SERVICE_SCHEMAS = {
     "add_set": vol.Schema({
         SET: cv.string, vol.Optional("name"): cv.string, vol.Optional("theme"): cv.string,
         vol.Optional("subtheme"): cv.string, vol.Optional("rrp"): vol.Coerce(float),
-        vol.Optional("pieces"): vol.Coerce(int), vol.Optional("owned", default=False): cv.boolean,
+        vol.Optional("pieces"): vol.Coerce(int), vol.Optional("target_price"): vol.Coerce(float),
+        vol.Optional("owned", default=False): cv.boolean,
         vol.Optional("quantity", default=1): vol.Coerce(int), vol.Optional("paid"): vol.Coerce(float),
         vol.Optional("purchase_date"): cv.string,
     }),
+    "add_sets": vol.Schema({
+        vol.Required("set_numbers"): cv.string, vol.Optional("theme"): cv.string,
+        vol.Optional("owned", default=False): cv.boolean,
+    }),
     "remove_set": vol.Schema({SET: cv.string}),
+    "discover_offers": vol.Schema({vol.Optional("set_number"): cv.string}),
+    "export_collection": vol.Schema({}),
+    "export_data": vol.Schema({}),
+    "import_data": vol.Schema({
+        vol.Optional("data"): dict, vol.Optional("file_path"): cv.string, vol.Optional("merge", default=False): cv.boolean,
+    }),
     "set_offer": vol.Schema({SET: cv.string, vol.Required("retailer"): vol.In(list(RETAILERS)),
                              vol.Required("url"): cv.string}),
     "refresh": vol.Schema({vol.Optional("set_number"): cv.string}),
@@ -89,6 +101,7 @@ async def _send_digest(hass: HomeAssistant, coord: LegoCoordinator) -> None:
             + (f" (-{r['discount']:.0f}%)" if r["discount"] else "") + (" 🔻 record low" if r["all_time_low"] else "")
             for r in d["deals"][:20]
         ]
+        await coord.async_notify(f"LEGO deals ({len(d['deals'])})", "\n".join(l.replace("**", "") for l in lines[:8]))
         persistent_notification.async_create(
             hass, "\n".join(lines), title=f"LEGO deals ({len(d['deals'])})", notification_id=f"{DOMAIN}_digest"
         )
@@ -147,7 +160,40 @@ def _register_services(hass: HomeAssistant) -> None:
             if "purchase_date" in d:
                 owned["added"] = d["purchase_date"]
         await c.add_set(d["set_number"], name=d.get("name"), theme=d.get("theme"), subtheme=d.get("subtheme"),
-                        rrp=d.get("rrp"), pieces=d.get("pieces"), owned=owned)
+                        rrp=d.get("rrp"), pieces=d.get("pieces"),
+                        target_price=d.get("target_price"), owned=owned)
+
+    async def add_sets(call: ServiceCall) -> dict:
+        """Bulk add: numbers separated by spaces, commas or newlines."""
+        c = _coordinator(hass)
+        nums = list(dict.fromkeys(re.findall(r"\d{4,7}", call.data["set_numbers"])))
+        if not nums:
+            raise ServiceValidationError("No set numbers found")
+        for n in nums:
+            await c.add_set(n, theme=call.data.get("theme"), owned={"qty": 1} if call.data["owned"] and n not in c.store["collection"] else None)
+        return {"added": len(nums)}
+
+    async def discover_offers(call: ServiceCall) -> dict:
+        return {"found": await _coordinator(hass).discover_offers(call.data.get("set_number"))}
+
+    async def export_collection(call: ServiceCall) -> dict:
+        return {"csv": _coordinator(hass).export_csv()}
+
+    async def export_data(call: ServiceCall) -> dict:
+        return _coordinator(hass).export_backup()
+
+    async def import_data(call: ServiceCall) -> dict:
+        data = call.data.get("data")
+        if data is None and (path := call.data.get("file_path")):
+            if not hass.config.is_allowed_path(path):
+                raise ServiceValidationError(f"{path} is not in allowlist_external_dirs")
+            data = json.loads(await hass.async_add_executor_job(Path(path).read_text, "utf-8"))
+        if data is None:
+            raise ServiceValidationError("Provide data or file_path")
+        try:
+            return _coordinator(hass).import_backup(data, merge=call.data["merge"])
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
 
     async def remove_set(call: ServiceCall) -> None:
         _coordinator(hass).remove_set(call.data["set_number"])
@@ -196,6 +242,9 @@ def _register_services(hass: HomeAssistant) -> None:
     async def send_digest(call: ServiceCall) -> None:
         await _send_digest(hass, _coordinator(hass))
 
+    for name, handler in (("add_sets", add_sets), ("discover_offers", discover_offers), ("export_collection", export_collection),
+                          ("export_data", export_data), ("import_data", import_data)):
+        hass.services.async_register(DOMAIN, name, handler, SERVICE_SCHEMAS[name], supports_response=SupportsResponse.OPTIONAL)
     for name, handler in (("add_set", add_set), ("remove_set", remove_set), ("set_offer", set_offer),
                           ("refresh", refresh), ("report_price", report_price), ("send_digest", send_digest)):
         hass.services.async_register(DOMAIN, name, handler, SERVICE_SCHEMAS[name])

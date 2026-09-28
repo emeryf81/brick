@@ -9,7 +9,7 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
-    CONF_BRICKSET_KEY, CONF_DIGEST_TIME, CONF_IMPERSONATE, CONF_DISCOUNT_THRESHOLD, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
+    CONF_BRICKSET_KEY, CONF_DIGEST_TIME, CONF_IMPERSONATE, CONF_NOTIFY, CONF_DISCOUNT_THRESHOLD, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
     CONF_UPDATE_HOURS, DEFAULT_DIGEST_TIME, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS,
     DEFAULT_RETAILERS, DEFAULT_UPDATE_HOURS, DOMAIN, RETAILERS,
 )
@@ -31,6 +31,7 @@ def _schema(d: dict[str, Any]) -> vol.Schema:
             selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=90, step=1, unit_of_measurement="d",
                                                                   mode=selector.NumberSelectorMode.BOX)),
         vol.Required(CONF_IMPERSONATE, default=d.get(CONF_IMPERSONATE, True)): selector.BooleanSelector(),
+        vol.Optional(CONF_NOTIFY, description={"suggested_value": d.get(CONF_NOTIFY, "")}): str,
         vol.Optional(CONF_BRICKSET_KEY, description={"suggested_value": d.get(CONF_BRICKSET_KEY, "")}): str,
     })
 

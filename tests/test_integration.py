@@ -106,3 +106,56 @@ async def test_report_price_by_url_and_manual(hass: HomeAssistant, entry):
     assert float(hass.states.get("sensor.lego_price_tracker_10281_bonsai").state) == 33.0
     with pytest.raises(ServiceValidationError):
         await hass.services.async_call(DOMAIN, "report_price", {"url": "https://www.bol.com/nl/nl/p/unknown/1/", "price": 10}, blocking=True)
+
+
+async def test_bulk_target_notify_export_and_backup(hass: HomeAssistant, entry, no_network):
+    from homeassistant.exceptions import ServiceValidationError
+    from pytest_homeassistant_custom_component.common import async_mock_service
+
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "notify_service": "notify.phone"})
+    notes = async_mock_service(hass, "notify", "phone")
+    events = []
+    hass.bus.async_listen("lego_tracker_target_price_reached", lambda e: events.append(e))
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    res = await hass.services.async_call(DOMAIN, "add_sets", {"set_numbers": "10281, 10311\n42143 10281", "owned": True},
+                                         blocking=True, return_response=True)
+    assert res == {"added": 3}
+    assert hass.states.get("sensor.lego_price_tracker_tracked_sets").state == "3"
+
+    await hass.services.async_call(DOMAIN, "update_set" if False else "add_set",
+                                   {"set_number": "10311", "target_price": 35.0, "name": "Orchid"}, blocking=True)
+    await hass.services.async_call(DOMAIN, "set_offer", {"set_number": "10311", "retailer": "bol", "url": "https://www.bol.com/nl/nl/p/o/1/"}, blocking=True)
+    await hass.services.async_call(DOMAIN, "refresh", {"set_number": "10311"}, blocking=True)   # price 30 <= target 35
+    await hass.async_block_till_done()
+    assert len(events) == 1 and events[0].data["set_number"] == "10311"
+    assert notes and "streefprijs" in notes[0].data["message"]
+    assert hass.states.get("sensor.lego_price_tracker_sets_at_target_price").state == "1"
+
+    csv_res = await hass.services.async_call(DOMAIN, "export_collection", {}, blocking=True, return_response=True)
+    assert "10281" in csv_res["csv"] and csv_res["csv"].startswith("Number,")
+
+    backup = await hass.services.async_call(DOMAIN, "export_data", {}, blocking=True, return_response=True)
+    await hass.services.async_call(DOMAIN, "remove_set", {"set_number": "10281"}, blocking=True)
+    assert hass.states.get("sensor.lego_price_tracker_tracked_sets").state == "2"
+    out = await hass.services.async_call(DOMAIN, "import_data", {"data": backup, "merge": False}, blocking=True, return_response=True)
+    assert out["sets"] == 3
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(DOMAIN, "import_data", {"data": {"bogus": 1}}, blocking=True, return_response=True)
+
+
+async def test_diagnostics_and_health_sensor(hass: HomeAssistant, entry, no_network):
+    from custom_components.lego_tracker.diagnostics import async_get_config_entry_diagnostics
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    no_network.return_value = (None, "blocked (HTTP 403)")
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
+    await hass.services.async_call(DOMAIN, "set_offer", {"set_number": "10281", "retailer": "bol", "url": "https://www.bol.com/nl/nl/p/x/1/"}, blocking=True)
+    await hass.services.async_call(DOMAIN, "refresh", {}, blocking=True)
+    await hass.async_block_till_done()
+    assert hass.states.get("sensor.lego_price_tracker_offers_with_errors").state == "1"
+    diag = await async_get_config_entry_diagnostics(hass, entry)
+    assert diag["per_retailer"]["bol"]["errors"] == 1 and "blocked (HTTP 403)" in diag["errors"]
+    assert diag["options"]["notify_service"] == "**REDACTED**" if "notify_service" in entry.options else True
