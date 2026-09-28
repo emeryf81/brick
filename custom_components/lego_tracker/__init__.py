@@ -1,6 +1,7 @@
 """LEGO Price Tracker: prices, deals and collection value for LEGO sets."""
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +26,7 @@ from .csv_import import apply_import, parse_collection_csv
 from .websocket_api import async_register_websocket
 
 _LOGGER = logging.getLogger(__name__)
+VERSION = json.loads((Path(__file__).parent / "manifest.json").read_text())["version"]
 PLATFORMS = [Platform.SENSOR]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
@@ -97,6 +99,7 @@ async def _send_digest(hass: HomeAssistant, coord: LegoCoordinator) -> None:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coord = LegoCoordinator(hass, entry)
     await coord.async_load()
+    _LOGGER.info("LEGO Price Tracker %s starting (request transport: %s)", VERSION, coord.fetcher.transport)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coord
     coord.async_set_updated_data(coord.compute())  # entities are usable before the first (slow) poll
     entry.async_create_background_task(hass, coord.async_refresh(), f"{DOMAIN}_first_refresh")
@@ -123,7 +126,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def _register_frontend(hass: HomeAssistant) -> None:
     panel_dir = Path(__file__).parent / "panel"
     await hass.http.async_register_static_paths([StaticPathConfig(STATIC_URL, str(panel_dir), False)])
-    version = "0.2.0"
+    version = VERSION
     await panel_custom.async_register_panel(
         hass, webcomponent_name=PANEL_ELEMENT, frontend_url_path=PANEL_URL,
         sidebar_title="LEGO", sidebar_icon="mdi:toy-brick",

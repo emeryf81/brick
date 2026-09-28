@@ -198,7 +198,7 @@ class LegoTrackerPanel extends HTMLElement {
     if (!s.data) { root.innerHTML = `<style>${STYLE}</style><div class="wrap"><div class="empty">Laden…</div></div>`; return; }
     const tabs = [["today", "Vandaag"], ["all", "Alle sets"], ["coll", "Collectie"], ["add", "Toevoegen / import"]];
     const body = { today: () => this.viewToday(), all: () => this.viewAll(), coll: () => this.viewCollection(), add: () => this.viewAdd() }[s.tab]();
-    root.innerHTML = `<style>${STYLE}</style><div class="wrap"><header><ha-menu-button></ha-menu-button><h1>🧱 LEGO Price Tracker</h1></header>${this.tiles()}
+    root.innerHTML = `<style>${STYLE}</style><div class="wrap"><header><ha-menu-button></ha-menu-button><h1>🧱 LEGO Price Tracker <small style="font-weight:400;font-size:12px;color:var(--secondary-text-color,#666)">v${esc(s.data.version)} · ${esc(s.data.transport)}</small></h1></header>${this.tiles()}
       <div class="tabs">${tabs.map(([k, l]) => `<button class="tab ${s.tab === k ? "on" : ""}" data-tab="${k}">${l}</button>`).join("")}</div>${body}<dialog id="dlg"></dialog></div>`;
     const menu = root.querySelector("ha-menu-button"); if (menu) { menu.hass = this._hass; menu.narrow = this.narrow; }
     this.bind();

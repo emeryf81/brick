@@ -55,7 +55,10 @@ def ws_overview(hass, connection, msg):
     if coord is None:
         connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
         return
+    from . import VERSION
+
     connection.send_result(msg["id"], {
+        "version": VERSION, "transport": coord.fetcher.transport,
         "threshold": coord.threshold,
         "themes": coord.all_themes(),
         "retailers": {k: v[0] for k, v in RETAILERS.items()},
