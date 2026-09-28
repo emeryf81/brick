@@ -1,2 +1,2 @@
-# mot
-Mobile OCR Tool
+# lot
+Lego Organizing Tool
