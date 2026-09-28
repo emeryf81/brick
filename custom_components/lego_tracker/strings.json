@@ -1,0 +1,57 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "LEGO Price Tracker",
+        "data": {
+          "discount_threshold": "Discount threshold (%) for 'high discount'",
+          "retailers": "Retailers to check",
+          "update_hours": "Refresh interval (hours)",
+          "digest_time": "Daily digest time",
+          "min_history_days": "Minimum days of history before a 'record low' counts",
+          "brickset_api_key": "Brickset API key (optional, fills name/theme/RRP/image)"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "LEGO Price Tracker",
+        "data": {
+          "discount_threshold": "Discount threshold (%) for 'high discount'",
+          "retailers": "Retailers to check",
+          "update_hours": "Refresh interval (hours)",
+          "digest_time": "Daily digest time",
+          "min_history_days": "Minimum days of history before a 'record low' counts",
+          "brickset_api_key": "Brickset API key (optional, fills name/theme/RRP/image)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "tracked_sets": {
+        "name": "Tracked sets"
+      },
+      "all_time_lows": {
+        "name": "Sets at all-time low"
+      },
+      "high_discounts": {
+        "name": "Sets with high discount"
+      },
+      "collection_value": {
+        "name": "Collection value"
+      },
+      "collection_cost": {
+        "name": "Collection cost"
+      },
+      "collection_growth": {
+        "name": "Collection growth"
+      }
+    }
+  }
+}

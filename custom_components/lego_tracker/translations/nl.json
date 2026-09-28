@@ -1,0 +1,57 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "LEGO Price Tracker",
+        "data": {
+          "discount_threshold": "Kortingsdrempel (%) voor 'hoge korting'",
+          "retailers": "Winkels om te controleren",
+          "update_hours": "Ververs-interval (uren)",
+          "digest_time": "Tijdstip dagelijkse samenvatting",
+          "min_history_days": "Minimaal aantal dagen historiek voor een 'laagste prijs ooit'",
+          "brickset_api_key": "Brickset API-sleutel (optioneel, vult naam/thema/adviesprijs/afbeelding aan)"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Reeds geconfigureerd"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "LEGO Price Tracker",
+        "data": {
+          "discount_threshold": "Kortingsdrempel (%) voor 'hoge korting'",
+          "retailers": "Winkels om te controleren",
+          "update_hours": "Ververs-interval (uren)",
+          "digest_time": "Tijdstip dagelijkse samenvatting",
+          "min_history_days": "Minimaal aantal dagen historiek voor een 'laagste prijs ooit'",
+          "brickset_api_key": "Brickset API-sleutel (optioneel, vult naam/thema/adviesprijs/afbeelding aan)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "tracked_sets": {
+        "name": "Gevolgde sets"
+      },
+      "all_time_lows": {
+        "name": "Sets op laagste prijs ooit"
+      },
+      "high_discounts": {
+        "name": "Sets met hoge korting"
+      },
+      "collection_value": {
+        "name": "Collectiewaarde"
+      },
+      "collection_cost": {
+        "name": "Collectie-aankoopkost"
+      },
+      "collection_growth": {
+        "name": "Collectiegroei"
+      }
+    }
+  }
+}
