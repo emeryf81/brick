@@ -1,0 +1,34 @@
+add_set:
+  fields:
+    set_number: {required: true, example: "10281", selector: {text: {}}}
+    name: {selector: {text: {}}}
+    theme: {example: "Icons", selector: {text: {}}}
+    subtheme: {selector: {text: {}}}
+    rrp: {selector: {number: {min: 0, max: 5000, step: 0.01, unit_of_measurement: EUR, mode: box}}}
+    pieces: {selector: {number: {min: 0, max: 20000, mode: box}}}
+    owned: {default: false, selector: {boolean: {}}}
+    quantity: {default: 1, selector: {number: {min: 1, max: 99, mode: box}}}
+    paid: {selector: {number: {min: 0, max: 5000, step: 0.01, unit_of_measurement: EUR, mode: box}}}
+    purchase_date: {example: "2025-12-24", selector: {text: {}}}
+remove_set:
+  fields:
+    set_number: {required: true, selector: {text: {}}}
+set_offer:
+  fields:
+    set_number: {required: true, selector: {text: {}}}
+    retailer:
+      required: true
+      selector:
+        select:
+          options: [amazon_nl, amazon_de, amazon_be, bol, kruidvat_be]
+    url: {required: true, selector: {text: {}}}
+refresh:
+  fields:
+    set_number: {selector: {text: {}}}
+import_collection:
+  fields:
+    csv_text: {selector: {text: {multiline: true}}}
+    file_path: {example: "/config/lego_collection.csv", selector: {text: {}}}
+    replace: {default: false, selector: {boolean: {}}}
+    track_prices: {default: true, selector: {boolean: {}}}
+send_digest: {}
