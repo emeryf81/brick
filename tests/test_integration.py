@@ -951,6 +951,11 @@ def test_compare_parsers_skip_led_and_follow():
     # Shoparize: embedded JSON search results; LED kits and other sets are dropped
     r = compare.parse("shoparize", SHOPARIZE, "40460", "https://www.shoparize.com/be/q?q=lego+40460", d)
     assert [(x["name"], x["price"]) for x in r.shops] == [("bol.com", 11.49), ("Dreamland", 12.99)] and r.name is None
+    # Channable renders its results with JavaScript: the HTML doesn't even contain the query -> 'unreadable', not 'missing'
+    js_page = '<html><head><title>Search and Compare Prices Across Webshops | Channable</title></head><body><div id="__next"></div>' \
+              '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"page":{"title":"x"}}},"page":"/","query":{}}</script></body></html>'
+    r = compare.parse("channable", js_page, "10368", "https://shopping.channable.com/?country=BE&search=lego+10368", d)
+    assert r.kind == "missing" and r.note == "js"
     # Producthero needs the EAN
     assert compare.first_url("producthero", "60454", "nl-be") is None
     assert compare.first_url("producthero", "60454", "nl-be", "5702016914177") == \

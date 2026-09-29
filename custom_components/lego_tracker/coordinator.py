@@ -450,7 +450,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                            steps: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
         st, now = self._cstore(src), time.time()
         entry = st.get(num)
-        if entry and entry.get("status") == "missing" and now - entry["ts"] < COMPARE_MISSING_HOURS * 3600 and not retry_missing:
+        if entry and entry.get("status") in ("missing", "unreadable") and now - entry["ts"] < COMPARE_MISSING_HOURS * 3600 and not retry_missing:
             return None
         if entry and entry.get("status") == "ok" and now - entry["ts"] < COMPARE_FRESH_HOURS * 3600 and not refresh:
             return entry
@@ -503,6 +503,11 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             res = compare.parse(src, page, num, url, all_domains(), step)
         if res.kind == "follow" and res.url and compare.is_compare_url(res.url) and step < compare.MAX_STEPS - 1:
             return "follow", res.url
+        if res.kind != "offers" and res.note == "js":
+            msg = T("{source} loads its results with JavaScript: this page has no results to read", source=name)
+            st[num] = {"status": "unreadable", "ts": now, "url": url, "error": msg}
+            self.log("warning", "fetch", msg, set_number=num, url=url, source=name)
+            return "missing", None
         if res.kind != "offers":
             st[num] = {"status": "missing", "ts": now, "url": url, "note": res.note}
             self.log("info", "fetch", T("not on {source}: next try tomorrow", source=name), set_number=num, url=url, source=name)
@@ -812,7 +817,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     for num, s in self.store["sets"].items():
                         e = self._cstore(src).get(num) or {}
                         fresh = e.get("status") == "ok" and time.time() - e["ts"] < 20 * 3600 and not e.get("last_error")
-                        missing = e.get("status") == "missing" and time.time() - e["ts"] < COMPARE_MISSING_HOURS * 3600
+                        missing = e.get("status") in ("missing", "unreadable") and time.time() - e["ts"] < COMPARE_MISSING_HOURS * 3600
                         if fresh or missing or not (paused or e.get("status") == "error" or e.get("last_error")):
                             continue
                         if (url := compare.first_url(src, num, locale, s.get("ean"))):

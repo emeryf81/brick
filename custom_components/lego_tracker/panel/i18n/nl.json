@@ -938,6 +938,7 @@
 "{shop} blocked the price check and is paused for {hours} h.": "{shop} blokkeerde de prijscontrole en is {hours} u gepauzeerd.",
 "{shop} blocked us: paused for {hours} h": "{shop} blokkeerde ons: {hours} u gepauzeerd",
 "{shop}: {ok} succeeded, {failed} failed": "{shop}: {ok} gelukt, {failed} mislukt",
+"{source} loads its results with JavaScript: this page has no results to read": "{source} laadt zijn resultaten met JavaScript: deze pagina bevat geen resultaten om te lezen",
 "{source}: {n} network errors in a row, paused for 1 hour ({error})": "{source}: {n} netwerkfouten na elkaar, 1 uur gepauzeerd ({error})",
 "{suspect} suspicious, {ok} OK, {unknown} cannot be judged yet": "{suspect} verdacht, {ok} in orde, {unknown} nog niet te beoordelen",
 "{time} left": "nog {time}",

@@ -1461,7 +1461,7 @@ class LegoTrackerPanel extends HTMLElement {
       const e = r.entry || {}, name = SRC[src] || src;
       const steps = r.steps.map((x, i) => `<tr><td>${i + 1}</td><td class="ell"><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url)}</a></td><td>${x.status || "–"}</td><td>${x.error ? esc(tx(x.error)) : ""}</td><td class="num">${Math.round(x.size / 1024)} kB</td></tr>`).join("");
       const verdict = e.status === "ok" ? `<span class="ok">✓ ${t("{n} shops found", { n: e.shops.length })}</span>${e.name ? " · " + esc(e.name) : ""}`
-        : e.status === "missing" ? `<span class="warn">${t("Not on {source}", { source: name })}</span>` : e.status === "error" ? `<span class="bad">${esc(tx(e.error || ""))}</span>`
+        : e.status === "missing" ? `<span class="warn">${t("Not on {source}", { source: name })}</span>` : ["error", "unreadable"].includes(e.status) ? `<span class="bad">${esc(tx(e.error || ""))}</span>`
         : `<span class="muted">${t("Not fetched (paused, or this site needs an EAN / doesn't cover your country)")}</span>`;
       const shops = e.status === "ok" ? `<table class="tbl">${e.shops.map((x) => `<tr><td>${esc(x.name)}</td><td class="num">${EUR(x.price)}</td><td>${x.retailer ? esc(this.state.data.retailers[x.retailer] || x.retailer) : ""}</td></tr>`).join("")}</table>` : "";
       out.innerHTML = `<div class="panel" style="margin-top:8px;background:var(--bg2,transparent)"><b>🔬 ${esc(name)} · ${esc(num)}</b> — ${verdict}
@@ -1490,7 +1490,7 @@ class LegoTrackerPanel extends HTMLElement {
       const link = e.url ? ` <a href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">↗</a>` : "";
       if (e.status !== "ok") {
         const msg = e.status === "missing" ? t("Not on {source}; next try {when}.", { source: e.name, when: when(e.ts + 86400) })
-          : e.status === "error" ? tx(e.error || "") : t("Not fetched yet.");
+          : ["error", "unreadable"].includes(e.status) ? tx(e.error || "") : t("Not fetched yet.");
         return `<p class="muted" style="font-size:13px;margin:4px 0"><b>${esc(e.name)}</b>${link} · ${esc(msg)}</p>`;
       }
       const low = Math.min(...e.shops.map((x) => x.price));

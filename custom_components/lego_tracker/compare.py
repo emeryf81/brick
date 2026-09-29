@@ -510,6 +510,10 @@ def parse(source: str, page: str, num: str, page_url: str, domains: dict[str, st
         info, offers = _collect(page, page_url, False, root)
         return _finish(info, offers, page, num, domains, False, page_url)
     # search result pages (Shoparize, Channable): every result is one shop's offer
+    if not has_number(page, num):
+        # a server-rendered result page always repeats the query; without it the results are
+        # loaded afterwards by JavaScript and there is nothing in this HTML to read
+        return Result("missing", note="js")
     info, offers = _jsonld(page)
     offers = [o for o in offers if o.get("title")] or _embedded(page) or _dom_offers(root, page_url, True)
     res = _finish({}, offers, page, num, domains, True, page_url)

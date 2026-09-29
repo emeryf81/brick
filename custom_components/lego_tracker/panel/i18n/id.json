@@ -938,6 +938,7 @@
 "{shop} blocked the price check and is paused for {hours} h.": "{shop} memblokir pemeriksaan harga dan dijeda selama {hours} jam.",
 "{shop} blocked us: paused for {hours} h": "{shop} memblokir kami: dijeda selama {hours} jam",
 "{shop}: {ok} succeeded, {failed} failed": "{shop}: {ok} berhasil, {failed} gagal",
+"{source} loads its results with JavaScript: this page has no results to read": "{source} memuat hasilnya dengan JavaScript: halaman ini tidak berisi hasil untuk dibaca",
 "{source}: {n} network errors in a row, paused for 1 hour ({error})": "{source}: {n} kesalahan jaringan berturut-turut, dijeda 1 jam ({error})",
 "{suspect} suspicious, {ok} OK, {unknown} cannot be judged yet": "{suspect} mencurigakan, {ok} OK, {unknown} belum bisa dinilai",
 "{time} left": "sisa {time}",

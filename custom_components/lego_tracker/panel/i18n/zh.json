@@ -938,6 +938,7 @@
 "{shop} blocked the price check and is paused for {hours} h.": "{shop} 拦截了价格检查，已暂停 {hours} 小时。",
 "{shop} blocked us: paused for {hours} h": "{shop} 拦截了我们：暂停 {hours} 小时",
 "{shop}: {ok} succeeded, {failed} failed": "{shop}：{ok} 个成功，{failed} 个失败",
+"{source} loads its results with JavaScript: this page has no results to read": "{source} 通过 JavaScript 加载结果：此页面中没有可读取的结果",
 "{source}: {n} network errors in a row, paused for 1 hour ({error})": "{source}：连续 {n} 次网络错误，暂停 1 小时（{error}）",
 "{suspect} suspicious, {ok} OK, {unknown} cannot be judged yet": "{suspect} 个可疑，{ok} 个正常，{unknown} 个暂无法判断",
 "{time} left": "剩余 {time}",

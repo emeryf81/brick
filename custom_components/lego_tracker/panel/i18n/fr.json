@@ -938,6 +938,7 @@
 "{shop} blocked the price check and is paused for {hours} h.": "{shop} a bloqué le contrôle de prix et est en pause pour {hours} h.",
 "{shop} blocked us: paused for {hours} h": "{shop} nous a bloqués : en pause pour {hours} h",
 "{shop}: {ok} succeeded, {failed} failed": "{shop} : {ok} réussis, {failed} échoués",
+"{source} loads its results with JavaScript: this page has no results to read": "{source} charge ses résultats avec JavaScript : cette page ne contient aucun résultat à lire",
 "{source}: {n} network errors in a row, paused for 1 hour ({error})": "{source} : {n} erreurs réseau d'affilée, en pause pour 1 heure ({error})",
 "{suspect} suspicious, {ok} OK, {unknown} cannot be judged yet": "{suspect} suspects, {ok} OK, {unknown} pas encore évaluables",
 "{time} left": "encore {time}",
