@@ -75,6 +75,7 @@ SERVICE_SCHEMAS = {
         vol.Required("price"): vol.All(vol.Coerce(float), vol.Range(min=0.01, max=100000)),
         vol.Optional("url"): cv.string, vol.Optional("set_number"): cv.string,
         vol.Optional("retailer"): cv.string, vol.Optional("title"): vol.All(cv.string, vol.Length(max=400)),
+        vol.Optional("via"): vol.In(["userscript", "relay"]),
     }),
     "send_digest": vol.Schema({}),
 }
@@ -316,7 +317,7 @@ def _register_services(hass: HomeAssistant) -> None:
         try:
             _coordinator(hass).report_price(call.data["price"], url=call.data.get("url"),
                                             set_number=call.data.get("set_number"), retailer=call.data.get("retailer"),
-                                            title=call.data.get("title"))
+                                            title=call.data.get("title"), via=call.data.get("via"))
         except ValueError as err:
             raise ServiceValidationError(str(err)) from err
 

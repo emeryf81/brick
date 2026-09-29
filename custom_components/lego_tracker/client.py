@@ -34,7 +34,7 @@ BROWSER_HEADERS = {
 ORIGINS = {
     "amazon_nl": "https://www.amazon.nl/", "amazon_de": "https://www.amazon.de/",
     "amazon_be": "https://www.amazon.com.be/", "bol": "https://www.bol.com/nl/nl/",
-    "kruidvat_be": "https://www.kruidvat.be/nl/",
+    "kruidvat_be": "https://www.kruidvat.be/nl/", "brickwatch": "https://www.brickwatch.net/",
 }
 # After a block we stop asking that retailer for a while: hammering makes bot protection stricter.
 COOLDOWN_HOURS = (1, 3, 6, 12, 24)
@@ -181,6 +181,19 @@ class Fetcher:
             return None, T("price not found on the page")
         self.blocks[retailer] = 0
         return parsed, None
+
+    async def get_page(self, key: str, url: str, force: bool = False) -> tuple[int, str, str | None]:
+        """(status, html, error) for an extra source (e.g. Brickwatch), with the same politeness and pauses."""
+        if not force and (left := self.cooldown_left(key)) > 0:
+            return 0, "", T("paused {hours} h after being blocked", hours=f"{left / 3600:.1f}")
+        try:
+            status, page = await self._get(key, url)
+        except Exception as err:  # noqa: BLE001
+            return 0, "", T("network error: {error}", error=str(err)[:120])
+        if status in (403, 429, 503):
+            self._note_block(key)
+            return status, "", T("blocked (HTTP {status})", status=status)
+        return status, page, None
 
     async def discover(self, retailer: str, set_number: str, force: bool = False) -> str | None:
         url = search_url(retailer, set_number)

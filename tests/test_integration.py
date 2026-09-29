@@ -373,7 +373,7 @@ async def test_userscript_is_generated(hass: HomeAssistant, entry, hass_client_n
     assert resp.status == 200
     text = await resp.text()
     assert "// ==UserScript==" in text and "@match        https://www.dreamland.be/*" in text
-    assert "{{" not in text and "@updateURL" in text and "title: pageTitle()" in text
+    assert "{{" not in text and "@updateURL" in text and "title: titleOf(document)" in text
 
 
 async def test_lego_com_is_first_source(hass: HomeAssistant, entry, no_network):
@@ -746,3 +746,140 @@ async def test_lego_com_image_replaces_other_images(hass: HomeAssistant, entry, 
     c.update_set("10281", {"image": "https://my.example/own.png"})
     await c.lego_lookup("10281", force=True)
     assert s["image"] == "https://my.example/own.png"                  # a manual image always wins
+
+
+async def test_bol_api_finds_and_prices_without_scraping(hass: HomeAssistant, entry, no_network, aioclient_mock, hass_ws_client):
+    import re as _re
+    aioclient_mock.post("https://login.bol.com/token", json={"access_token": "tok", "expires_in": 299})
+    aioclient_mock.get(_re.compile(r"https://api\.bol\.com/marketing/catalog/v1/products/search.*"), json={"results": [
+        {"product": {"ean": "5702017000000", "title": "LEGO Technic 42143 lamp set", "url": "https://www.bol.com/nl/nl/p/lamp/111/"}, "offer": {"price": 9.99}},
+        {"product": {"ean": "5702016912340", "title": "LEGO Icons Bonsaiboompje - 10281", "url": "https://www.bol.com/be/nl/p/lego-bonsai/9300000038297067/"},
+         "offer": {"price": 37.99}}]})
+    aioclient_mock.get(_re.compile(r"https://api\.bol\.com/marketing/catalog/v1/products/5702016912340/offers/best.*"),
+                       json={"ean": "5702016912340", "price": 36.5, "strikethroughPrice": 49.99, "deliveryDescription": "Op voorraad"})
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "bol_client_id": "client-id-123", "bol_client_secret": "s3cr3t/key+=="})
+    c = await _setup(hass, entry)
+    assert c.bol_api and c.bol_country == "BE"                      # lego_locale nl-be
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281", "rrp": 49.99}, blocking=True)
+    res = await c.fetch_shop("10281", "bol")
+    o = c.store["offers"]["10281"]["bol"]
+    assert res["ok"] and res["price"] == 36.5, (res, o)
+    assert o["ean"] == "5702016912340" and o["url"].endswith("/9300000038297067/") and o["last_price"] == 36.5
+    assert not no_network.called                                    # no scraping for bol.com
+    # the relay leaves bol.com to the API
+    o["error"] = "blocked (HTTP 403)"
+    assert all(i["retailer"] != "bol" for i in c.relay_items()["items"])
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/settings/test_key", "source": "bol"})
+    r = (await ws.receive_json())["result"]
+    assert r["ok"] and "Bonsaiboompje" in r["message"]
+    await ws.send_json({"id": 2, "type": "lego_tracker/settings/get"})
+    st = (await ws.receive_json())["result"]
+    assert st["bol_api"] and st["keys"]["bol_client_secret"]["set"] and "s3cr3t" not in str(st)
+
+
+async def test_bol_api_bad_credentials_are_explained(hass: HomeAssistant, entry, no_network, aioclient_mock):
+    aioclient_mock.post("https://login.bol.com/token", status=401)
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "bol_client_id": "client-id-123", "bol_client_secret": "wrongwrong"})
+    c = await _setup(hass, entry)
+    ok, msg = await c.test_bol()
+    assert not ok and msg == "bol.com API: client id or secret not accepted"
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
+    c.store["offers"]["10281"]["bol"] = {"url": "https://www.bol.com/nl/nl/p/x/1/", "history": []}
+    await c.refresh_set("10281", ["bol"])
+    assert c.store["offers"]["10281"]["bol"]["error"] == "bol.com API: client id or secret not accepted"
+
+
+async def test_browser_relay_list_and_results(hass: HomeAssistant, entry, no_network, hass_client):
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281", "rrp": 49.99}, blocking=True)
+    for rid, url in (("bol", "https://www.bol.com/nl/nl/p/lego-bonsai/9300000038297067/"), ("amazon_nl", "https://www.amazon.nl/dp/B0BONSAI01")):
+        await hass.services.async_call(DOMAIN, "set_offer", {"set_number": "10281", "retailer": rid, "url": url}, blocking=True)
+    c.store["offers"]["10281"]["amazon_nl"].update(last_ok=time.time(), error=None)      # fine on the server
+    c.store["offers"]["10281"]["bol"]["error"] = "blocked (HTTP 403)"
+    client = await hass_client()
+    data = await (await client.get("/api/lego_tracker/relay")).json()
+    assert data["enabled"] and [i["retailer"] for i in data["items"]] == ["bol"] and data["interval_hours"] == 6
+    item = data["items"][0]
+    r = await client.post("/api/lego_tracker/relay", json={"results": [{**item, "price": 36.99, "title": "LEGO Icons Bonsaiboompje 10281"}]})
+    assert (await r.json()) == {"ok": 1, "fail": 0, "rejected": []}
+    o = c.store["offers"]["10281"]["bol"]
+    assert o["last_price"] == 36.99 and o["error"] is None
+    relay_log = [e for e in c.store["activity"] if e.get("source") == "relay"]
+    assert relay_log and "your browser" in relay_log[-1]["message"]
+    r = await client.post("/api/lego_tracker/relay", json={"results": [{**item, "error": "blocked (captcha / bot protection)"}]})
+    assert (await r.json())["fail"] == 1 and c.store["relay_last"]["ok"] == 1 and c.store["relay_last"]["fail"] == 1
+    r = await client.post("/api/lego_tracker/relay", json={"results": [{**item, "price": 2.0}]})     # suspicious: rejected
+    assert (await r.json())["rejected"]
+    assert (await client.post("/api/lego_tracker/relay", data="nope")).status == 400
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "browser_relay": False})
+    await hass.async_block_till_done()
+    data = await (await client.get("/api/lego_tracker/relay")).json()
+    assert not data["enabled"] and data["items"] == []
+
+
+async def test_userscript_has_relay_and_ha_include(hass: HomeAssistant, entry, hass_client_no_auth):
+    await _setup(hass, entry)
+    text = await (await (await hass_client_no_auth()).get("/api/lego_tracker/lego-tracker.user.js")).text()
+    assert "// @include      *://*/lego-tracker*" in text and "/api/lego_tracker/relay" in text and "{{" not in text
+
+
+BW_PAGE = '''<html><head><title>LEGO 10281 Bonsai - Brickwatch</title><meta property="og:image" content="https://img.brickwatch.net/10281.jpg"></head>
+<body><h1>LEGO® Icons 10281 Bonsaiboompje</h1><p>Adviesprijs € 49,99</p><table>
+<tr><td><img alt="bol.com"></td><td><s>€ 49,99</s> € 36,49</td><td><a href="/nl-BE/go/1">Naar winkel</a></td></tr>
+<tr><td><img alt="Amazon.nl"></td><td>€ 37,10</td><td><a href="https://www.amazon.nl/dp/B0BONSAI01">Naar winkel</a></td></tr>
+<tr><td><img alt="Top1Toys"></td><td>€ 41,00</td><td><a href="/nl-BE/go/9">Naar winkel</a></td></tr></table></body></html>'''
+
+
+async def test_brickwatch_hidden_source(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    c = await _setup(hass, entry)
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/brickwatch/fetch"})
+    assert (await ws.receive_json())["error"]["code"] == "not_enabled"          # off by default
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "brickwatch": True})
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][entry.entry_id]
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
+    await hass.services.async_call(DOMAIN, "set_offer", {"set_number": "10281", "retailer": "bol",
+                                                         "url": "https://www.bol.com/nl/nl/p/lego-bonsai/9300000038297067/"}, blocking=True)
+    no_network.side_effect = lambda rid, url, force=False: (None, "blocked (HTTP 403)")    # every shop blocks us
+    page = AsyncMock(return_value=(200, BW_PAGE, None))
+    with patch.object(c.fetcher, "get_page", page):
+        await c.refresh_all()
+    assert page.await_args.args[1] == "https://www.brickwatch.net/nl-BE/set/10281/"
+    offers = c.store["offers"]["10281"]
+    assert offers["bol"]["last_price"] == 36.49 and offers["bol"]["error"] is None          # bol.com via Brickwatch
+    assert offers["amazon_nl"]["via"] == "brickwatch" and offers["amazon_nl"]["last_price"] == 37.10   # new link via Brickwatch
+    s = c.store["sets"]["10281"]
+    assert s["rrp"] == 49.99 and s["image"] == "https://img.brickwatch.net/10281.jpg" and "Bonsaiboompje" in s["name"]
+    check = [e for e in c.store["activity"] if e["kind"] == "check"][-1]
+    assert check["results"]["bol"]["via"] == "brickwatch" and check["results"]["bol"]["ok"]
+    shops = {sh["name"]: sh for sh in c.store["brickwatch"]["10281"]["shops"]}
+    assert shops["Top1Toys"]["retailer"] is None and shops["Top1Toys"]["price"] == 41.0      # every shop is kept
+    # the set dialog gets all Brickwatch shops; the page is re-used for a few hours
+    await ws.send_json({"id": 2, "type": "lego_tracker/set", "set_number": "10281"})
+    assert len((await ws.receive_json())["result"]["brickwatch"]["shops"]) == 3
+    with patch.object(c.fetcher, "get_page", page):
+        await c.refresh_set("10281")
+    assert page.await_count == 1
+
+
+async def test_brickwatch_missing_page_not_retried_within_a_day(hass: HomeAssistant, entry, no_network):
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "brickwatch": True})
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "385"}, blocking=True)
+    page = AsyncMock(return_value=(404, "", None))
+    with patch.object(c.fetcher, "get_page", page):
+        assert await c.brickwatch_refresh("385") is None
+        assert await c.brickwatch_refresh("385", force=True) is None                  # not even forced
+        assert page.await_count == 1 and c.store["brickwatch"]["385"]["status"] == "missing"
+        c.store["brickwatch"]["385"]["ts"] -= 25 * 3600                              # a day later
+        await c.brickwatch_refresh("385")
+        assert page.await_count == 2
+    # a redirect to the home page counts as missing too
+    home = AsyncMock(return_value=(200, "<html><title>Brickwatch België</title><h1>Welkom</h1></html>", None))
+    c.store["brickwatch"].pop("385")
+    with patch.object(c.fetcher, "get_page", home):
+        assert await c.brickwatch_refresh("385") is None
+    assert c.store["brickwatch"]["385"]["status"] == "missing"
+    assert "385" in c._spread_candidates()                                             # sets without links are checked too
