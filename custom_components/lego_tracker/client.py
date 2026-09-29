@@ -12,7 +12,7 @@ import aiohttp
 
 from .models import normalize_set_number
 from .shops import domain_of
-from .parsers import Parsed, find_search_result, parse_brickset_page, parse_page, search_url
+from .parsers import Parsed, find_search_result, lego_product_url, parse_brickset_page, parse_page, search_url
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -57,6 +57,7 @@ class Fetcher:
         self.min_delay = 4.0
         self.blocks: dict[str, int] = {}
         self.no_autopause: set[str] = set()
+        self.on_pause = None   # callback(retailer, hours), set by the coordinator
         self.blocked_until: dict[str, float] = {}
 
     @property
@@ -150,7 +151,10 @@ class Fetcher:
         if retailer in self.no_autopause:       # user chose: never pause this shop
             self.blocks[retailer] = n + 1
             return
-        self.blocked_until[retailer] = time.time() + COOLDOWN_HOURS[min(n, len(COOLDOWN_HOURS) - 1)] * 3600
+        hours = COOLDOWN_HOURS[min(n, len(COOLDOWN_HOURS) - 1)]
+        self.blocked_until[retailer] = time.time() + hours * 3600
+        if self.on_pause:
+            self.on_pause(retailer, hours)
         self.blocks[retailer] = n + 1
 
     async def fetch_offer(self, retailer: str, url: str) -> tuple[Parsed | None, str | None]:
@@ -188,7 +192,19 @@ class Fetcher:
         if status in (403, 429, 503) or (status < 400 and parse_page(retailer, page).blocked):
             self._note_block(retailer)
             return None
-        return find_search_result(retailer, page, set_number) if status < 400 else None
+        found = find_search_result(retailer, page, set_number) if status < 400 else None
+        if found or retailer != "lego_com":
+            return found
+        # LEGO.com search is partly rendered in the browser: try the product URL directly
+        try:
+            status, page = await self._get(retailer, lego_product_url(set_number))
+        except Exception:  # noqa: BLE001
+            return None
+        if status < 400:
+            parsed = parse_page(retailer, page)
+            if parsed.price or (parsed.title and set_number in (parsed.title + page[:200000])):
+                return lego_product_url(set_number)
+        return None
 
 
 async def brickset_lookup(session: aiohttp.ClientSession, api_key: str, set_number: str) -> dict[str, Any] | None:

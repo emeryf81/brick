@@ -19,15 +19,17 @@ from homeassistant.util import dt as dt_util
 
 from .client import Fetcher, lookup_metadata
 from .const import (
-    CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_CUSTOM_SHOPS, CONF_DIGEST_TIME, CONF_NO_AUTOPAUSE, CONF_SHOP_SEARCH, CONF_VALUE_SOURCE, DEFAULT_DIGEST_TIME, GENERIC_SHOPS, CONF_DISCOUNT_THRESHOLD, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
+    CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, CONF_CUSTOM_SHOPS, CONF_DIGEST_TIME, CONF_NO_AUTOPAUSE, CONF_SHOP_SEARCH, CONF_VALUE_SOURCE, DEFAULT_DIGEST_TIME, GENERIC_SHOPS, CONF_DISCOUNT_THRESHOLD, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
     DEFAULT_REFRESH_TIMES, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS, DEFAULT_RETAILERS,
     DOMAIN, EVENT_JOB_DONE, EVENT_HIGH_DISCOUNT, EVENT_NEW_LOW, EVENT_TARGET_HIT, RETAILERS, STORAGE_KEY,
     STORAGE_VERSION,
 )
 from .models import (
-    add_event, collection_analytics, link_check, collection_rows, collection_series, is_suspicious_price, collection_summary, COLLECTION_COLUMNS, rows_to_csv, validate_backup, wishlist_summary, compute_set_status, new_store, normalize_set_number,
+    add_activity, add_event, clean_history, collection_analytics, link_check, collection_rows, collection_series, is_suspicious_price, collection_summary, COLLECTION_COLUMNS, rows_to_csv, validate_backup, wishlist_summary, compute_set_status, new_store, normalize_set_number,
     record_price, today_iso,
 )
+from .notifications import Notifier, default_rules
+from .shops import SEARCH, valid_search
 from .parsers import ACCESSORY_RE, KNOCKOFF_RE, clean_title, normalize_url, retailer_from_url, url_key
 
 _LOGGER = logging.getLogger(__name__)
@@ -49,6 +51,12 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.last_job: dict[str, Any] | None = None
         self._job_task: asyncio.Task | None = None
         self._cancel = False
+        self._job_source = "panel"
+        self.notifier = Notifier(self)
+        def _paused(rid: str, hours: float) -> None:
+            self.log("error", "shop", f"{RETAILERS.get(rid, (rid,))[0]} blokkeerde: {hours} u gepauzeerd", retailer=rid)
+            self.hass.async_create_task(self.notifier.on_shop_paused(rid, hours))
+        self.fetcher.on_pause = _paused
 
     # ---------------------------------------------------------------- options
     @staticmethod
@@ -68,6 +76,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self.fetcher.async_setup()
         if (data := await self._store.async_load()):
             self.store = {**new_store(), **data}
+        if "notify_rules" not in self.store:     # first run / upgrade: sensible defaults
+            self.store["notify_rules"] = default_rules(self.threshold, self.opt(self.entry, CONF_NOTIFY, "") or "")
         cd = self.store.get("cooldowns") or {}
         now = time.time()
         self.fetcher.blocked_until.update({r: t for r, t in (cd.get("until") or {}).items() if t > now})
@@ -136,6 +146,12 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return {"auto": self.auto_refresh, "times": [f"{h:02d}:{m:02d}" for h, m in self.refresh_times],
                 "next": self.next_refresh()}
 
+    # ------------------------------------------------------------------ logbook
+    def log(self, level: str, kind: str, message: str, **fields: Any) -> None:
+        """Everything the integration does ends up here (Beheer → Logboek)."""
+        fields.setdefault("source", "server")
+        add_activity(self.store, level, kind, message, **fields)
+
     # ---------------------------------------------------------------------- jobs
     def job_info(self) -> dict[str, Any]:
         return {"job": dict(self.job) if self.job else None, "last": self.last_job,
@@ -154,6 +170,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.job = {"kind": kind, "label": label, "total": len(items), "done": 0, "current": None,
                     "found": 0, "updated": 0, "errors": 0, "skipped": 0, "started": time.time(),
                     "running": True, "cancelled": False, "note": note}
+        self.job["shops"] = {}
+        self.log("info", "job", f"{label} gestart voor {len(items)} sets" + (f" ({note})" if note else ""),
+                 source=self._job_source)
+        self._job_source = "panel"
         self._job_task = self.entry.async_create_background_task(
             self.hass, self._run_job(items, worker), f"{DOMAIN}_{kind}")
         return dict(self.job)
@@ -191,9 +211,19 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             job["current"] = None
             job["finished"] = time.time()
             self.last_job = dict(job)
+            done_txt = (f"{job['label']} {'gestopt' if job['cancelled'] else 'klaar'}: {job['done']}/{job['total']} sets"
+                        + "".join(f", {job[k]} {t}" for k, t in (("updated", "bijgewerkt"), ("found", "links gevonden"),
+                                                                    ("skipped", "overgeslagen (pauze)"), ("errors", "fouten")) if job.get(k)))
+            self.log("warning" if job.get("errors") else "ok", "job", done_txt)
+            for rid, st in (job.get("shops") or {}).items():
+                self.log("ok" if not st["err"] else "warning" if st["ok"] else "error", "fetch",
+                         f"{RETAILERS.get(rid, (rid,))[0]}: {st['ok']} gelukt, {st['err']} mislukt", retailer=rid)
             if job["kind"] == "refresh":
                 self._snapshot()
+            if job["kind"] in ("enrich", "update"):
+                self.verify_links()      # new RRPs from LEGO.com: re-judge links, drop impossible prices
             self.push_update()
+            self.hass.async_create_task(self.notifier.on_job_done(dict(job)))
             self.hass.bus.async_fire(EVENT_JOB_DONE, {k: job[k] for k in ("kind", "total", "done", "found", "updated",
                                                                          "errors", "skipped", "cancelled")})
 
@@ -232,14 +262,28 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             price = parsed.price if parsed else None
             if price is not None and (warn := is_suspicious_price(price, s, offer)):
                 price, error = None, warn
+            old_price = offer.get("last_price") if offer.get("available") else None
             record_price(offer, price, error=error)
+            if self.job and self.job.get("running"):
+                st = self.job["shops"].setdefault(rid, {"ok": 0, "err": 0})
+                st["err" if error else "ok"] += 1
+            if error:
+                self.log("error", "fetch", error, set_number=num, retailer=rid, url=offer.get("url"))
+            elif price is not None and (old_price is None or abs(old_price - price) >= 0.01):
+                self.log("ok", "price", f"€{old_price:.2f} → €{price:.2f}" if old_price else f"eerste prijs €{price:.2f}",
+                         set_number=num, retailer=rid, url=offer.get("url"), price=price, old_price=old_price)
+            if status == "suspect" and offer.get("_logged_suspect") != reason:
+                offer["_logged_suspect"] = reason
+                self.log("warning", "link", f"verdachte link: {reason}", set_number=num, retailer=rid, url=offer.get("url"))
             if price is not None:
                 offer["last_ok"] = offer["last_checked"]
                 counts["updated"] += 1
             if error:
                 counts["errors"] += 1
                 _LOGGER.debug("%s/%s: %s", num, rid, error)
-            if parsed and status in ("ok", "confirmed"):
+            if parsed and rid == "lego_com":
+                self._apply_lego(num, parsed)
+            elif parsed and status in ("ok", "confirmed"):
                 if parsed.image and not s.get("image"):
                     s["image"] = parsed.image
                 if parsed.title and self._name_replaceable(s):
@@ -280,6 +324,16 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if url and url_key(rid, url) not in rejected:
                 self.store["offers"].setdefault(num, {})[rid] = {"url": url, "history": [], "found": time.time()}
                 found += 1
+                self.log("ok", "discover", "link gevonden", set_number=num, retailer=rid, url=url)
+            elif url:
+                self.log("info", "discover", "gevonden link eerder afgekeurd, niet opnieuw gekoppeld", set_number=num, retailer=rid, url=url)
+            elif self.job and self.job.get("running"):
+                st = self.job["shops"].setdefault(rid, {"ok": 0, "err": 0})
+                st["err"] += 1                  # summarised per shop at the end of the job
+            else:
+                self.log("info", "discover", "geen passend product gevonden", set_number=num, retailer=rid)
+            if url and self.job and self.job.get("running"):
+                self.job["shops"].setdefault(rid, {"ok": 0, "err": 0})["ok"] += 1
         return {"found": found}
 
     async def discover_offers(self, set_number: str | None = None) -> int:
@@ -305,7 +359,54 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def needs_enrich(self, num: str) -> bool:
         s = self.store["sets"][num]
-        return self._name_replaceable(s) or not all(s.get(k) for k in ("theme", "year", "pieces", "image"))
+        lego_due = s.get("rrp_source") != "LEGO.com" and time.time() - s.get("lego_checked", 0) > 7 * 86400
+        return lego_due or self._name_replaceable(s) or not all(s.get(k) for k in ("theme", "year", "pieces", "image"))
+
+    def _apply_lego(self, num: str, parsed: Any) -> bool:
+        """LEGO.com is the first source for RRP, image and name. Values the user typed win."""
+        s = self.store["sets"][num]
+        before = (s.get("rrp"), s.get("image"), s.get("name"), s.get("retiring"))
+        if parsed.list_price and s.get("rrp_source") != "user":
+            s["rrp"], s["rrp_source"] = round(parsed.list_price, 2), "LEGO.com"
+        if parsed.image and parsed.image.startswith("https://") and s.get("image_source") != "user":
+            s["image"], s["image_source"] = parsed.image, "LEGO.com"
+        if parsed.title and (self._name_replaceable(s) or s.get("name_source") == "LEGO.com"):
+            s["name"], s["name_source"] = clean_title(parsed.title, num), "LEGO.com"
+        if parsed.retiring:
+            s["retiring"], s["retiring_source"] = True, "LEGO.com"
+        elif s.get("retiring_source") == "LEGO.com":
+            s.pop("retiring", None)
+            s.pop("retiring_source", None)
+        s["lego_checked"] = time.time()
+        return before != (s.get("rrp"), s.get("image"), s.get("name"), s.get("retiring"))
+
+    async def lego_lookup(self, num: str) -> bool:
+        """Find + read the set's LEGO.com page (also kept as a 'LEGO.com' shop link)."""
+        if self.fetcher.cooldown_left("lego_com") > 0:
+            return False
+        s = self.store["sets"][num]
+        offers = self.store["offers"].setdefault(num, {})
+        offer = offers.get("lego_com")
+        url = offer.get("url") if offer else None
+        if not url:
+            url = await self.fetcher.discover("lego_com", num)
+            rejected = set(self.store.setdefault("rejected", {}).get(num, []))
+            if not url or url_key("lego_com", url) in rejected:
+                s["lego_checked"] = time.time()
+                return False
+            offer = offers["lego_com"] = {"url": url, "history": [], "found": time.time()}
+        parsed, error = await self.fetcher.fetch_offer("lego_com", url)
+        if error and error.startswith("paused"):
+            return False
+        offer["link_status"], offer["link_reason"] = link_check(offer, s, num)
+        if parsed and parsed.title:
+            offer["title"] = parsed.title[:300]
+        record_price(offer, parsed.price if parsed else None, error=error)
+        if parsed and parsed.price:
+            offer["last_ok"] = offer["last_checked"]
+        if error:
+            self.log("error", "fetch", error, set_number=num, retailer="lego_com", url=url)
+        return self._apply_lego(num, parsed) if parsed else False
 
     def start_enrich(self, all_sets: bool = False) -> dict[str, Any]:
         nums = [n for n in self.store["sets"] if all_sets or self.needs_enrich(n)]
@@ -315,13 +416,14 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def enrich_set(self, num: str) -> dict[str, int]:
         s = self.store["sets"][num]
+        lego_changed = await self.lego_lookup(num)       # 1st source: RRP, image, name
         meta, source = await lookup_metadata(async_get_clientsession(self.hass),
                                              self.opt(self.entry, CONF_BRICKSET_KEY, ""),
                                              self.opt(self.entry, CONF_REBRICKABLE_KEY, ""), num)
         await asyncio.sleep(1.0)   # be gentle with the metadata sources
         if not meta:
-            return {"errors": 1}
-        changed = False
+            return {"updated": 1} if lego_changed else {"errors": 1}
+        changed = lego_changed
         if meta.get("name") and self._name_replaceable(s) and s.get("name") != meta["name"]:
             s["name"], s["name_source"] = meta["name"], source
             changed = True
@@ -329,6 +431,9 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if meta.get(key) and not s.get(key):
                 s[key] = meta[key]
                 changed = True
+        if changed:
+            self.log("ok", "meta", f"setgegevens aangevuld via {source or 'LEGO.com'}", set_number=num,
+                     source=(source or "LEGO.com"))
         return {"updated": 1} if changed else {}
 
     # ------------------------------------------------------------ update (CSV)
@@ -360,7 +465,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             shops.append({
                 "id": rid, "label": label, "builtin": not rid.startswith("c_"),
                 "generic": rid in GENERIC_SHOPS, "domain": GENERIC_SHOPS.get(rid, {}).get("domain"),
-                "search": GENERIC_SHOPS.get(rid, {}).get("search"), "enabled": rid in self.retailers,
+                "search": SEARCH.get(rid, ""), "default_search": DEFAULT_SEARCH.get(rid, GENERIC_SHOPS.get(rid, {}).get("search", "")),
+                "enabled": rid in self.retailers,
                 "paused_hours": round(self.fetcher.cooldown_left(rid) / 3600, 2),
                 "blocks": self.fetcher.blocks.get(rid, 0), "autopause": rid not in self.fetcher.no_autopause,
             })
@@ -371,6 +477,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "notify_service": o.get(CONF_NOTIFY, "") or "", "value_source": o.get(CONF_VALUE_SOURCE, "shop_first"),
             "keys": {k: {"set": bool(o.get(k)), "masked": mask(o.get(k) or "")} for k in self.SECRET_KEYS},
             "shops": shops, "transport": self.fetcher.transport,
+            "lego_locale": o.get(CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE),
         }
 
     def settings_validate(self, fields: dict[str, Any]) -> dict[str, Any]:
@@ -432,10 +539,17 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             searches = {}
             for rid, tpl in (fields["shop_search"] or {}).items():
                 tpl = str(tpl or "").strip()
-                if tpl and (not tpl.startswith("https://") or "{query}" not in tpl):
-                    raise ValueError("Zoek-URL moet met https:// beginnen en {query} bevatten")
+                if tpl and not valid_search(tpl):
+                    raise ValueError(f"Zoek-URL voor {rid}: moet met https:// beginnen en {{query}} of {{number}} bevatten")
+                if tpl == DEFAULT_SEARCH.get(rid):
+                    continue                     # default: don't store, so future default fixes still apply
                 searches[rid] = tpl
             opts[CONF_SHOP_SEARCH] = searches
+        if "lego_locale" in fields:
+            loc = str(fields["lego_locale"] or "").strip().lower()
+            if not re.fullmatch(r"[a-z]{2}-[a-z]{2}", loc):
+                raise ValueError("LEGO.com-land zoals nl-be, nl-nl, de-de")
+            opts[CONF_LEGO_LOCALE] = loc
         valid_ids = set(RETAILERS) | {s["id"] for s in opts.get(CONF_CUSTOM_SHOPS, [])}
         if "retailers" in fields:
             opts[CONF_RETAILERS] = [r for r in fields["retailers"] if r in valid_ids]
@@ -445,16 +559,19 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def resume_shop(self, retailer: str | None) -> None:
         self.fetcher.reset_cooldowns(retailer)
+        self.log("info", "shop", f"pauze opgeheven voor {RETAILERS.get(retailer, (retailer,))[0] if retailer else 'alle winkels'}",
+                 retailer=retailer, source="panel")
         self._save()
         self.push_update()
 
     # --------------------------------------------------------------- link check
     def verify_links(self) -> dict[str, int]:
         """Re-judge every link offline (title/URL/price). Suspect links stop counting for prices."""
-        counts = {"ok": 0, "suspect": 0, "unknown": 0, "confirmed": 0}
+        counts = {"ok": 0, "suspect": 0, "unknown": 0, "confirmed": 0, "cleaned": 0}
         for num, offers in self.store["offers"].items():
             s = self.store["sets"].get(num, {})
             for offer in offers.values():
+                counts["cleaned"] += clean_history(offer, s.get("rrp"))
                 status, reason = link_check(offer, s, num)
                 if status is None and not offer.get("title") and s.get("name") and s.get("name_source") in (None, "shop") \
                         and re.search(r"\blego\b", s["name"], re.I):
@@ -468,6 +585,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def confirm_offer(self, set_number: str, retailer: str) -> None:
         offer = self._offer(set_number, retailer)
+        self.log("ok", "link", "link goedgekeurd", set_number=normalize_set_number(set_number), retailer=retailer,
+                 url=offer.get("url"), source="panel")
         offer["link_status"], offer["link_reason"] = "confirmed", "handmatig goedgekeurd"
         self.push_update()
 
@@ -479,11 +598,48 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             key = url_key(retailer, offer["url"])
             if key not in rej:
                 rej.append(key)
+        self.log("info", "link", "link verwijderd" + (" en geblokkeerd" if block else ""), set_number=num,
+                 retailer=retailer, url=offer.get("url"), source="panel")
         del self.store["offers"][num][retailer]
         s = self.store["sets"].get(num, {})
         if s.get("name_source") in (None, "shop") and s.get("name") and re.search(r"\blego\b", s["name"], re.I):
             s.pop("name", None)   # the name most likely came from this wrong page
             s.pop("name_source", None)
+        self.push_update()
+
+    def fix_offer(self, set_number: str, retailer: str, url: str | None = None, price: float | None = None) -> None:
+        """From the errors tab: correct link and/or price in one go."""
+        num = normalize_set_number(set_number)
+        if num not in self.store["sets"]:
+            raise ValueError(f"Set {num} wordt niet gevolgd.")
+        if retailer not in RETAILERS:
+            raise ValueError(f"Onbekende winkel {retailer}.")
+        if not url and price is None:
+            raise ValueError("Vul een link en/of een prijs in.")
+        offers = self.store["offers"].setdefault(num, {})
+        if url:
+            new = normalize_url(retailer, url)
+            old = offers.get(retailer)
+            if old and old.get("url") and url_key(retailer, old["url"]) == url_key(retailer, new):
+                old.update(url=new, link_status="confirmed", link_reason="handmatig goedgekeurd")
+            else:
+                self.set_offer(num, retailer, new)
+        elif retailer not in offers:
+            raise ValueError("Deze winkel heeft nog geen link: vul ook de link in.")
+        offer = offers[retailer]
+        self.log("ok", "user", "rechtgezet" + (f": link {offers[retailer]['url']}" if url else "") + (f", prijs €{price:.2f}" if price is not None else ""),
+                 set_number=num, retailer=retailer, url=offer.get("url"), price=price, source="panel")
+        if offer.get("link_status") == "suspect":
+            offer["link_status"], offer["link_reason"] = "confirmed", "handmatig goedgekeurd"
+        if price is not None:
+            if not 0 < price <= 10000:
+                raise ValueError("Ongeldige prijs.")
+            before = self.compute()["statuses"].get(num, {})
+            record_price(offer, round(price, 2))
+            offer["last_ok"] = offer["last_checked"]
+            self._fire_events(num, before, self.compute()["statuses"].get(num, {}))
+        else:
+            offer["error"] = None
         self.push_update()
 
     def _offer(self, set_number: str, retailer: str) -> dict[str, Any]:
@@ -524,23 +680,9 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.hass.bus.async_fire(event, payload)
                 add_event(self.store, flag, {k: payload[k] for k in ("set_number", "name", "price", "retailer")}
                           | {"discount": payload["discount"]})
-                self.hass.async_create_task(self.async_notify("LEGO deal", text, payload.get("url")))
-
-    async def async_notify(self, title: str, message: str, url: str | None = None) -> None:
-        """Send to the configured notify service (e.g. notify.mobile_app_pixel), if any."""
-        target = (self.opt(self.entry, CONF_NOTIFY, "") or "").strip()
-        if not target:
-            return
-        domain, _, name = target.partition(".")
-        if not name:
-            domain, name = "notify", target
-        data: dict[str, Any] = {"title": title, "message": message}
-        if url:
-            data["data"] = {"url": url, "clickAction": url}
-        try:
-            await self.hass.services.async_call(domain, name, data, blocking=False)
-        except Exception as err:  # noqa: BLE001 - a broken notifier must not break polling
-            _LOGGER.warning("Notify service %s failed: %s", target, err)
+        if before.get("best_price") != after.get("best_price") or any(
+                before.get(k) != after.get(k) for k in ("is_all_time_low", "target_hit", "retiring_soon", "deal_score")):
+            self.hass.async_create_task(self.notifier.on_set_change(num, dict(before), dict(after)))
 
     # ------------------------------------------------------------------ edits
     async def add_set(self, set_number: str, *, name: str | None = None, theme: str | None = None,
@@ -572,6 +714,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def remove_set(self, set_number: str) -> None:
         num = normalize_set_number(set_number)
+        self.log("info", "user", "set verwijderd", set_number=num, source="panel")
         for key in ("sets", "offers", "collection"):
             self.store[key].pop(num, None)
         self.push_update()
@@ -588,6 +731,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             rej.remove(url_key(retailer, url))
         self.store["offers"].setdefault(num, {})[retailer] = {
             "url": url, "history": [], "link_status": "confirmed", "link_reason": "handmatig ingesteld"}
+        self.log("ok", "link", "link handmatig gekoppeld", set_number=num, retailer=retailer, url=url, source="panel")
         self.push_update()
 
     SET_FIELDS = {"name": str, "theme": str, "subtheme": str, "rrp": float, "pieces": int, "year": int,
@@ -644,8 +788,15 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             target = clean_set if key in self.SET_FIELDS else clean_coll
             target[key] = self._coerce(key, typ, value)
         s.update(clean_set)
+        if clean_set or clean_coll or "owned" in fields:
+            self.log("info", "user", "gegevens bewerkt: " + ", ".join(sorted(set(clean_set) | set(clean_coll) | ({"in bezit"} if "owned" in fields else set()))),
+                     set_number=num, source="panel")
         if clean_set.get("name"):
             s["name_source"] = "user"
+        if "rrp" in clean_set:
+            s["rrp_source"] = "user"
+        if "image" in clean_set:
+            s["image_source"] = "user"
         if fields.get("owned") is False:
             self.store["collection"].pop(num, None)
         elif clean_coll or fields.get("owned"):
@@ -692,10 +843,14 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if url and not offer.get("url"):
                 offer["url"] = normalize_url(retailer, url)
             found = (num, retailer)
+        source = "userscript" if url else "panel"
         if found is None:
+            self.log("warning", "userscript" if url else "user", "prijs ontvangen voor een product dat niet gevolgd wordt",
+                     url=url, retailer=retailer, price=price, source=source, set_number=num)
             raise ValueError("No matching offer: pass the product url of a tracked offer, or set_number + retailer.")
         num, retailer = found
         if url and (warn := is_suspicious_price(price, self.store["sets"][num], self.store["offers"][num][retailer])):
+            self.log("error", "userscript", warn, set_number=num, retailer=retailer, url=url, price=price, source=source)
             raise ValueError(warn)
         offer = self.store["offers"][num][retailer]
         if title:   # the userscript sends the page title: lets the link check judge Amazon links too
@@ -704,6 +859,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         before = self.compute()["statuses"].get(num, {})
         record_price(offer, price)
         offer["last_ok"] = offer["last_checked"]
+        self.log("ok", "userscript" if url else "user", f"prijs €{price:.2f} ontvangen" + (" via Tampermonkey" if url else " (handmatig)"),
+                 set_number=num, retailer=retailer, url=url or offer.get("url"), price=price, source=source)
         if url:
             self.store["userscript_last"] = {"ts": time.time(), "set_number": num, "retailer": retailer, "price": price}
         self._fire_events(num, before, self.compute()["statuses"].get(num, {}))

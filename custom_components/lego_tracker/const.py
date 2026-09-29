@@ -29,6 +29,7 @@ DEFAULT_MIN_HISTORY_DAYS = 3
 
 # retailer id -> (label, currency)
 RETAILERS: dict[str, tuple[str, str]] = {
+    "lego_com": ("LEGO.com", "EUR"),
     "amazon_nl": ("Amazon.nl", "EUR"),
     "amazon_de": ("Amazon.de", "EUR"),
     "amazon_be": ("Amazon.com.be", "EUR"),
@@ -44,6 +45,19 @@ BUILTIN_RETAILERS = tuple(RETAILERS)
 GENERIC_SHOPS: dict[str, dict[str, str]] = {
     "dreamland_be": {"domain": "dreamland.be", "search": "https://www.dreamland.be/e/nl/search?q={query}"},
 }
+# Search URL per shop. {query} = url-encoded "LEGO <set number>", {number} = set number,
+# {locale} = LEGO.com locale (e.g. nl-be). All editable in the settings panel.
+DEFAULT_SEARCH: dict[str, str] = {
+    "lego_com": "https://www.lego.com/{locale}/search?q={number}",
+    "amazon_nl": "https://www.amazon.nl/s?k={query}",
+    "amazon_de": "https://www.amazon.de/s?k={query}",
+    "amazon_be": "https://www.amazon.com.be/s?k={query}",
+    "bol": "https://www.bol.com/nl/nl/s/?searchtext={query}",
+    "kruidvat_be": "https://www.kruidvat.be/nl/search?text={query}",
+    "dreamland_be": "https://www.dreamland.be/e/nl/search?q={query}",
+}
+CONF_LEGO_LOCALE = "lego_locale"
+DEFAULT_LEGO_LOCALE = "nl-be"
 CONF_CUSTOM_SHOPS = "custom_shops"          # [{"id","name","domain","search"}]
 CONF_SHOP_SEARCH = "shop_search"            # {shop_id: template} overrides for generic shops
 CONF_NO_AUTOPAUSE = "no_autopause"          # [shop_id] never auto-paused after a block

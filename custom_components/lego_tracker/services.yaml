@@ -74,3 +74,9 @@ import_data:
     data: {selector: {object: {}}}
     file_path: {example: "/config/lego_backup.json", selector: {text: {}}}
     merge: {default: false, selector: {boolean: {}}}
+fix_offer:
+  fields:
+    set_number: {required: true, selector: {text: {}}}
+    retailer: {required: true, selector: {text: {}}}
+    url: {selector: {text: {}}}
+    price: {selector: {number: {min: 0.01, max: 10000, step: 0.01, unit_of_measurement: EUR, mode: box}}}

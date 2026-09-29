@@ -36,7 +36,8 @@ def _card(coord, num: str, with_history: bool = False) -> dict[str, Any]:
             rid: {"label": RETAILERS[rid][0], "url": o.get("url"), "price": o.get("last_price") if o.get("available") else None,
                   "available": o.get("available"), "error": o.get("error"), "checked": o.get("last_checked"),
                   "low": min((p for _, p in o.get("history", [])), default=None),
-                  "title": o.get("title"), "link_status": o.get("link_status"), "link_reason": o.get("link_reason")}
+                  "title": o.get("title"), "link_status": o.get("link_status"), "link_reason": o.get("link_reason"),
+                  "ignored": bool(o.get("error") and o.get("ignored_error") == o.get("error"))}
             for rid, o in offers.items() if rid in RETAILERS
         },
     }
@@ -58,6 +59,11 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_settings_set)
     websocket_api.async_register_command(hass, ws_test_key)
     websocket_api.async_register_command(hass, ws_shop_action)
+    websocket_api.async_register_command(hass, ws_notify_get)
+    websocket_api.async_register_command(hass, ws_ignore_error)
+    websocket_api.async_register_command(hass, ws_log)
+    websocket_api.async_register_command(hass, ws_notify_set)
+    websocket_api.async_register_command(hass, ws_notify_test)
     hass.http.register_view(UserscriptView())
 
 
@@ -188,6 +194,8 @@ async def ws_settings_set(hass, connection, msg):
     except ValueError as err:
         connection.send_error(msg["id"], "invalid_format", str(err))
         return
+    coord.log("info", "settings", "instellingen gewijzigd: " + ", ".join(sorted(k for k in msg["fields"] if not k.endswith("_api_key") or msg["fields"][k] is not None)), source="panel")
+    coord._save()
     hass.config_entries.async_update_entry(coord.entry, options=options)
     connection.send_result(msg["id"], {"saved": True})
 
@@ -220,6 +228,95 @@ def ws_shop_action(hass, connection, msg):
         return
     coord.resume_shop(msg.get("retailer") if msg["action"] == "resume" else None)
     connection.send_result(msg["id"], coord.job_info())
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/ignore_error", vol.Required("set_number"): str,
+                                  vol.Required("retailer"): str, vol.Optional("ignore", default=True): bool})
+@callback
+def ws_ignore_error(hass, connection, msg):
+    """Hide a known error in the errors tab until a different error occurs."""
+    coord = _coord(hass)
+    offer = (coord.store["offers"].get(normalize_set_number(msg["set_number"])) or {}).get(msg["retailer"]) if coord else None
+    if offer is None:
+        connection.send_error(msg["id"], "not_found", "Onbekende link")
+        return
+    if msg["ignore"]:
+        offer["ignored_error"] = offer.get("error")
+    else:
+        offer.pop("ignored_error", None)
+    coord.push_update()
+    connection.send_result(msg["id"], {"ok": True})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/notify/get"})
+@callback
+def ws_notify_get(hass, connection, msg):
+    coord = _coord(hass)
+    if coord is None:
+        connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
+        return
+    connection.send_result(msg["id"], {"rules": coord.notifier.rules, "options": coord.notifier.ha_options(),
+                                       "log": list(reversed(coord.store.get("notify_log", [])[-30:])),
+                                       "queued": {k: len(v) for k, v in (coord.store.get("notify_queue") or {}).items() if v}})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/notify/set", vol.Required("rules"): list})
+@callback
+def ws_notify_set(hass, connection, msg):
+    from .notifications import validate_rules
+
+    coord = _coord(hass)
+    try:
+        rules = validate_rules(msg["rules"])
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
+    coord.store["notify_rules"] = rules
+    coord.push_update()
+    connection.send_result(msg["id"], {"rules": rules})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/notify/test", vol.Required("rule"): dict})
+@websocket_api.async_response
+async def ws_notify_test(hass, connection, msg):
+    """Send a sample message to every target of a (possibly unsaved) rule."""
+    from .notifications import validate_rules
+
+    coord = _coord(hass)
+    try:
+        rule = validate_rules([msg["rule"]])[0]
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
+    sample = next((s for s in coord.store["sets"].values() if s.get("image")), {})
+    res = await coord.notifier.send(
+        rule, "🧱 Testmelding LEGO Price Tracker",
+        f"Zo ziet een melding van '{rule['name']}' eruit." + (f" Voorbeeld: {sample.get('set_number')} {sample.get('name') or ''}" if sample else ""),
+        url="https://www.lego.com" if rule.get("link") else None, image=sample.get("image") if rule.get("image") else None,
+        force=True)
+    connection.send_result(msg["id"], {"results": res})
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): f"{DOMAIN}/log", vol.Optional("level", default=""): str, vol.Optional("kind", default=""): str,
+    vol.Optional("retailer", default=""): str, vol.Optional("source", default=""): str,
+    vol.Optional("set_number", default=""): str, vol.Optional("q", default=""): str,
+    vol.Optional("before"): vol.Any(None, vol.Coerce(float)), vol.Optional("limit", default=100): vol.All(int, vol.Range(1, 500)),
+})
+@callback
+def ws_log(hass, connection, msg):
+    from .models import query_activity
+
+    coord = _coord(hass)
+    if coord is None:
+        connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
+        return
+    connection.send_result(msg["id"], query_activity(coord.store, **{k: msg[k] for k in (
+        "level", "kind", "retailer", "source", "set_number", "q", "limit")}, before=msg.get("before")))
 
 
 class UserscriptView(HomeAssistantView):
