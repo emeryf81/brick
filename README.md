@@ -2,7 +2,7 @@
 
 <img width="1024" height="559" alt="afbeelding" src="https://github.com/user-attachments/assets/fe8aea1b-0443-4675-8136-d3f0b021fe98" />
 
-buy_me_a_coffee: emeryf
+buymeacoffee.com/emeryf
 
 LEGO Price Tracker voor Home Assistant
 
