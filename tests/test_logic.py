@@ -336,3 +336,52 @@ def test_backup_validation_rejects_bad_offers():
         models.validate_backup(base)
     with pytest.raises(ValueError, match="onbekende set"):
         models.validate_backup({"sets": {}, "offers": {"1": {}}})
+
+
+# ---------------------------------------------------------------- 0.6.0
+def test_parse_times():
+    assert models.parse_times("19.30, 7:05 en 23u00, 25:00, 7:05") == ["07:05", "19:30", "23:00"]
+    assert models.parse_times("") == []
+
+
+def test_value_source_and_value_history():
+    store = models.new_store()
+    store["sets"]["1"] = {"rrp": 100}
+    rows = [{"set_number": "1", "qty": 1, "paid": 80, "current_value": 150.0}]
+    csv_import.apply_import(store, rows, now=1_000_000)
+    csv_import.apply_import(store, [dict(rows[0], current_value=150.0)], now=1_100_000)   # unchanged: no new point
+    csv_import.apply_import(store, [dict(rows[0], current_value=175.0)], now=1_200_000)
+    assert store["collection"]["1"]["value_history"] == [[1_000_000, 150.0], [1_200_000, 175.0]]
+    st = {"1": {"best_price": 90.0}}
+    assert models.collection_summary(store, st)["value"] == 90.0          # shop first (default)
+    store["value_source"] = "import_first"
+    assert models.collection_summary(store, st)["value"] == 175.0
+    # replace keeps the history of sets that are in the new file, and drops the others
+    csv_import.apply_import(store, [dict(rows[0], current_value=180.0), {"set_number": "2", "qty": 1}],
+                            replace=True, now=1_300_000)
+    assert len(store["collection"]["1"]["value_history"]) == 3
+    csv_import.apply_import(store, [{"set_number": "2", "qty": 1}], replace=True)
+    assert "1" not in store["collection"]
+
+
+def test_custom_shops_registry_and_generic_search():
+    from lego_pkg import shops
+    from lego_pkg.const import RETAILERS, GENERIC_SHOPS
+    with pytest.raises(ValueError):
+        shops.validate_custom_shop({"name": "x", "domain": "not a domain"})
+    with pytest.raises(ValueError):
+        shops.validate_custom_shop({"name": "x", "domain": "shop.be", "search": "https://evil.com/?q={query}"})
+    shops.apply_shop_options({"custom_shops": [{"name": "Speelgoed Van Dijk", "domain": "https://www.vandijk.be/",
+                                                "search": "https://www.vandijk.be/zoek?q={query}"}],
+                              "shop_search": {"dreamland_be": "https://www.dreamland.be/zoeken?term={query}"}})
+    assert RETAILERS["c_speelgoed_van_dijk"][0] == "Speelgoed Van Dijk"
+    assert parsers.search_url("c_speelgoed_van_dijk", "10311") == "https://www.vandijk.be/zoek?q=LEGO+10311"
+    assert parsers.search_url("dreamland_be", "10311") == "https://www.dreamland.be/zoeken?term=LEGO+10311"
+    assert parsers.retailer_from_url("https://www.vandijk.be/p/lego-10311") == "c_speelgoed_van_dijk"
+    assert parsers.normalize_url("c_speelgoed_van_dijk", "https://www.vandijk.be/p/1#x") == "https://www.vandijk.be/p/1"
+    page = ('<a href="/zoek?q=lego">zoek</a><a href="/p/led-set-lego-10311">LED verlichting LEGO 10311</a>'
+            '<a href="https://www.vandijk.be/p/lego-icons-orchidee-10311-123"><span>LEGO Icons 10311 Orchidee</span></a>')
+    assert parsers.find_search_result("c_speelgoed_van_dijk", page, "10311") == "https://www.vandijk.be/p/lego-icons-orchidee-10311-123"
+    shops.apply_shop_options({})                      # removing custom shops cleans the registry
+    assert "c_speelgoed_van_dijk" not in RETAILERS and "dreamland_be" in RETAILERS
+    assert GENERIC_SHOPS["dreamland_be"]["search"].startswith("https://www.dreamland.be/")

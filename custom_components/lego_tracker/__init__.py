@@ -19,10 +19,11 @@ from homeassistant.helpers.event import async_track_time_change
 from homeassistant.util import dt as dt_util
 
 from .const import (
-    CONF_DIGEST_TIME, DEFAULT_DIGEST_TIME, DOMAIN, EVENT_DIGEST, PANEL_ELEMENT, PANEL_URL, RETAILERS,
+    BUILTIN_RETAILERS, CONF_DIGEST_TIME, CONF_KNOWN_SHOPS, DEFAULT_DIGEST_TIME, DEFAULT_RETAILERS, DOMAIN, EVENT_DIGEST, PANEL_ELEMENT, PANEL_URL, RETAILERS,
     STATIC_URL,
 )
 from .coordinator import LegoCoordinator
+from .shops import apply_shop_options
 from .csv_import import analyze_csv, apply_import, importable_rows
 from .models import normalize_set_number
 from .websocket_api import async_register_websocket
@@ -50,8 +51,8 @@ SERVICE_SCHEMAS = {
     "discover_offers": vol.Schema({vol.Optional("set_number"): cv.string, vol.Optional("force", default=False): cv.boolean}),
     "enrich_sets": vol.Schema({vol.Optional("set_number"): cv.string, vol.Optional("all", default=False): cv.boolean}),
     "verify_links": vol.Schema({}),
-    "confirm_offer": vol.Schema({SET: cv.string, vol.Required("retailer"): vol.In(list(RETAILERS))}),
-    "remove_offer": vol.Schema({SET: cv.string, vol.Required("retailer"): vol.In(list(RETAILERS)),
+    "confirm_offer": vol.Schema({SET: cv.string, vol.Required("retailer"): cv.string}),
+    "remove_offer": vol.Schema({SET: cv.string, vol.Required("retailer"): cv.string,
                                 vol.Optional("block", default=True): cv.boolean}),
     "cancel_job": vol.Schema({}),
     "export_collection": vol.Schema({}),
@@ -59,17 +60,18 @@ SERVICE_SCHEMAS = {
     "import_data": vol.Schema({
         vol.Optional("data"): dict, vol.Optional("file_path"): cv.string, vol.Optional("merge", default=False): cv.boolean,
     }),
-    "set_offer": vol.Schema({SET: cv.string, vol.Required("retailer"): vol.In(list(RETAILERS)),
+    "set_offer": vol.Schema({SET: cv.string, vol.Required("retailer"): cv.string,
                              vol.Required("url"): cv.string}),
     "refresh": vol.Schema({vol.Optional("set_number"): cv.string, vol.Optional("force", default=False): cv.boolean}),
     "import_collection": vol.Schema({
         vol.Optional("csv_text"): cv.string, vol.Optional("file_path"): cv.string,
         vol.Optional("replace", default=False): cv.boolean, vol.Optional("track_prices", default=True): cv.boolean,
+        vol.Optional("update_after", default=False): cv.boolean,
     }),
     "report_price": vol.Schema({
         vol.Required("price"): vol.All(vol.Coerce(float), vol.Range(min=0.01, max=100000)),
         vol.Optional("url"): cv.string, vol.Optional("set_number"): cv.string,
-        vol.Optional("retailer"): vol.In(list(RETAILERS)),
+        vol.Optional("retailer"): cv.string, vol.Optional("title"): vol.All(cv.string, vol.Length(max=400)),
     }),
     "send_digest": vol.Schema({}),
 }
@@ -117,6 +119,14 @@ async def _send_digest(hass: HomeAssistant, coord: LegoCoordinator) -> None:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    apply_shop_options(dict(entry.options))
+    # New built-in shops (e.g. Dreamland) are switched on once; afterwards the user's choice wins.
+    known = set(entry.options.get(CONF_KNOWN_SHOPS) or ("amazon_nl", "amazon_de", "amazon_be", "bol", "kruidvat_be"))
+    if new_shops := [r for r in BUILTIN_RETAILERS if r not in known]:
+        enabled = list(entry.options.get("retailers", DEFAULT_RETAILERS))
+        enabled += [r for r in new_shops if r not in enabled]
+        hass.config_entries.async_update_entry(
+            entry, options={**entry.options, "retailers": enabled, CONF_KNOWN_SHOPS: list(BUILTIN_RETAILERS)})
     coord = LegoCoordinator(hass, entry)
     await coord.async_load()
     _LOGGER.info("LEGO Price Tracker %s starting (request transport: %s)", VERSION, coord.fetcher.transport)
@@ -291,14 +301,17 @@ def _register_services(hass: HomeAssistant) -> None:
         for r in rows:
             c.store["offers"].setdefault(r["set_number"], {})
         c.push_update()
-        if call.data["track_prices"] and not c.job_running:
+        if not c.job_running and call.data["update_after"]:
+            c.start_update([r["set_number"] for r in rows])
+        elif call.data["track_prices"] and not c.job_running:
             c.start_discover()
         return {**result, "skipped": analysis["summary"]["error"], "warnings": warnings[:50]}
 
     async def report_price(call: ServiceCall) -> None:
         try:
             _coordinator(hass).report_price(call.data["price"], url=call.data.get("url"),
-                                            set_number=call.data.get("set_number"), retailer=call.data.get("retailer"))
+                                            set_number=call.data.get("set_number"), retailer=call.data.get("retailer"),
+                                            title=call.data.get("title"))
         except ValueError as err:
             raise ServiceValidationError(str(err)) from err
 

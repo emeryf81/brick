@@ -10,7 +10,7 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
-    CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_DIGEST_TIME, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, DEFAULT_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_DISCOUNT_THRESHOLD, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
+    BUILTIN_RETAILERS, CONF_KNOWN_SHOPS, CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_DIGEST_TIME, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, DEFAULT_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_DISCOUNT_THRESHOLD, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
     DEFAULT_DIGEST_TIME, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS,
     DEFAULT_RETAILERS, DOMAIN, RETAILERS,
 )
@@ -65,7 +65,8 @@ class LegoTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             try:
-                return self.async_create_entry(title="LEGO Price Tracker", data={}, options=_clean(user_input))
+                return self.async_create_entry(title="LEGO Price Tracker", data={},
+                                               options={**_clean(user_input), CONF_KNOWN_SHOPS: list(BUILTIN_RETAILERS)})
             except InvalidTimes:
                 errors[CONF_REFRESH_TIMES] = "invalid_times"
         return self.async_show_form(step_id="user", data_schema=_schema(user_input or {}), errors=errors)
@@ -81,7 +82,8 @@ class LegoTrackerOptionsFlow(OptionsFlow):
         errors: dict[str, str] = {}
         if user_input is not None:
             try:
-                return self.async_create_entry(data=_clean(user_input))
+                # merge: settings made in the panel (custom shops, keys, pauses…) must survive
+                return self.async_create_entry(data={**self.config_entry.options, **_clean(user_input)})
             except InvalidTimes:
                 errors[CONF_REFRESH_TIMES] = "invalid_times"
         return self.async_show_form(step_id="init", data_schema=_schema(user_input or dict(self.config_entry.options)),

@@ -299,3 +299,76 @@ async def test_schedule_times(hass: HomeAssistant, entry):
     await hass.async_block_till_done()
     c = hass.data[DOMAIN][entry.entry_id]
     assert c.schedule_info()["next"] is None
+
+
+async def test_settings_panel_roundtrip(hass: HomeAssistant, entry, hass_ws_client, no_network):
+    c = await _setup(hass, entry)
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/settings/get"})
+    st = (await ws.receive_json())["result"]
+    assert st["refresh_times"] == "07:30, 19:30" and st["keys"]["rebrickable_api_key"]["set"] is False
+    assert any(s["id"] == "dreamland_be" for s in st["shops"])
+    await ws.send_json({"id": 2, "type": "lego_tracker/settings/set", "fields": {"refresh_times": "nooit"}})
+    assert "tijdstippen" in (await ws.receive_json())["error"]["message"]
+    await ws.send_json({"id": 3, "type": "lego_tracker/settings/set", "fields": {
+        "discount_threshold": 30, "refresh_times": "6:00, 18.15", "rebrickable_api_key": "abcdef1234567890",
+        "retailers": ["bol", "dreamland_be", "c_vandijk", "nope"], "no_autopause": ["bol"], "value_source": "import_first",
+        "custom_shops": [{"id": "c_vandijk", "name": "Van Dijk", "domain": "vandijk.be", "search": "https://www.vandijk.be/zoek?q={query}"}]}})
+    assert (await ws.receive_json())["result"]["saved"]
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][entry.entry_id]                                    # entry reloaded
+    assert c.threshold == 30 and c.refresh_times == [(6, 0), (18, 15)] and c.retailers == ["bol", "dreamland_be", "c_vandijk"]
+    assert c.fetcher.no_autopause == {"bol"} and c.store["value_source"] == "import_first"
+    await ws.send_json({"id": 4, "type": "lego_tracker/settings/get"})
+    st = (await ws.receive_json())["result"]
+    assert st["keys"]["rebrickable_api_key"] == {"set": True, "masked": "••••7890"}   # key never sent back
+    # keys: absent = keep, "" = clear
+    await ws.send_json({"id": 5, "type": "lego_tracker/settings/set", "fields": {"discount_threshold": 20}})
+    await ws.receive_json(); await hass.async_block_till_done()
+    assert entry.options["rebrickable_api_key"] == "abcdef1234567890"
+    # no auto-pause for bol: a block does not pause it
+    c = hass.data[DOMAIN][entry.entry_id]
+    c.fetcher._note_block("bol"); c.fetcher._note_block("amazon_nl")
+    assert c.fetcher.cooldown_left("bol") == 0 and c.fetcher.cooldown_left("amazon_nl") > 0
+    await ws.send_json({"id": 6, "type": "lego_tracker/shop_action", "action": "resume", "retailer": "amazon_nl"})
+    assert (await ws.receive_json())["result"]["paused"] == {}
+
+
+async def test_pause_survives_reload(hass: HomeAssistant, entry, no_network):
+    c = await _setup(hass, entry)
+    c.fetcher._note_block("amazon_nl")
+    c._save()
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.data[DOMAIN][entry.entry_id].fetcher.cooldown_left("amazon_nl") > 3000
+
+
+async def test_csv_update_job_and_title_from_userscript(hass: HomeAssistant, entry, no_network):
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10311"}, blocking=True)
+    await hass.services.async_call(DOMAIN, "set_offer", {"set_number": "10311", "retailer": "bol", "url": "https://www.bol.com/nl/nl/p/lego-10311/1/"}, blocking=True)
+    with patch("custom_components.lego_tracker.coordinator.lookup_metadata",
+               AsyncMock(return_value=({"name": "Orchid", "year": 2022, "pieces": 608, "theme": "Icons", "image": "https://i/x.jpg"}, "Rebrickable"))), \
+         patch("custom_components.lego_tracker.coordinator.asyncio.sleep", AsyncMock()):
+        res = await hass.services.async_call(DOMAIN, "import_collection", {
+            "csv_text": "Number;Qty;Paid;Value\n10311;1;40;55\n", "update_after": True}, blocking=True, return_response=True)
+        assert res["added"] == 1
+        await hass.async_block_till_done(wait_background_tasks=True)
+    assert c.last_job["kind"] == "update" and c.last_job["done"] == 1
+    assert c.store["sets"]["10311"]["name"] == "Orchid" and c.compute()["statuses"]["10311"]["best_price"] == 30.0
+    assert c.store["collection"]["10311"]["current_value"] == 55.0
+    # userscript sends the page title -> link check judges it
+    c.store["offers"]["10311"]["amazon_nl"] = {"url": "https://www.amazon.nl/dp/B0LEDLEDLE", "history": []}
+    await hass.services.async_call(DOMAIN, "report_price", {"url": "https://www.amazon.nl/dp/B0LEDLEDLE?th=1", "price": 45.0,
+                                                            "title": "LED verlichting voor LEGO 10311"}, blocking=True)
+    assert c.store["offers"]["10311"]["amazon_nl"]["link_status"] == "suspect"
+
+
+async def test_userscript_is_generated(hass: HomeAssistant, entry, hass_client_no_auth):
+    await _setup(hass, entry)
+    client = await hass_client_no_auth()
+    resp = await client.get("/api/lego_tracker/lego-tracker.user.js")
+    assert resp.status == 200
+    text = await resp.text()
+    assert "// ==UserScript==" in text and "@match        https://www.dreamland.be/*" in text
+    assert "{{" not in text and "@updateURL" in text and "title: pageTitle()" in text

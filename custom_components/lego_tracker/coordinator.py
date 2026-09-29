@@ -19,7 +19,7 @@ from homeassistant.util import dt as dt_util
 
 from .client import Fetcher, lookup_metadata
 from .const import (
-    CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_DISCOUNT_THRESHOLD, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
+    CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_CUSTOM_SHOPS, CONF_DIGEST_TIME, CONF_NO_AUTOPAUSE, CONF_SHOP_SEARCH, CONF_VALUE_SOURCE, DEFAULT_DIGEST_TIME, GENERIC_SHOPS, CONF_DISCOUNT_THRESHOLD, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
     DEFAULT_REFRESH_TIMES, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS, DEFAULT_RETAILERS,
     DOMAIN, EVENT_JOB_DONE, EVENT_HIGH_DISCOUNT, EVENT_NEW_LOW, EVENT_TARGET_HIT, RETAILERS, STORAGE_KEY,
     STORAGE_VERSION,
@@ -43,6 +43,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._store = Store[dict[str, Any]](hass, STORAGE_VERSION, STORAGE_KEY)
         self.store: dict[str, Any] = new_store()
         self.fetcher = Fetcher(hass, bool(self.opt(entry, CONF_IMPERSONATE, True)))
+        self.fetcher.no_autopause = set(self.opt(entry, CONF_NO_AUTOPAUSE, []) or [])
         self._alerted: set[tuple[str, str]] = set()
         self.job: dict[str, Any] | None = None
         self.last_job: dict[str, Any] | None = None
@@ -67,9 +68,16 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self.fetcher.async_setup()
         if (data := await self._store.async_load()):
             self.store = {**new_store(), **data}
+        cd = self.store.get("cooldowns") or {}
+        now = time.time()
+        self.fetcher.blocked_until.update({r: t for r, t in (cd.get("until") or {}).items() if t > now})
+        self.fetcher.blocks.update(cd.get("blocks") or {})
+        self.store["value_source"] = self.opt(self.entry, CONF_VALUE_SOURCE, "shop_first")
         self.verify_links()   # flag wrong links from older versions right away
 
     def _save(self) -> None:
+        # pauses survive restarts/reloads, otherwise a reload would hammer a shop that just blocked us
+        self.store["cooldowns"] = {"until": dict(self.fetcher.blocked_until), "blocks": dict(self.fetcher.blocks)}
         self._store.async_delay_save(lambda: self.store, 5)
 
     async def async_shutdown(self) -> None:
@@ -289,7 +297,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         name, src = s.get("name"), s.get("name_source")
         if not name or src == "shop":
             return True
-        if src in ("user", "import", "Brickset", "Rebrickable", "brickset.com"):
+        if src in ("user", "import") or (src and src[0].isupper() or src == "brickset.com" or "+" in (src or "")):
             return False
         # names from older versions: replace the ones that look like a shop title
         return bool(re.search(r"\blego\b", name, re.I) or ACCESSORY_RE.search(name) or KNOCKOFF_RE.search(name)
@@ -322,6 +330,123 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 s[key] = meta[key]
                 changed = True
         return {"updated": 1} if changed else {}
+
+    # ------------------------------------------------------------ update (CSV)
+    def start_update(self, nums: list[str], force: bool = False) -> dict[str, Any]:
+        """After a CSV re-import: per set fill in metadata, find missing links and fetch prices."""
+        live = self._live_retailers(force)
+
+        async def work(num: str) -> dict[str, int]:
+            out = {"updated": 0, "found": 0, "errors": 0, "skipped": 0}
+            if self.needs_enrich(num):
+                out["updated"] += (await self.enrich_set(num)).get("updated", 0)
+            out["found"] += (await self.discover_set(num, live))["found"]
+            res = await self.refresh_set(num, live)
+            out["errors"] += res["errors"]
+            out["skipped"] += res["skipped"]
+            return out
+
+        nums = [n for n in dict.fromkeys(nums) if n in self.store["sets"]]
+        return self.start_job("update", "Collectie bijwerken", nums, work)
+
+    # ---------------------------------------------------------------- settings
+    SECRET_KEYS = (CONF_BRICKSET_KEY, CONF_REBRICKABLE_KEY)
+
+    def settings_get(self) -> dict[str, Any]:
+        o = {**self.entry.data, **self.entry.options}
+        mask = lambda v: f"••••{v[-4:]}" if v and len(v) > 4 else ("••••" if v else "")  # noqa: E731
+        shops = []
+        for rid, (label, _) in RETAILERS.items():
+            shops.append({
+                "id": rid, "label": label, "builtin": not rid.startswith("c_"),
+                "generic": rid in GENERIC_SHOPS, "domain": GENERIC_SHOPS.get(rid, {}).get("domain"),
+                "search": GENERIC_SHOPS.get(rid, {}).get("search"), "enabled": rid in self.retailers,
+                "paused_hours": round(self.fetcher.cooldown_left(rid) / 3600, 2),
+                "blocks": self.fetcher.blocks.get(rid, 0), "autopause": rid not in self.fetcher.no_autopause,
+            })
+        return {
+            "discount_threshold": self.threshold, "min_history_days": int(self.opt(self.entry, CONF_MIN_HISTORY_DAYS, DEFAULT_MIN_HISTORY_DAYS)),
+            "auto_refresh": bool(o.get(CONF_AUTO_REFRESH, True)), "refresh_times": ", ".join(f"{h:02d}:{m:02d}" for h, m in self.refresh_times),
+            "digest_time": str(o.get(CONF_DIGEST_TIME, DEFAULT_DIGEST_TIME))[:5], "use_impersonation": bool(o.get(CONF_IMPERSONATE, True)),
+            "notify_service": o.get(CONF_NOTIFY, "") or "", "value_source": o.get(CONF_VALUE_SOURCE, "shop_first"),
+            "keys": {k: {"set": bool(o.get(k)), "masked": mask(o.get(k) or "")} for k in self.SECRET_KEYS},
+            "shops": shops, "transport": self.fetcher.transport,
+        }
+
+    def settings_validate(self, fields: dict[str, Any]) -> dict[str, Any]:
+        """Merge + validate panel settings into a new options dict. Raises ValueError (Dutch message)."""
+        from .models import parse_times
+        from .shops import validate_custom_shop
+
+        opts = dict(self.entry.options)
+        def num(key: str, lo: int, hi: int) -> None:
+            try:
+                v = int(float(fields[key]))
+            except (TypeError, ValueError) as err:
+                raise ValueError(f"{key}: geen getal") from err
+            if not lo <= v <= hi:
+                raise ValueError(f"{key}: moet tussen {lo} en {hi} liggen")
+            opts[key] = v
+        if "discount_threshold" in fields:
+            num("discount_threshold", 1, 90)
+        if "min_history_days" in fields:
+            num("min_history_days", 0, 90)
+        for key in ("auto_refresh", "use_impersonation"):
+            if key in fields:
+                opts[key] = bool(fields[key])
+        if "refresh_times" in fields:
+            times = parse_times(str(fields["refresh_times"]))
+            if not 1 <= len(times) <= 6:
+                raise ValueError("Geef 1 tot 6 tijdstippen als UU:MM, bv. 07:30, 19:30")
+            opts[CONF_REFRESH_TIMES] = ", ".join(times)
+        if "digest_time" in fields:
+            t = parse_times(str(fields["digest_time"]))
+            if len(t) != 1:
+                raise ValueError("Tijdstip samenvatting: één tijd als UU:MM")
+            opts[CONF_DIGEST_TIME] = t[0] + ":00"
+        if "notify_service" in fields:
+            ns = str(fields["notify_service"] or "").strip()
+            if ns and not re.fullmatch(r"(notify\.)?[a-z0-9_]+", ns):
+                raise ValueError("Notify-service zoals notify.mobile_app_telefoon")
+            opts[CONF_NOTIFY] = ns
+        if "value_source" in fields:
+            if fields["value_source"] not in ("shop_first", "import_first"):
+                raise ValueError("Onbekende waardebron")
+            opts[CONF_VALUE_SOURCE] = fields["value_source"]
+        for key in self.SECRET_KEYS:          # None/absent = keep, "" = clear
+            if fields.get(key) is not None:
+                val = str(fields[key]).strip()
+                if val and not re.fullmatch(r"[A-Za-z0-9_\-]{8,128}", val):
+                    raise ValueError(f"{key}: ongeldige sleutel")
+                opts[key] = val
+        if "custom_shops" in fields:
+            shops, seen = [], set()
+            for shop in fields["custom_shops"] or []:
+                v = validate_custom_shop(shop)
+                if v["id"] in seen or v["id"] in RETAILERS and not v["id"].startswith("c_"):
+                    raise ValueError(f"Winkel {v['name']} bestaat al")
+                seen.add(v["id"])
+                shops.append(v)
+            opts[CONF_CUSTOM_SHOPS] = shops
+        if "shop_search" in fields:
+            searches = {}
+            for rid, tpl in (fields["shop_search"] or {}).items():
+                tpl = str(tpl or "").strip()
+                if tpl and (not tpl.startswith("https://") or "{query}" not in tpl):
+                    raise ValueError("Zoek-URL moet met https:// beginnen en {query} bevatten")
+                searches[rid] = tpl
+            opts[CONF_SHOP_SEARCH] = searches
+        valid_ids = set(RETAILERS) | {s["id"] for s in opts.get(CONF_CUSTOM_SHOPS, [])}
+        if "retailers" in fields:
+            opts[CONF_RETAILERS] = [r for r in fields["retailers"] if r in valid_ids]
+        if "no_autopause" in fields:
+            opts[CONF_NO_AUTOPAUSE] = [r for r in fields["no_autopause"] if r in valid_ids]
+        return opts
+
+    def resume_shop(self, retailer: str | None) -> None:
+        self.fetcher.reset_cooldowns(retailer)
+        self._save()
+        self.push_update()
 
     # --------------------------------------------------------------- link check
     def verify_links(self) -> dict[str, int]:
@@ -547,7 +672,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return out
 
     def report_price(self, price: float, *, url: str | None = None, set_number: str | None = None,
-                     retailer: str | None = None) -> str:
+                     retailer: str | None = None, title: str | None = None) -> str:
         """Accept a price observed elsewhere (userscript, n8n, automation). Returns the set number."""
         if url and not retailer:
             retailer = retailer_from_url(url)
@@ -572,8 +697,15 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         num, retailer = found
         if url and (warn := is_suspicious_price(price, self.store["sets"][num], self.store["offers"][num][retailer])):
             raise ValueError(warn)
+        offer = self.store["offers"][num][retailer]
+        if title:   # the userscript sends the page title: lets the link check judge Amazon links too
+            offer["title"] = title[:300]
+            offer["link_status"], offer["link_reason"] = link_check(offer, self.store["sets"][num], num)
         before = self.compute()["statuses"].get(num, {})
-        record_price(self.store["offers"][num][retailer], price)
+        record_price(offer, price)
+        offer["last_ok"] = offer["last_checked"]
+        if url:
+            self.store["userscript_last"] = {"ts": time.time(), "set_number": num, "retailer": retailer, "price": price}
         self._fire_events(num, before, self.compute()["statuses"].get(num, {}))
         self.push_update()
         return num

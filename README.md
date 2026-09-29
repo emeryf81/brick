@@ -2,9 +2,9 @@
 
 LEGO Price Tracker voor Home Assistant
 
-Custom integration (HACS-compatibel) die LEGO-sets en hun prijzen volgt bij **Amazon.nl, Amazon.de, Amazon.com.be, bol.com en Kruidvat.be**, met een dagelijks dashboard, prijsgrafieken en collectiewaarde.
+Custom integration (HACS-compatibel) die LEGO-sets en hun prijzen volgt bij **Amazon.nl, Amazon.de, Amazon.com.be, bol.com, Kruidvat.be, Dreamland.be en je eigen winkels**, met een dagelijks dashboard, prijsgrafieken en collectiewaarde.
 
-> Status: 0.5.0. 57 unit- en integratietests tegen een echte Home Assistant-core (2026.2.3). Het paneel is in Chromium getest (desktop en mobiel, licht en donker) met door de integratie zelf gegenereerde testdata. **Nog niet gedaan:** een controle van de winkel-parsers tegen de live sites.
+> Status: 0.6.0. 64 unit- en integratietests tegen een echte Home Assistant-core (2026.2.3). Het paneel is in Chromium getest (desktop en mobiel, licht en donker) met door de integratie zelf gegenereerde testdata. **Nog niet gedaan:** een controle van de winkel-parsers tegen de live sites.
 
 ## Opbouw van het paneel
 Het sidebar-paneel **LEGO** heeft drie delen:
@@ -39,6 +39,25 @@ Bovenaan staan altijd **🔎 Links zoeken** en **↻ Prijzen verversen**; onder 
 
 **Setgegevens** (naam, thema, subthema, jaar, stenen, afbeelding, adviesprijs, uitfaseerdatum) komen uit de Brickset-API (sleutel), de Rebrickable-API (gratis sleutel via rebrickable.com → Account → API) of, zonder sleutel, de openbare Brickset-pagina. Namen die van een verkeerd winkelproduct kwamen, worden vervangen. Namen uit je import of die je zelf invulde blijven staan.
 
+## Instellingen in het paneel
+Alles staat onder *Beheer → Instellingen* (alleen voor beheerders); de integratie-opties in Home Assistant blijven ook werken:
+- kortingsdrempel, historiek, notify-service, tijdstip van de samenvatting;
+- automatisch ophalen aan/uit en tijdstippen;
+- **collectiewaarde**: eerst winkelprijs, of eerst de geïmporteerde waarde (bv. BrickEconomy);
+- **API-sleutels** voor Brickset en Rebrickable, met een testknop. Sleutels worden nooit terug naar de browser gestuurd (alleen `••••1234`). Volgorde: Brickset → Rebrickable → openbare Brickset-pagina; wat de ene bron mist of niet levert, vult de volgende aan;
+- **winkels**: aan/uit, pauze opheffen, *automatisch pauzeren* per winkel aan/uit, zoek-URL voor Dreamland en eigen winkels;
+- **eigen winkel toevoegen**: naam, domein en een zoek-URL met `{query}`. Prijzen worden gelezen uit de standaard productgegevens (JSON-LD/meta) die de meeste webwinkels hebben.
+
+Pauzes blijven bewaard bij een herstart, zodat een herstart een winkel die net blokkeerde niet opnieuw bestookt.
+
+**Dreamland** is ingebouwd en wordt bij een update eenmalig aangezet. De zoek-URL (`https://www.dreamland.be/e/nl/search?q={query}`) is nog niet tegen de echte site gecontroleerd; pas hem aan in de instellingen als het zoeken niets vindt.
+
+## Userscript (prijzen vanuit je eigen browser)
+Onder *Beheer → Userscript* staat de installatie in vijf stappen, met een link naar Tampermonkey voor jouw browser. Home Assistant maakt het script zelf aan op `/api/lego_tracker/lego-tracker.user.js`, met jouw HA-adres al ingevuld en alle winkels van je lijst. Het token vul je in via Tampermonkey (niet in het script). Het script stuurt ook de producttitel mee, zodat de linkcontrole Amazon-links kan beoordelen. Het tabblad toont wanneer de laatste prijs via het script binnenkwam.
+
+## Collectie bijwerken via CSV
+Lees je nieuwe export opnieuw in bij *Beheer → Importeren*. Bestaande sets worden bijgewerkt (aantal, betaald, **huidige waarde**, staat, locatie), nieuwe sets worden toegevoegd. Met *daarna bijwerken* (standaard aan) start een taak die per set de gegevens aanvult, ontbrekende winkellinks zoekt en de prijzen ophaalt. Elke gewijzigde waarde wordt bewaard als historiek, zodat de groeigrafiek je herhaalde imports volgt. De collectietabel toont *Waarde (import)*, *Winkel nu* en de *Waarde* die meetelt.
+
 ## Linkcontrole
 *Beheer → Linkcontrole* beoordeelt elke winkellink:
 - **✓ klopt**: het setnummer staat in de producttitel (of de URL), met "LEGO" erbij.
@@ -60,7 +79,7 @@ Korting t.o.v. adviesprijs (max 45) + nabijheid van de laagste prijs ooit (max 2
 ## Sensoren, events en services
 - **Sensoren**: gevolgde sets, sets op laagste prijs ooit, sets met hoge korting, sets onder streefprijs, beste dealscore (top 5 in de attributen), sets die binnenkort verdwijnen, wishlist-kost, aanbiedingen met fout, collectiewaarde/-kost/-groei, plus één prijssensor per set (prijs per steen, trend, dealscore, prijzen per winkel als attributen).
 - **Events**: `lego_tracker_new_all_time_low`, `lego_tracker_high_discount`, `lego_tracker_target_price_reached`, `lego_tracker_daily_digest`. Kies in de opties een notify-service voor pushmeldingen.
-- **Services**: `add_set`, `add_sets`, `remove_set`, `set_offer`, `report_price`, `discover_offers`, `refresh` (beide met `force`), `enrich_sets`, `verify_links`, `confirm_offer`, `remove_offer`, `cancel_job`, `import_collection`, `export_collection`, `export_data`, `import_data`, `send_digest`.
+- **Services**: `add_set`, `add_sets`, `remove_set`, `set_offer`, `report_price`, `discover_offers`, `refresh` (beide met `force`), `enrich_sets`, `import_collection` (met `update_after`), `verify_links`, `confirm_offer`, `remove_offer`, `cancel_job`, `import_collection`, `export_collection`, `export_data`, `import_data`, `send_digest`.
 
 ## Installatie
 1. HACS → Custom repositories → deze repo, categorie *Integration* (of kopieer `custom_components/lego_tracker` naar je `config/`).
@@ -91,7 +110,7 @@ Amazon en bol.com herkennen Python-scrapers vooral aan de **TLS-vingerafdruk**, 
 1. **Chrome nabootsen (standaard aan, optie "Chrome-browser nabootsen")**: de integratie installeert bij de eerste start `curl_cffi` en doet requests met Chrome's vingerafdruk, met een startpagina-bezoek, cookies per winkel en echte browser-headers. Als de installatie mislukt, valt ze terug op aiohttp (waarschuwing in het HA-log). Het paneel-log toont welk transport actief is.
 2. **Pauze na een blokkade**: wordt een winkel geblokkeerd, dan wordt die 1 u, 3 u, 6 u, 12 u, daarna 24 u niet meer bevraagd. Doorhameren maakt de bescherming strenger. De aanbieding toont "paused … after being blocked".
 3. **Prijzen aanleveren van buitenaf** (werkt altijd):
-   - **Userscript** `tools/lego-tracker.user.js` (Tampermonkey/Violentmonkey): draait in *jouw eigen browser* op de productpagina's die je bezoekt en stuurt de prijs naar HA. Menu "HA instellen" → HA-URL en een long-lived access token. Alleen al gevolgde producten worden bijgewerkt.
+   - **Userscript** (Tampermonkey), te installeren via *Beheer → Userscript*: draait in *jouw eigen browser* op de productpagina's die je bezoekt en stuurt prijs en titel naar HA.
    - **Service `lego_tracker.report_price`** (`price` + `url`, of `price` + `set_number` + `retailer`): voor n8n, een automation of een ander script.
    - **Handmatig** in het detailvenster van een set (veld "Handmatig").
 

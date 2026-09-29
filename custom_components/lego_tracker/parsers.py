@@ -11,7 +11,9 @@ import re
 from dataclasses import dataclass
 from urllib.parse import quote_plus, urlparse
 
+from .const import GENERIC_SHOPS
 from .models import parse_price
+from .shops import all_domains, domain_of
 
 
 @dataclass
@@ -189,7 +191,7 @@ def normalize_url(retailer: str, url_or_id: str) -> str:
     if not value.startswith("http"):
         raise ValueError("Provide a full product URL (or an ASIN for Amazon).")
     host = urlparse(value).netloc.lower()
-    expected = {"bol": "bol.com", "kruidvat_be": "kruidvat.be", **AMAZON_DOMAINS}.get(retailer)
+    expected = domain_of(retailer)
     if expected and expected not in host:
         raise ValueError(f"URL host {host!r} does not match retailer {retailer}.")
     return value.split("#")[0]
@@ -197,6 +199,9 @@ def normalize_url(retailer: str, url_or_id: str) -> str:
 
 def search_url(retailer: str, set_number: str) -> str | None:
     q = quote_plus(f"LEGO {set_number}")
+    if retailer in GENERIC_SHOPS:
+        tpl = GENERIC_SHOPS[retailer].get("search")
+        return tpl.replace("{query}", q) if tpl else None
     if retailer in AMAZON_DOMAINS:
         return f"https://www.{AMAZON_DOMAINS[retailer]}/s?k={q}"
     if retailer == "bol":
@@ -278,6 +283,23 @@ def find_search_result(retailer: str, page: str, set_number: str) -> str | None:
             url = "https://www.kruidvat.be" + href.split("?")[0]
             if title_check(slug_title(url), set_number)[0] == "ok":
                 return url
+    elif retailer in GENERIC_SHOPS:
+        return _generic_result(page, GENERIC_SHOPS[retailer]["domain"], set_number)
+    return None
+
+
+def _generic_result(page: str, domain: str, set_number: str) -> str | None:
+    """Any shop: links on the shop's own domain whose link text or URL passes the title check."""
+    for href, text in re.findall(r'<a\b[^>]*href="([^"#]+)"[^>]*>(.*?)</a>', page, re.S | re.I):
+        url = href if href.startswith("http") else f"https://www.{domain}{href if href.startswith('/') else '/' + href}"
+        if domain not in urlparse(url).netloc or "search" in url.lower() or "zoek" in url.lower():
+            continue
+        label = re.sub(r"\s+", " ", htmllib.unescape(re.sub(r"<[^>]+>", " ", text))).strip()
+        path = urlparse(url).path.replace("-", " ").replace("/", " ")
+        for candidate in (label, f"lego {path}"):
+            if candidate and title_check(candidate if "lego" in candidate.lower() else f"lego {candidate}",
+                                         set_number)[0] == "ok" and set_number in (label + path):
+                return url.split("?")[0]
     return None
 
 
@@ -311,9 +333,8 @@ def parse_brickset_page(page: str) -> dict:
 
 def retailer_from_url(url: str) -> str | None:
     host = urlparse(url).netloc.lower()
-    for rid, dom in (("amazon_nl", "amazon.nl"), ("amazon_de", "amazon.de"), ("amazon_be", "amazon.com.be"),
-                     ("bol", "bol.com"), ("kruidvat_be", "kruidvat.be")):
-        if host.endswith(dom):
+    for rid, dom in all_domains().items():
+        if host == dom or host.endswith("." + dom):
             return rid
     return None
 

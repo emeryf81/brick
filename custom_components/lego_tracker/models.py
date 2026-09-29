@@ -21,7 +21,7 @@ def normalize_set_number(value: str | int) -> str:
 
 
 def new_store() -> dict[str, Any]:
-    return {"sets": {}, "offers": {}, "collection": {}, "snapshots": [], "events": [], "rejected": {}}
+    return {"sets": {}, "offers": {}, "collection": {}, "snapshots": [], "events": [], "rejected": {}, "cooldowns": {}}
 
 
 def parse_price(text: str | float | int | None) -> float | None:
@@ -251,15 +251,25 @@ def is_suspicious_price(price: float, lego_set: dict[str, Any], offer: dict[str,
 
 
 # ----------------------------------------------------------------- collection
-def collection_value(entry: dict[str, Any], status: dict[str, Any], lego_set: dict[str, Any]) -> tuple[float, str]:
-    """Value of one unit and where it came from."""
-    if status.get("best_price"):
-        return status["best_price"], "tracked"
-    if entry.get("current_value"):
-        return float(entry["current_value"]), "imported"
+def collection_value(entry: dict[str, Any], status: dict[str, Any], lego_set: dict[str, Any],
+                     prefer_import: bool = False) -> tuple[float, str]:
+    """Value of one unit and where it came from.
+
+    shop_first (default): cheapest current shop price, else the imported value (e.g. BrickEconomy), else RRP.
+    import_first: imported value first (better for retired sets that shops no longer sell new)."""
+    shop = status.get("best_price")
+    imported = entry.get("current_value")
+    order = (("imported", imported), ("tracked", shop)) if prefer_import else (("tracked", shop), ("imported", imported))
+    for source, value in order:
+        if value:
+            return float(value), source
     if lego_set.get("rrp"):
         return float(lego_set["rrp"]), "rrp"
     return 0.0, "none"
+
+
+def _prefer_import(store: dict[str, Any]) -> bool:
+    return store.get("value_source") == "import_first"
 
 
 def _added_ts(entry: dict[str, Any]) -> float | None:
@@ -283,6 +293,7 @@ def collection_series(store: dict[str, Any], now: float | None = None, points: i
     if not coll:
         return []
     hists = {n: combined_history(store["offers"].get(n, {})) for n in coll}
+    pref = _prefer_import(store)
     starts = [h[0][0] for h in hists.values() if h]
     starts += [t for e in coll.values() if (t := _added_ts(e))]
     if not starts:
@@ -300,7 +311,13 @@ def collection_series(store: dict[str, Any], now: float | None = None, points: i
                 continue
             qty = int(entry.get("qty", 1) or 1)
             hist = hists[num]
-            unit = price_at(hist, t)
+            shop = price_at(hist, t)
+            imported = price_at(entry.get("value_history", []), t) or (
+                entry.get("current_value") if not entry.get("value_history") else None)
+            if pref:
+                unit = imported or shop
+            else:
+                unit = shop or imported
             if unit is None:
                 unit = entry.get("current_value") or store["sets"].get(num, {}).get("rrp") or 0
             value += qty * float(unit)
@@ -319,7 +336,7 @@ def collection_summary(store: dict[str, Any], statuses: dict[str, dict[str, Any]
     for num, entry in store["collection"].items():
         s = store["sets"].get(num, {})
         qty = int(entry.get("qty", 1) or 1)
-        unit, _ = collection_value(entry, statuses.get(num, {}), s)
+        unit, _ = collection_value(entry, statuses.get(num, {}), s, _prefer_import(store))
         value += qty * unit
         cost += qty * float(entry.get("paid") or 0)
         pieces += qty * int(s.get("pieces") or 0)
@@ -345,7 +362,7 @@ def collection_analytics(store: dict[str, Any], statuses: dict[str, dict[str, An
     for num, entry in store["collection"].items():
         s = store["sets"].get(num, {})
         qty = int(entry.get("qty", 1) or 1)
-        unit, _ = collection_value(entry, statuses.get(num, {}), s)
+        unit, _ = collection_value(entry, statuses.get(num, {}), s, _prefer_import(store))
         t = by_theme.setdefault(s.get("theme") or "Onbekend", {"count": 0, "value": 0.0, "cost": 0.0})
         t["count"] += qty
         t["value"] += unit * qty
@@ -380,6 +397,12 @@ def add_event(store: dict[str, Any], kind: str, payload: dict[str, Any], now: fl
     del events[: max(0, len(events) - keep)]
 
 
+def parse_times(raw: str) -> list[str]:
+    """'7:30, 19.30 en 23u05' -> ['07:30', '19:30', '23:05'] (sorted, unique, valid only)."""
+    out = {f"{int(h):02d}:{mm}" for h, mm in re.findall(r"(\d{1,2})[:.hu](\d{2})", raw or "") if int(h) < 24 and int(mm) < 60}
+    return sorted(out)
+
+
 def today_iso(now: float | None = None) -> str:
     return date.fromtimestamp(now or time.time()).isoformat()
 
@@ -410,7 +433,7 @@ def collection_rows(store: dict[str, Any], statuses: dict[str, dict[str, Any]]) 
     rows = []
     for num, entry in store["collection"].items():
         s = store["sets"].get(num, {})
-        unit, _ = collection_value(entry, statuses.get(num, {}), s)
+        unit, _ = collection_value(entry, statuses.get(num, {}), s, _prefer_import(store))
         rows.append({
             "Number": num, "Name": s.get("name", ""), "Theme": s.get("theme", ""), "Subtheme": s.get("subtheme", ""),
             "Year": s.get("year", ""), "Pieces": s.get("pieces", ""), "Qty": entry.get("qty", 1),

@@ -34,8 +34,21 @@ RETAILERS: dict[str, tuple[str, str]] = {
     "amazon_be": ("Amazon.com.be", "EUR"),
     "bol": ("bol.com", "EUR"),
     "kruidvat_be": ("Kruidvat.be", "EUR"),
+    "dreamland_be": ("Dreamland.be", "EUR"),
 }
 DEFAULT_RETAILERS = list(RETAILERS)
+BUILTIN_RETAILERS = tuple(RETAILERS)
+
+# Shops handled by the generic parser (JSON-LD / meta tags) and a search URL template.
+# {query} is replaced by the url-encoded "LEGO <set number>". Editable in the settings panel.
+GENERIC_SHOPS: dict[str, dict[str, str]] = {
+    "dreamland_be": {"domain": "dreamland.be", "search": "https://www.dreamland.be/e/nl/search?q={query}"},
+}
+CONF_CUSTOM_SHOPS = "custom_shops"          # [{"id","name","domain","search"}]
+CONF_SHOP_SEARCH = "shop_search"            # {shop_id: template} overrides for generic shops
+CONF_NO_AUTOPAUSE = "no_autopause"          # [shop_id] never auto-paused after a block
+CONF_KNOWN_SHOPS = "known_shops"            # shops the user has seen (new built-ins get enabled once)
+CONF_VALUE_SOURCE = "value_source"          # "shop_first" | "import_first"
 
 EVENT_DIGEST = f"{DOMAIN}_daily_digest"
 EVENT_NEW_LOW = f"{DOMAIN}_new_all_time_low"

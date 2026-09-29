@@ -11,6 +11,7 @@ from typing import Any
 import aiohttp
 
 from .models import normalize_set_number
+from .shops import domain_of
 from .parsers import Parsed, find_search_result, parse_brickset_page, parse_page, search_url
 
 _LOGGER = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ class Fetcher:
         self._locks: dict[str, asyncio.Lock] = {}
         self.min_delay = 4.0
         self.blocks: dict[str, int] = {}
+        self.no_autopause: set[str] = set()
         self.blocked_until: dict[str, float] = {}
 
     @property
@@ -118,7 +120,7 @@ class Fetcher:
             await self.async_setup()
         lock = self._locks.setdefault(retailer, asyncio.Lock())
         async with lock:
-            origin = ORIGINS.get(retailer)
+            origin = ORIGINS.get(retailer) or (f"https://www.{d}/" if (d := domain_of(retailer)) else None)
             if origin and retailer not in self._warmed:   # look like a visitor: home page first
                 self._warmed.add(retailer)
                 try:
@@ -129,9 +131,13 @@ class Fetcher:
             await asyncio.sleep(self.min_delay + random.random() * 3)
             return await self._request(retailer, url, referer=origin)
 
-    def reset_cooldowns(self) -> None:
-        self.blocked_until.clear()
-        self.blocks.clear()
+    def reset_cooldowns(self, retailer: str | None = None) -> None:
+        if retailer is None:
+            self.blocked_until.clear()
+            self.blocks.clear()
+        else:
+            self.blocked_until.pop(retailer, None)
+            self.blocks.pop(retailer, None)
 
     def paused(self) -> dict[str, float]:
         return {r: round(self.cooldown_left(r) / 3600, 2) for r in self.blocked_until if self.cooldown_left(r) > 0}
@@ -141,6 +147,9 @@ class Fetcher:
 
     def _note_block(self, retailer: str) -> None:
         n = self.blocks.get(retailer, 0)
+        if retailer in self.no_autopause:       # user chose: never pause this shop
+            self.blocks[retailer] = n + 1
+            return
         self.blocked_until[retailer] = time.time() + COOLDOWN_HOURS[min(n, len(COOLDOWN_HOURS) - 1)] * 3600
         self.blocks[retailer] = n + 1
 
@@ -263,10 +272,45 @@ async def brickset_page_lookup(session: aiohttp.ClientSession, set_number: str) 
 
 async def lookup_metadata(session: aiohttp.ClientSession, brickset_key: str, rebrickable_key: str,
                           set_number: str) -> tuple[dict[str, Any], str | None]:
-    """Try Brickset API, then Rebrickable API, then the Brickset web page. Returns (data, source)."""
-    for source, coro in (("Brickset", brickset_lookup(session, brickset_key, set_number) if brickset_key else None),
-                         ("Rebrickable", rebrickable_lookup(session, rebrickable_key, set_number) if rebrickable_key else None)):
-        if coro is not None and (data := await coro):
-            return {k: v for k, v in data.items() if v}, source
-    data = await brickset_page_lookup(session, set_number)
-    return (data or {}), ("brickset.com" if data else None)
+    """Brickset API -> Rebrickable API -> public Brickset page.
+
+    A source that fails or lacks fields is complemented by the next one; the name comes from the
+    first source that has it. Returns (data, "Source1+Source2")."""
+    wanted = ("name", "theme", "subtheme", "year", "pieces", "image", "rrp", "exit_date")
+    merged: dict[str, Any] = {}
+    used: list[str] = []
+    sources = []
+    if brickset_key:
+        sources.append(("Brickset", lambda: brickset_lookup(session, brickset_key, set_number)))
+    if rebrickable_key:
+        sources.append(("Rebrickable", lambda: rebrickable_lookup(session, rebrickable_key, set_number)))
+    sources.append(("brickset.com", lambda: brickset_page_lookup(session, set_number)))
+    for name, fetch in sources:
+        if all(merged.get(k) for k in wanted if k not in ("subtheme", "exit_date")):
+            break
+        try:
+            data = await fetch()
+        except Exception:  # noqa: BLE001 - a broken source must not stop the others
+            _LOGGER.debug("metadata source %s failed for %s", name, set_number, exc_info=True)
+            data = None
+        if not data:
+            continue
+        added = False
+        for k in wanted:
+            if data.get(k) and not merged.get(k):
+                merged[k] = data[k]
+                added = True
+        if added:
+            used.append(name)
+    return merged, ("+".join(used) or None)
+
+
+async def test_metadata_source(session: aiohttp.ClientSession, source: str, key: str) -> tuple[bool, str]:
+    """Settings panel 'test' button: try a well known set."""
+    fn = {"brickset": brickset_lookup, "rebrickable": rebrickable_lookup}[source]
+    if not key:
+        return False, "geen sleutel ingevuld"
+    data = await fn(session, key, "10281")
+    if data and data.get("name"):
+        return True, f"werkt: 10281 = {data['name']}"
+    return False, "geen antwoord of sleutel ongeldig"
