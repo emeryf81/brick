@@ -4,7 +4,7 @@ LEGO Price Tracker voor Home Assistant
 
 Custom integration (HACS-compatibel) die LEGO-sets en hun prijzen volgt bij **LEGO.com, Amazon.nl, Amazon.de, Amazon.com.be, bol.com, Kruidvat.be, Dreamland.be en je eigen winkels**, met een dagelijks dashboard, prijsgrafieken en collectiewaarde.
 
-> Status: 0.8.0. 79 unit- en integratietests tegen een echte Home Assistant-core (2026.2.3). Het paneel is in Chromium getest (desktop en mobiel, licht en donker) met door de integratie zelf gegenereerde testdata. **Nog niet gedaan:** een controle van de winkel-parsers tegen de live sites.
+> Status: 0.8.0. 78 unit- en integratietests tegen een echte Home Assistant-core (2026.2.3). Het paneel is in Chromium getest (desktop en mobiel, licht en donker) met door de integratie zelf gegenereerde testdata. **Nog niet gedaan:** een controle van de winkel-parsers tegen de live sites.
 
 ## Opbouw van het paneel
 Het sidebar-paneel **LEGO** heeft drie delen:
