@@ -3,6 +3,7 @@
 <img width="1024" height="559" alt="LEGO Price Tracker panel" src="https://github.com/user-attachments/assets/fe8aea1b-0443-4675-8136-d3f0b021fe98" />
 
 **LEGO Price Tracker for Home Assistant**
+<center><a href="https://www.buymeacoffee.com/emeryf" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;" ></a></center>
 
 A custom integration (HACS compatible) that tracks LEGO sets and their prices at **LEGO.com, Amazon.nl, Amazon.de, Amazon.com.be, bol.com, Kruidvat.be, Dreamland.be and your own shops**, with a daily deals dashboard, price charts, a collection value chart and a full logbook.
 
