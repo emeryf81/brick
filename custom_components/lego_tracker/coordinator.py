@@ -19,7 +19,7 @@ from homeassistant.util import dt as dt_util
 
 from .client import Fetcher, lookup_metadata
 from .const import (
-    CONF_BRICKWATCH, BRICKWATCH_FRESH_HOURS, BRICKWATCH_MISSING_HOURS,
+    CONF_BRICKWATCH, CONF_COMPARE_SOURCES, COMPARE_FRESH_HOURS, COMPARE_MISSING_HOURS, COMPARE_NET_ERRORS, COMPARE_PAUSE_HOURS,
     CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET, CONF_BOL_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS,
     CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_LANGUAGE, CONF_REFRESH_MODE, CONF_SPREAD_HOURS, DEFAULT_REFRESH_MODE, DEFAULT_SPREAD_HOURS, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, CONF_CUSTOM_SHOPS, CONF_DIGEST_TIME, CONF_NO_AUTOPAUSE, CONF_SHOP_SEARCH, CONF_VALUE_SOURCE, DEFAULT_DIGEST_TIME, GENERIC_SHOPS, CONF_DISCOUNT_THRESHOLD, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
     DEFAULT_REFRESH_TIMES, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS, DEFAULT_RETAILERS,
@@ -33,7 +33,7 @@ from .models import (
 from .i18n import DEFAULT_LANGUAGE, LANGUAGES, LocalizedError, T, resolve, set_language
 from .notifications import Notifier, default_rules
 from .bol_api import BolApi, BolApiError
-from . import brickwatch as bwatch
+from . import compare
 from .shops import all_domains
 from .parsers import Parsed, title_check
 from .shops import SEARCH, valid_search
@@ -62,7 +62,14 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._cancel = False
         self._job_source = "panel"
         self.notifier = Notifier(self)
+        self._net_errors: dict[str, int] = {}
+        self._compare_debug: dict[str, dict[str, Any]] = {}
+        self._compare_retry_unsub: Callable[[], None] | None = None
         def _paused(rid: str, hours: float) -> None:
+            if rid in compare.SOURCES:
+                self.log("error", "shop", T("{shop} blocked us: paused for {hours} h", shop=compare.SOURCES[rid][0], hours=hours),
+                         source=compare.SOURCES[rid][0])
+                return
             self.log("error", "shop", T("{shop} blocked us: paused for {hours} h", shop=RETAILERS.get(rid, (rid,))[0], hours=hours), retailer=rid)
             self.hass.async_create_task(self.notifier.on_shop_paused(rid, hours))
         self.fetcher.on_pause = _paused
@@ -90,6 +97,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self.fetcher.async_setup()
         if (data := await self._store.async_load()):
             self.store = {**new_store(), **data}
+        if "brickwatch" in self.store:                         # 0.9.4: Brickwatch was the only comparison site
+            self.store.setdefault("compare", {}).setdefault("brickwatch", self.store.pop("brickwatch") or {})
         from .csv_import import LEGACY_CONDITIONS
         for e in self.store["collection"].values():
             if e.get("condition") in LEGACY_CONDITIONS:
@@ -114,6 +123,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_shutdown(self) -> None:
         self.stop_spread()
+        if self._compare_retry_unsub:
+            self._compare_retry_unsub()
         self._cancel = True
         if self._job_task and not self._job_task.done():
             self._job_task.cancel()
@@ -374,8 +385,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return await self.fetcher.discover(rid, num, force=force)
 
     async def _fetch(self, rid: str, offer: dict[str, Any], num: str, force: bool = False) -> tuple[Any, str | None]:
-        if "brickwatch.net" in (offer.get("url") or ""):
-            return None, T("no Brickwatch price for this shop")
+        if compare.is_compare_url(offer.get("url")):
+            return None, T("no comparison-site price for this shop")
         if rid == "bol" and self.bol_api:
             try:
                 ean, title, image = offer.get("ean"), offer.get("title"), None
@@ -385,81 +396,219 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         return None, T("bol.com API: set not found in the catalog")
                     ean, title, image = match["ean"], match["title"], match.get("image")
                     offer["ean"] = ean
+                    if num in self.store["sets"] and str(ean).isdigit():
+                        self.store["sets"][num].setdefault("ean", str(ean).zfill(13))   # also used by Producthero
                 price = await self.bol_api.best_price(ean)
                 return Parsed(price=price, title=title, image=image, unavailable=price is None), None
             except BolApiError as err:
                 return None, str(err)
         return await self.fetcher.fetch_offer(rid, offer["url"], force=force)
 
-    # ------------------------------------------------------------ Brickwatch (hidden option)
+    # ------------------------------------------------------------ price-comparison sites (hidden option)
     @property
     def brickwatch_enabled(self) -> bool:
+        """The hidden option: price-comparison sites (Brickwatch and others) as extra price sources."""
         return bool(self.opt(self.entry, CONF_BRICKWATCH, False))
 
-    async def brickwatch_refresh(self, num: str, force: bool = False, retry_missing: bool = False) -> dict[str, Any] | None:
-        """The set's Brickwatch page (all shops), re-used for a few hours. A missing page is not retried
-        within a day. Also links tracked shops that have no link yet and fills in empty set data."""
-        store = self.store.setdefault("brickwatch", {})
-        entry = store.get(num)
-        now = time.time()
-        if entry and entry.get("status") == "missing" and now - entry["ts"] < BRICKWATCH_MISSING_HOURS * 3600 and not retry_missing:
+    @property
+    def compare_sources(self) -> list[str]:
+        sel = self.opt(self.entry, CONF_COMPARE_SOURCES, None)
+        return [src for src in compare.SOURCES if sel is None or src in sel]
+
+    def _cstore(self, src: str) -> dict[str, Any]:
+        return self.store.setdefault("compare", {}).setdefault(src, {})
+
+    def compare_entries(self, num: str) -> dict[str, dict[str, Any]]:
+        return {src: e for src in compare.SOURCES if (e := self._cstore(src).get(num))}
+
+    def _net_error(self, src: str, error: str) -> None:
+        """Network errors (e.g. 'SSL_connect: connection closed abruptly'): after 5 in a row the site
+        is paused for an hour, so a site that drops us is not hammered."""
+        n = self._net_errors.get(src, 0) + 1
+        self._net_errors[src] = n
+        if n >= COMPARE_NET_ERRORS:
+            self._net_errors[src] = 0
+            self.fetcher.blocked_until[src] = time.time() + COMPARE_PAUSE_HOURS * 3600
+            self.log("error", "shop", T("{source}: {n} network errors in a row, paused for 1 hour ({error})",
+                                        source=compare.SOURCES[src][0], n=n, error=error[:100]), source=compare.SOURCES[src][0])
+
+    async def compare_refresh(self, num: str, refresh: bool = False, force: bool = False, retry_missing: bool = False,
+                              sources: list[str] | None = None) -> dict[str, dict[str, Any]]:
+        """All enabled comparison sites for one set. Pages are re-used for a few hours, a site that doesn't
+        have the set is not asked again within a day, a paused site is skipped (unless forced from the panel)."""
+        out: dict[str, dict[str, Any]] = {}
+        for src in sources or self.compare_sources:
+            try:
+                if (entry := await self._compare_one(src, num, refresh or force, force, retry_missing)):
+                    out[src] = entry
+            except Exception:  # noqa: BLE001 - an extra source must never break anything
+                _LOGGER.exception("%s failed for %s", src, num)
+        self._compare_links(num)
+        return out
+
+    async def _compare_one(self, src: str, num: str, refresh: bool, force: bool, retry_missing: bool,
+                           steps: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
+        st, now = self._cstore(src), time.time()
+        entry = st.get(num)
+        if entry and entry.get("status") == "missing" and now - entry["ts"] < COMPARE_MISSING_HOURS * 3600 and not retry_missing:
             return None
-        if entry and entry.get("status") == "ok" and now - entry["ts"] < BRICKWATCH_FRESH_HOURS * 3600 and not force:
+        if entry and entry.get("status") == "ok" and now - entry["ts"] < COMPARE_FRESH_HOURS * 3600 and not refresh:
             return entry
-        url = bwatch.set_url(num, self.opt(self.entry, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE))
-        status, page, error = await self.fetcher.get_page("brickwatch", url, force=force)
-        parsed = bwatch.parse_set_page(page, num, url, all_domains()) if status == 200 and page else None
-        if status == 404 or (status == 200 and parsed is None):
-            store[num] = {"status": "missing", "ts": now, "url": url}
-            self.log("info", "fetch", T("not on Brickwatch: next try tomorrow"), set_number=num, url=url, source="Brickwatch")
-            return None
-        if parsed is None:
-            store[num] = {**(entry or {}), "status": "error", "ts": now, "url": url, "error": error or T("HTTP error {status}", status=status)}
-            self.log("warning", "fetch", store[num]["error"], set_number=num, url=url, source="Brickwatch")
-            return None
-        entry = store[num] = {"status": "ok", "ts": now, "url": url, **parsed}
+        if not force and self.fetcher.cooldown_left(src) > 0:
+            return entry if entry and entry.get("status") == "ok" else None
+        s = self.store["sets"].get(num) or {}
+        url = compare.first_url(src, num, self.opt(self.entry, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE), s.get("ean"))
+        if not url:
+            return None                                      # site doesn't cover this country / needs an EAN
+        step, kind = 0, "error"
+        while url:
+            status, page, error = await self.fetcher.get_page(src, url, force=True)
+            if steps is not None:
+                steps.append({"url": url, "status": status, "error": error, "size": len(page or "")})
+            kind, url = self.compare_page(src, num, url, status, page, error, step)
+            step += 1
+            if kind != "follow":
+                break
+        return self._cstore(src).get(num) if kind == "ok" else None
+
+    def compare_page(self, src: str, num: str, url: str, status: int, page: str, error: str | None, step: int = 0,
+                     via: str = "server") -> tuple[str, str | None]:
+        """Handle one fetched page of a comparison site (by the server or by the user's browser).
+        Returns ('ok' | 'missing' | 'error' | 'follow', next url)."""
+        name, now = compare.SOURCES[src][0], time.time()
+        st = self._cstore(src)
+        self._compare_debug[src] = {"url": url, "status": status, "error": error, "set": num, "ts": now, "via": via,
+                                    "html": (page or "")[:1_500_000]}
+
+        def fail(msg: str) -> tuple[str, None]:
+            old = st.get(num)
+            if old and old.get("status") == "ok":            # keep the last good prices
+                old.update(last_error=msg, err_ts=now)
+            else:
+                st[num] = {"status": "error", "ts": now, "url": url, "error": msg}
+            self.log("warning", "fetch", msg, set_number=num, url=url, source=name)
+            return "error", None
+
+        if status == 0:                                      # network error: count towards the 1 h pause
+            self._net_error(src, error or "?")
+            return fail(error or T("network error: {error}", error="?"))
+        self._net_errors[src] = 0
+        if status in (403, 429, 503):
+            return fail(error or T("blocked (HTTP {status})", status=status))
+        if status in (404, 410):
+            res = compare.Result("missing")
+        elif status >= 400:
+            return fail(T("HTTP error {status}", status=status))
+        else:
+            res = compare.parse(src, page, num, url, all_domains(), step)
+        if res.kind == "follow" and res.url and compare.is_compare_url(res.url) and step < compare.MAX_STEPS - 1:
+            return "follow", res.url
+        if res.kind != "offers":
+            st[num] = {"status": "missing", "ts": now, "url": url, "note": res.note}
+            self.log("info", "fetch", T("not on {source}: next try tomorrow", source=name), set_number=num, url=url, source=name)
+            return "missing", None
+        st[num] = {"status": "ok", "ts": now, "url": url, "name": res.name, "image": res.image, "rrp": res.rrp,
+                   "ean": res.ean, "shops": res.shops, "via": via}
         s = self.store["sets"].get(num)
         if s is not None:
-            if parsed.get("name") and not s.get("name"):
-                s["name"], s["name_source"] = parsed["name"][:120], "Brickwatch"
-            if parsed.get("image") and not s.get("image"):
-                s["image"], s["image_source"] = parsed["image"], "Brickwatch"
-            if parsed.get("rrp") and not s.get("rrp"):
-                s["rrp"], s["rrp_source"] = parsed["rrp"], "Brickwatch"
-            offers = self.store["offers"].setdefault(num, {})
-            rejected = set(self.store.setdefault("rejected", {}).get(num, []))
-            for shop in parsed["shops"]:
+            if res.name and not s.get("name") and not compare.is_accessory(res.name):
+                s["name"], s["name_source"] = res.name[:120], name
+            if res.image and not s.get("image"):
+                s["image"], s["image_source"] = res.image, name
+            if res.rrp and not s.get("rrp"):
+                s["rrp"], s["rrp_source"] = res.rrp, name
+            if res.ean and not s.get("ean") and len(res.ean) == 13:
+                s["ean"] = res.ean
+        return "ok", None
+
+    def _compare_links(self, num: str) -> None:
+        """Tracked shops without a link get one from a comparison site (the shop's own page when the site
+        links to it directly, otherwise the comparison page itself)."""
+        if num not in self.store["sets"]:
+            return
+        offers = self.store["offers"].setdefault(num, {})
+        rejected = set(self.store.setdefault("rejected", {}).get(num, []))
+        name = self.store["sets"][num].get("name") or ""
+        for src, entry in self.compare_entries(num).items():
+            if entry.get("status") != "ok":
+                continue
+            for shop in entry.get("shops", []):
                 rid = shop.get("retailer")
-                if rid in self.retailers and not (offers.get(rid) or {}).get("url") and shop.get("url") \
-                        and url_key(rid, shop["url"]) not in rejected:
-                    offers[rid] = {"url": shop["url"], "history": [], "found": now, "via": "brickwatch",
-                                   "title": f"LEGO {num} {parsed.get('name') or ''}".strip()}
-                    self.log("ok", "discover", T("link found via Brickwatch"), set_number=num, retailer=rid, url=shop["url"], source="Brickwatch")
-        return entry
+                if rid not in self.retailers or (offers.get(rid) or {}).get("url"):
+                    continue
+                direct = shop.get("url") if shop.get("url") and retailer_from_url(shop["url"]) == rid else None
+                link = direct or entry["url"]
+                if url_key(rid, link) in rejected:
+                    continue
+                offers[rid] = {"url": link, "history": [], "found": time.time(), "via": src,
+                               "title": f"LEGO {num} {name}".strip()}
+                self.log("ok", "discover", T("link found via {source}", source=compare.SOURCES[src][0]), set_number=num,
+                         retailer=rid, url=link, source=compare.SOURCES[src][0])
 
-    def brickwatch_prices(self, num: str) -> dict[str, dict[str, Any]]:
-        """Fresh Brickwatch prices per tracked retailer."""
-        entry = (self.store.get("brickwatch") or {}).get(num)
-        if not entry or entry.get("status") != "ok" or time.time() - entry["ts"] > 26 * 3600:
-            return {}
-        return {sh["retailer"]: sh for sh in entry.get("shops", []) if sh.get("retailer")}
+    def compare_prices(self, num: str) -> dict[str, dict[str, Any]]:
+        """Per tracked retailer the best comparison-site price: the most recent one (per 6 h), then the lowest."""
+        best: dict[str, tuple[tuple[float, float], dict[str, Any]]] = {}
+        now = time.time()
+        for src, entry in self.compare_entries(num).items():
+            if src not in self.compare_sources or entry.get("status") != "ok" or now - entry["ts"] > 26 * 3600:
+                continue
+            for sh in entry.get("shops", []):
+                if not (rid := sh.get("retailer")):
+                    continue
+                key = (-(entry["ts"] // (COMPARE_FRESH_HOURS * 3600)), sh["price"])
+                if rid not in best or key < best[rid][0]:
+                    best[rid] = (key, {**sh, "source": src, "ts": entry["ts"]})
+        return {rid: v for rid, (_, v) in best.items()}
 
-    def start_brickwatch(self) -> dict[str, Any]:
-        """Job: fetch the Brickwatch page of every set and fill in prices where the shop itself fails."""
+    def _compare_apply_prices(self, num: str) -> int:
+        """Comparison prices for shops whose own page failed, is stale, or that only have a comparison link."""
+        n = 0
+        for rid, shop in self.compare_prices(num).items():
+            o = self.store["offers"].get(num, {}).get(rid)
+            if o and not o.get("manual_price") and (o.get("error") or not o.get("last_ok") or time.time() - o["last_ok"] > 20 * 3600
+                                                     or compare.is_compare_url(o.get("url"))):
+                if is_suspicious_price(shop["price"], self.store["sets"][num], o):
+                    continue
+                record_price(o, shop["price"])
+                o["last_ok"], o["via"] = o["last_checked"], shop["source"]
+                n += 1
+        return n
+
+    def start_brickwatch(self, nums: list[str] | None = None) -> dict[str, Any]:
+        """Job: every comparison site for every set. When all sites are paused (e.g. 5 network errors in a row)
+        the job stops and continues with the remaining sets an hour later."""
+        items = [n for n in (nums or list(self.store["sets"])) if n in self.store["sets"]]
+
         async def work(num: str) -> dict[str, int]:
-            entry = await self.brickwatch_refresh(num, force=True)
-            if entry is None:
+            live = [src for src in self.compare_sources if self.fetcher.cooldown_left(src) <= 0]
+            if not live:
+                if not self._cancel:
+                    self._cancel = True
+                    self._compare_retry(items[items.index(num):])
                 return {"skipped": 1}
-            n = 0
-            for rid, shop in self.brickwatch_prices(num).items():
-                o = self.store["offers"].get(num, {}).get(rid)
-                if o and not o.get("manual_price") and (o.get("error") or not o.get("last_ok")
-                                                         or time.time() - o["last_ok"] > 20 * 3600 or o.get("via") == "brickwatch"):
-                    record_price(o, shop["price"])
-                    o["last_ok"] = o["last_checked"]
-                    n += 1
-            return {"updated": n}
-        return self.start_job("brickwatch", T("Fetching Brickwatch prices"), list(self.store["sets"]), work)
+            got = await self.compare_refresh(num, refresh=True, sources=live)
+            return {"updated": self._compare_apply_prices(num)} if got else {"skipped": 1}
+        return self.start_job("brickwatch", T("Fetching prices from comparison sites"), items, work)
+
+    def _compare_retry(self, rest: list[str]) -> None:
+        from homeassistant.helpers.event import async_call_later
+
+        wait = max([self.fetcher.cooldown_left(src) for src in self.compare_sources] + [60.0])
+        self.log("warning", "job", T("All comparison sites are paused: stopped, the other {n} sets follow in {minutes} min",
+                                     n=len(rest), minutes=round(wait / 60)))
+        if self._compare_retry_unsub:
+            self._compare_retry_unsub()
+
+        def _go(_now: Any) -> None:
+            self._compare_retry_unsub = None
+            if not self.brickwatch_enabled:
+                return
+            if self.job_running:
+                self._compare_retry_unsub = async_call_later(self.hass, 600, _go)
+                return
+            self._job_source = "auto"
+            self.start_brickwatch(rest)
+        self._compare_retry_unsub = async_call_later(self.hass, wait + 30, _go)
 
     def _live_retailers(self, force: bool) -> list[str]:
         if force:
@@ -488,10 +637,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         bw_prices: dict[str, dict[str, Any]] = {}
         if self.brickwatch_enabled:
             try:
-                await self.brickwatch_refresh(num, force=force)
-                bw_prices = self.brickwatch_prices(num)
+                await self.compare_refresh(num, force=force)
+                bw_prices = self.compare_prices(num)
             except Exception:  # noqa: BLE001 - an extra source must never break the check
-                _LOGGER.exception("Brickwatch failed for %s", num)
+                _LOGGER.exception("Comparison sites failed for %s", num)
         before = self.compute()["statuses"].get(num, {})
         offers = [(rid, o) for rid, o in self.store["offers"].get(num, {}).items()
                   if (rid in live or (rid in bw_prices and rid in self.retailers)) and o.get("url") and o.get("link_status") != "rejected"]
@@ -501,7 +650,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for (rid, offer), (parsed, error) in zip(offers, results):
             via = None
             if (bwp := bw_prices.get(rid)) and (error or not parsed or parsed.price is None):
-                parsed, error, via = Parsed(price=bwp["price"], title=offer.get("title")), None, "brickwatch"
+                parsed, error, via = Parsed(price=bwp["price"], title=offer.get("title")), None, bwp["source"]
             if error and error.startswith("paused"):
                 counts["skipped"] += 1        # keep the last known price, just skip
                 shop_results[rid] = {"ok": None, "error": error}
@@ -654,12 +803,30 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     last = o.get("last_ok") or 0
                     if o.get("error") or last < day:
                         items.append((last, {"set_number": num, "retailer": rid, "shop": RETAILERS[rid][0], "url": o["url"]}))
+            if self.brickwatch_enabled:
+                # comparison sites the server can't reach (paused / errors): the browser fetches the page,
+                # the server reads it with the same parser
+                locale = self.opt(self.entry, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE)
+                for src in self.compare_sources:
+                    paused = self.fetcher.cooldown_left(src) > 0
+                    for num, s in self.store["sets"].items():
+                        e = self._cstore(src).get(num) or {}
+                        fresh = e.get("status") == "ok" and time.time() - e["ts"] < 20 * 3600 and not e.get("last_error")
+                        missing = e.get("status") == "missing" and time.time() - e["ts"] < COMPARE_MISSING_HOURS * 3600
+                        if fresh or missing or not (paused or e.get("status") == "error" or e.get("last_error")):
+                            continue
+                        if (url := compare.first_url(src, num, locale, s.get("ean"))):
+                            items.append((e.get("ts", 0), {"kind": "page", "source": src, "set_number": num,
+                                                           "shop": compare.SOURCES[src][0], "url": url, "step": 0}))
         items.sort(key=lambda x: x[0])
         return {"enabled": self.relay_enabled, "interval_hours": int(self.opt(self.entry, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS)),
                 "items": [i for _, i in items[:limit]], "total": len(items)}
 
     def relay_result(self, item: dict[str, Any]) -> str:
-        """One page fetched by the user's browser: a price (stored like the userscript) or a failure."""
+        """One page fetched by the user's browser: a price (stored like the userscript) or a failure.
+        A comparison-site page comes back as HTML and is read here ('follow' adds the next page to fetch)."""
+        if item.get("kind") == "page":
+            return self._relay_page(item)
         url, price, error = item.get("url"), item.get("price"), item.get("error")
         rid = item.get("retailer") or (retailer_from_url(url) if url else None)
         num = normalize_set_number(item["set_number"]) if item.get("set_number") else None
@@ -676,6 +843,35 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         rl["ts"] = time.time()
         rl[status] = rl.get(status, 0) + 1
         return status
+
+    def _relay_page(self, item: dict[str, Any]) -> str | dict[str, Any]:
+        src, url = item.get("source"), str(item.get("url") or "")
+        num = normalize_set_number(str(item.get("set_number") or ""))
+        if src not in compare.SOURCES or not compare.is_compare_url(url) or num not in self.store["sets"]:
+            raise ValueError(f"{src}: {url}: not a comparison page of a tracked set")
+        html = item.get("html") if isinstance(item.get("html"), str) else ""
+        try:
+            status, step = int(item.get("status") or 0), max(0, min(compare.MAX_STEPS - 1, int(item.get("step") or 0)))
+        except (TypeError, ValueError):
+            status, step = 0, 0
+        if status == 0:        # the browser couldn't reach it either: log, but don't count it towards a server pause
+            self.log("warning", "userscript", T("your browser could not fetch the price either: {error}", error=str(item.get("error") or "")[:120] or "?"),
+                     set_number=num, url=url, source="relay")
+            kind, nxt = "error", None
+        else:
+            kind, nxt = self.compare_page(src, num, url, status, html, None, step, via="relay")
+        if kind == "ok":
+            self._compare_links(num)
+            self._compare_apply_prices(num)
+        rl = self.store.setdefault("relay_last", {"ts": 0, "ok": 0, "fail": 0})
+        if time.time() - rl.get("ts", 0) > 900:
+            rl.update(ok=0, fail=0)
+        rl["ts"] = time.time()
+        if kind == "follow":
+            return {"kind": "page", "source": src, "set_number": num, "shop": compare.SOURCES[src][0], "url": nxt, "step": step + 1}
+        status_key = "ok" if kind in ("ok", "missing") else "fail"
+        rl[status_key] = rl.get(status_key, 0) + 1
+        return status_key
 
     async def discover_offers(self, set_number: str | None = None) -> int:
         """Inline discovery for one set (or all sets, used by tests)."""
@@ -825,7 +1021,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "refresh_mode": self.refresh_mode, "spread_hours": self.spread_hours,
             "language": o.get(CONF_LANGUAGE, DEFAULT_LANGUAGE), "languages": LANGUAGES,
             "bol_country": o.get(CONF_BOL_COUNTRY, "auto"), "bol_api": bool(self.bol_api),
-            "browser_relay": bool(o.get(CONF_RELAY, True)), "brickwatch": bool(o.get(CONF_BRICKWATCH, False)), "relay_hours": int(o.get(CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS)),
+            "browser_relay": bool(o.get(CONF_RELAY, True)), "brickwatch": bool(o.get(CONF_BRICKWATCH, False)),
+            "compare_sources": self.compare_sources, "relay_hours": int(o.get(CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS)),
         }
 
     def settings_validate(self, fields: dict[str, Any]) -> dict[str, Any]:
@@ -849,6 +1046,11 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for key in ("auto_refresh", "use_impersonation", CONF_RELAY, CONF_BRICKWATCH):
             if key in fields:
                 opts[key] = bool(fields[key])
+        if CONF_COMPARE_SOURCES in fields:
+            sel = fields[CONF_COMPARE_SOURCES]
+            if not isinstance(sel, list) or any(src not in compare.SOURCES for src in sel):
+                raise LocalizedError("{field}: not a valid choice", field=CONF_COMPARE_SOURCES)
+            opts[CONF_COMPARE_SOURCES] = [src for src in compare.SOURCES if src in sel]
         if "refresh_times" in fields:
             times = parse_times(str(fields["refresh_times"]))
             if not 1 <= len(times) <= 6:
@@ -1298,6 +1500,35 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._fire_events(num, before, self.compute()["statuses"].get(num, {}))
         self.push_update()
         return num
+
+    def _relay_page(self, item: dict[str, Any]) -> str | dict[str, Any]:
+        src, url = item.get("source"), str(item.get("url") or "")
+        num = normalize_set_number(str(item.get("set_number") or ""))
+        if src not in compare.SOURCES or not compare.is_compare_url(url) or num not in self.store["sets"]:
+            raise ValueError(f"{src}: {url}: not a comparison page of a tracked set")
+        html = item.get("html") if isinstance(item.get("html"), str) else ""
+        try:
+            status, step = int(item.get("status") or 0), max(0, min(compare.MAX_STEPS - 1, int(item.get("step") or 0)))
+        except (TypeError, ValueError):
+            status, step = 0, 0
+        if status == 0:        # the browser couldn't reach it either: log, but don't count it towards a server pause
+            self.log("warning", "userscript", T("your browser could not fetch the price either: {error}", error=str(item.get("error") or "")[:120] or "?"),
+                     set_number=num, url=url, source="relay")
+            kind, nxt = "error", None
+        else:
+            kind, nxt = self.compare_page(src, num, url, status, html, None, step, via="relay")
+        if kind == "ok":
+            self._compare_links(num)
+            self._compare_apply_prices(num)
+        rl = self.store.setdefault("relay_last", {"ts": 0, "ok": 0, "fail": 0})
+        if time.time() - rl.get("ts", 0) > 900:
+            rl.update(ok=0, fail=0)
+        rl["ts"] = time.time()
+        if kind == "follow":
+            return {"kind": "page", "source": src, "set_number": num, "shop": compare.SOURCES[src][0], "url": nxt, "step": step + 1}
+        status_key = "ok" if kind in ("ok", "missing") else "fail"
+        rl[status_key] = rl.get(status_key, 0) + 1
+        return status_key
 
     async def discover_offers(self, set_number: str | None = None) -> int:
         """(Re)try to find shop pages for sets that have no offer at some retailer."""

@@ -55,6 +55,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const signPct = (v) => (v == null ? "–" : `${v > 0 ? "+" : ""}${v.toLocaleString(LOC, { maximumFractionDigits: 1 })}%`);
 const DATE = (ts, o = { day: "2-digit", month: "short" }) => new Date(ts * 1000).toLocaleDateString(LOC, o);
 const TIME = (ts) => new Date(ts * 1000).toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" });
+const SRC = { brickwatch: "Brickwatch", kieskeurig: "Kieskeurig", shoparize: "Shoparize", channable: "Channable Shopping", producthero: "Producthero" };
 const ago = (ts) => {
   if (!ts) return t("never");
   const s = Date.now() / 1000 - ts;
@@ -277,7 +278,7 @@ h2.sec{font-size:16px;margin:18px 0 10px;display:flex;align-items:center;gap:8px
 .empty .big{font-size:40px;display:block;margin-bottom:8px}
 .banner{display:flex;gap:10px;align-items:center;background:color-mix(in srgb,var(--lt-yellow) 16%,var(--lt-card));border:1px solid color-mix(in srgb,var(--lt-yellow) 45%,transparent);border-radius:12px;padding:10px 14px;margin-bottom:14px;font-size:13px}
 .banner a{color:var(--lt-accent);cursor:pointer;text-decoration:underline}
-a{color:var(--lt-accent)}.err{color:var(--lt-red);font-size:12px}.ok{color:var(--lt-green)}.muted{color:var(--lt-muted)}
+a{color:var(--lt-accent)}.err{color:var(--lt-red);font-size:12px}.ok{color:var(--lt-green)}.tbl .bad,.panel .bad{color:var(--lt-red)}.tbl .warn,.panel .warn{color:var(--lt-yellow)}.tbl td.ell{max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.muted{color:var(--lt-muted)}
 .form{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:12px}
 .form label{display:flex;flex-direction:column;font-size:12px;color:var(--lt-muted);gap:4px;font-weight:500}.form label.chk{flex-direction:row;align-items:center;gap:8px;font-size:14px;color:var(--lt-text)}
 .hint{font-size:12px;margin-top:-4px;min-height:16px}
@@ -841,8 +842,8 @@ class LegoTrackerPanel extends HTMLElement {
     const retailers = this.state.data.retailers;
     return Object.entries(e.results || {}).map(([rid, r]) => {
       const cls = r.ok ? "ok" : r.ok === false ? "fail" : "skip", name = esc(retailers[rid] || rid);
-      const val = r.ok ? `${r.price != null ? EUR(r.price) : "✓"}${r.manual ? " ✎" : ""}${r.via === "brickwatch" ? " ⓑ" : ""}` : r.ok === false ? "✕" : "⏸";
-      const why = r.error ? tx(r.error) : r.manual ? t("manual price wins; the shop said {price}", { price: EUR(r.price) }) : r.via === "brickwatch" ? t("price via Brickwatch (the shop itself failed)") : "";
+      const val = r.ok ? `${r.price != null ? EUR(r.price) : "✓"}${r.manual ? " ✎" : ""}${SRC[r.via] ? " ⓒ" : ""}` : r.ok === false ? "✕" : "⏸";
+      const why = r.error ? tx(r.error) : r.manual ? t("manual price wins; the shop said {price}", { price: EUR(r.price) }) : SRC[r.via] ? t("price via {source} (the shop itself failed)", { source: SRC[r.via] }) : "";
       return full ? `<div class="res ${cls}" style="display:flex;gap:8px;align-items:center;margin:3px 0"><b style="min-width:110px">${name}</b><span>${val}</span><span class="muted" style="font-size:12px">${esc(why)}</span></div>`
         : `<span class="res ${cls}" title="${esc(why)}">${name} <b>${val}</b></span>`;
     }).join(full ? "" : " ");
@@ -1420,11 +1421,24 @@ class LegoTrackerPanel extends HTMLElement {
     const st = this.state.settings;
     if (this.state.settingsErr) return this.emptyState("🔒", t("Only administrators can change settings."));
     if (!st) { this.loadSettings(); return `<div class="skel" style="height:200px"></div>`; }
-    const bw = this.state.data.brickwatch;
+    const bw = this.state.data.brickwatch, sel = st.compare_sources || Object.keys(SRC);
+    const when = (ts) => DATE(ts, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    const rows = bw ? Object.entries(bw.sources).map(([id, x]) => `<tr>
+        <td><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" class="x_src" data-src="${id}" ${sel.includes(id) ? "checked" : ""}><b>${esc(x.name)}</b></label></td>
+        <td>${x.paused_until ? `<span class="bad">⏸ ${t("paused until {when}", { when: when(x.paused_until) })}</span>` : x.net_errors ? `<span class="warn">${t("{n} network errors in a row", { n: x.net_errors })}</span>` : `<span class="ok">●</span>`}</td>
+        <td class="num">${x.sets}</td><td class="num">${x.missing}</td><td class="num">${x.errors}</td>
+        <td>${x.last ? ago(x.last) : "–"}</td>
+        <td><button class="btn ghost sm x_test" data-src="${id}" type="button">🔬 ${t("Test")}</button></td></tr>`).join("") : "";
+    const first = (this.sets[0] || {}).set_number || "";
     return `<div class="panel"><h3>🕵️ ${t("Secret options")}</h3>
-      <div class="rule${st.brickwatch ? "" : " off"}"><label class="switch"><input type="checkbox" id="x_bw" ${st.brickwatch ? "checked" : ""}><i></i></label><div style="flex:1"><b>🧱 ${t("Brickwatch as price source")}</b><div class="sum">${t("Per set, the Brickwatch page with the prices of all shops is read (at most every 6 h). Shops that fail themselves (e.g. bol.com) get the Brickwatch price, shops without a link get one, and the set window shows every shop. Sets that are not on Brickwatch are not retried within a day.")}</div></div></div>
-      ${bw ? `<p class="muted">${t("{n} sets with Brickwatch prices, {m} not on Brickwatch", { n: bw.sets, m: bw.missing })}${bw.last ? " · " + t("last fetch {when}", { when: ago(bw.last) }) : ""}</p>
-        <button class="btn" id="x_bwjob">↻ ${t("Fetch Brickwatch for all sets")}</button>` : ""}</div>`;
+      <div class="rule${st.brickwatch ? "" : " off"}"><label class="switch"><input type="checkbox" id="x_bw" ${st.brickwatch ? "checked" : ""}><i></i></label><div style="flex:1"><b>🧱 ${t("Price-comparison sites as price source")}</b><div class="sum">${t("Per set, comparison sites (Brickwatch, Kieskeurig, Shoparize, Channable, Producthero) are read, at most every 6 h. Shops that fail themselves (e.g. bol.com) get the comparison price, shops without a link get one, and the set window shows every shop. LED kits and other accessories are skipped. A site that doesn't have a set is not asked again within a day; after 5 network errors in a row a site is paused for 1 hour.")}</div></div></div>
+      ${bw ? `<div class="tscroll" style="margin-top:10px"><table class="tbl"><tr><th>${t("Site")}</th><th>${t("Status")}</th><th class="num">${t("Sets")}</th><th class="num">${t("Not there")}</th><th class="num">${t("Errors")}</th><th>${t("Last fetch")}</th><th></th></tr>${rows}</table></div>
+        <p class="muted" style="font-size:12px">${t("When a site refuses the server, your own browser fetches the page via the userscript (browser relay) and Home Assistant reads it.")}</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0">
+          <button class="btn" id="x_bwjob">↻ ${t("Fetch all comparison sites for all sets")}</button>
+          <span class="hsp" style="flex:1"></span>
+          <label class="muted" style="font-size:13px">${t("Test with set")} <input id="x_tnum" value="${esc(first)}" style="width:90px"></label></div>
+        <div id="x_tout"></div>` : ""}</div>`;
   }
   bindSecret(root, $) {
     const cb = $("x_bw"); if (!cb) return;
@@ -1432,27 +1446,60 @@ class LegoTrackerPanel extends HTMLElement {
       await this._hass.callWS({ type: "lego_tracker/settings/set", fields: { brickwatch: cb.checked } });
       await new Promise((r) => setTimeout(r, 1500));
       this.state.settings = null; await this.load();
-      this.toast(cb.checked ? t("Brickwatch on") : t("Brickwatch off"), "ok");
+      this.toast(cb.checked ? t("Comparison sites on") : t("Comparison sites off"), "ok");
+    }));
+    root.querySelectorAll(".x_src").forEach((el) => el.addEventListener("change", () => this.busy(null, "", async () => {
+      const on = [...root.querySelectorAll(".x_src")].filter((x) => x.checked).map((x) => x.dataset.src);
+      await this._hass.callWS({ type: "lego_tracker/settings/set", fields: { compare_sources: on } });
+      await new Promise((r) => setTimeout(r, 1500));
+      this.state.settings = null; await this.load();
+    })));
+    root.querySelectorAll(".x_test").forEach((b) => b.onclick = () => this.busy(b, "…", async () => {
+      const src = b.dataset.src, num = ($("x_tnum").value || "").trim(), out = $("x_tout");
+      if (!num) { this.toast(t("Enter a set number"), "err"); return; }
+      const r = await this._hass.callWS({ type: "lego_tracker/compare/test", source: src, set_number: num });
+      const e = r.entry || {}, name = SRC[src] || src;
+      const steps = r.steps.map((x, i) => `<tr><td>${i + 1}</td><td class="ell"><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url)}</a></td><td>${x.status || "–"}</td><td>${x.error ? esc(tx(x.error)) : ""}</td><td class="num">${Math.round(x.size / 1024)} kB</td></tr>`).join("");
+      const verdict = e.status === "ok" ? `<span class="ok">✓ ${t("{n} shops found", { n: e.shops.length })}</span>${e.name ? " · " + esc(e.name) : ""}`
+        : e.status === "missing" ? `<span class="warn">${t("Not on {source}", { source: name })}</span>` : e.status === "error" ? `<span class="bad">${esc(tx(e.error || ""))}</span>`
+        : `<span class="muted">${t("Not fetched (paused, or this site needs an EAN / doesn't cover your country)")}</span>`;
+      const shops = e.status === "ok" ? `<table class="tbl">${e.shops.map((x) => `<tr><td>${esc(x.name)}</td><td class="num">${EUR(x.price)}</td><td>${x.retailer ? esc(this.state.data.retailers[x.retailer] || x.retailer) : ""}</td></tr>`).join("")}</table>` : "";
+      out.innerHTML = `<div class="panel" style="margin-top:8px;background:var(--bg2,transparent)"><b>🔬 ${esc(name)} · ${esc(num)}</b> — ${verdict}
+        <div class="tscroll"><table class="tbl"><tr><th>#</th><th>URL</th><th>HTTP</th><th>${t("Error")}</th><th class="num">${t("Size")}</th></tr>${steps}</table></div>${shops}
+        ${r.size ? `<button class="btn ghost sm" id="x_html" type="button">⬇ ${t("Download the page (HTML)")}</button> <span class="muted" style="font-size:12px">${t("Send this file if the prices are not read correctly.")}</span>` : ""}</div>`;
+      const dl = out.querySelector("#x_html");
+      if (dl) dl.onclick = async () => {
+        const h = await this._hass.callWS({ type: "lego_tracker/compare/html", source: src });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(new Blob([h.html || ""], { type: "text/html" }));
+        a.download = `${src}-${num}.html`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      };
     }));
     const job = $("x_bwjob"); if (job) job.onclick = () => this.busy(job, t("Starting…"), async () => {
-      const r = await this._hass.callWS({ type: "lego_tracker/brickwatch/fetch" });
+      const r = await this._hass.callWS({ type: "lego_tracker/compare/fetch" });
       this.state.job = r.job; this.pollJob(); this.renderJob();
       this.toast(t("{job} started for {n} sets", { job: tx(r.job.label), n: r.job.total }), "ok");
     });
   }
   brickwatchHtml(s) {
-    const bw = s.brickwatch; if (!bw) return "";
+    const cmp = s.compare; if (!cmp) return "";
     const retailers = this.state.data.retailers;
-    const head = `<h3 style="margin:16px 0 4px;display:flex;align-items:center;gap:8px">🧱 ${t("Brickwatch: all shops")}<span class="hsp" style="flex:1"></span>${bw.url ? `<a class="btn ghost sm" href="${esc(bw.url)}" target="_blank" rel="noopener noreferrer">brickwatch.net ↗</a>` : ""}<button class="btn ghost sm" id="bwgo" type="button">↻ ${t("Fetch")}</button></h3>`;
-    if (bw.status !== "ok") {
-      const msg = bw.status === "missing" ? t("Not on Brickwatch; next try {when}.", { when: DATE(bw.ts + 86400, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) })
-        : bw.status === "error" ? tx(bw.error || "") : t("Not fetched yet.");
-      return head + `<p class="muted" style="font-size:13px">${esc(msg)}</p>`;
-    }
-    const low = Math.min(...bw.shops.map((x) => x.price));
-    const rows = bw.shops.map((x) => `<tr><td><b>${esc(x.name)}</b>${x.retailer ? ` <span class="abadge" title="${t("a shop you track")}">${esc(retailers[x.retailer] || x.retailer)}</span>` : ""}</td>
-      <td class="num"><b class="${x.price === low ? "ok" : ""}">${EUR(x.price)}</b></td><td>${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${t("open")} ↗</a>` : ""}</td></tr>`).join("");
-    return head + `<p class="muted" style="font-size:12px;margin:0 0 6px">${t("{n} shops · updated {when}", { n: bw.shops.length, when: ago(bw.ts) })}</p><div class="tscroll"><table class="tbl"><tr><th>${t("Shop")}</th><th class="num">${t("Price")}</th><th></th></tr>${rows}</table></div>`;
+    const head = `<h3 style="margin:16px 0 4px;display:flex;align-items:center;gap:8px">🧱 ${t("Comparison sites: all shops")}<span class="hsp" style="flex:1"></span><button class="btn ghost sm" id="bwgo" type="button">↻ ${t("Fetch")}</button></h3>`;
+    const when = (ts) => DATE(ts, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    const parts = Object.entries(cmp).map(([id, e]) => {
+      const link = e.url ? ` <a href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">↗</a>` : "";
+      if (e.status !== "ok") {
+        const msg = e.status === "missing" ? t("Not on {source}; next try {when}.", { source: e.name, when: when(e.ts + 86400) })
+          : e.status === "error" ? tx(e.error || "") : t("Not fetched yet.");
+        return `<p class="muted" style="font-size:13px;margin:4px 0"><b>${esc(e.name)}</b>${link} · ${esc(msg)}</p>`;
+      }
+      const low = Math.min(...e.shops.map((x) => x.price));
+      const rows = e.shops.map((x) => `<tr><td><b>${esc(x.name)}</b>${x.retailer ? ` <span class="abadge" title="${t("a shop you track")}">${esc(retailers[x.retailer] || x.retailer)}</span>` : ""}</td>
+        <td class="num"><b class="${x.price === low ? "ok" : ""}">${EUR(x.price)}</b></td><td>${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${t("open")} ↗</a>` : ""}</td></tr>`).join("");
+      return `<p style="font-size:13px;margin:10px 0 4px"><b>${esc(e.name)}</b>${link} <span class="muted">· ${t("{n} shops · updated {when}", { n: e.shops.length, when: ago(e.ts) })}${e.via === "relay" ? " · " + t("via your browser") : ""}${e.last_error ? ` · <span class="warn">${esc(tx(e.last_error))}</span>` : ""}</span></p>
+        <div class="tscroll"><table class="tbl"><tr><th>${t("Shop")}</th><th class="num">${t("Price")}</th><th></th></tr>${rows}</table></div>`;
+    }).join("");
+    return head + parts;
   }
 
   // ---------------------------------------------------------------- shop table (dialog + item editor)
@@ -1627,7 +1674,7 @@ class LegoTrackerPanel extends HTMLElement {
     const find = async (btn) => this.busy(btn, t("Searching…"), async () => { const r = await this.svc("discover_offers", { set_number: num }, true); await this.load(); this.toast(t("{n} shop links found", { n: r.response.found }), r.response.found ? "ok" : ""); this.openSet(num); });
     q("find").onclick = (e) => find(e.currentTarget);
     q("enr").onclick = (e) => this.busy(e.currentTarget, t("Fetching…"), async () => { const r = await this._hass.callWS({ type: "lego_tracker/set/enrich", set_number: num }); await this.load(); this.toast(r.result.updated ? t("Set data updated") : t("No new set data found"), r.result.updated ? "ok" : ""); this.openSet(num); });
-    if (q("bwgo")) q("bwgo").onclick = (e) => this.busy(e.currentTarget, "", async () => { const r = await this._hass.callWS({ type: "lego_tracker/brickwatch/fetch", set_number: num, retry_missing: true }); await this.load(); this.toast(r.found ? t("Brickwatch prices fetched") : t("Not on Brickwatch"), r.found ? "ok" : ""); this.openSet(num); });
+    if (q("bwgo")) q("bwgo").onclick = (e) => this.busy(e.currentTarget, "", async () => { const r = await this._hass.callWS({ type: "lego_tracker/compare/fetch", set_number: num, retry_missing: true }); await this.load(); this.toast(r.found ? t("Comparison prices fetched") : t("No comparison site has this set"), r.found ? "ok" : ""); this.openSet(num); });
     q("rf").onclick = (e) => this.busy(e.currentTarget, t("Fetching…"), async () => { await this.svc("refresh", { set_number: num }); await this.load(); this.openSet(num); });
     q("rm").onclick = () => { if (!confirm(t(s.owned ? "Delete set {number} with its whole price history, and remove it from your collection?" : "Delete set {number} with its whole price history?", { number: num }))) return; this.busy(q("rm"), "", async () => { await this.svc("remove_set", { set_number: num }); this.closeDialog(); await this.load(); this.toast(t("Set {number} deleted", { number: num }), "ok"); }); };
     this.hookCharts(dlg);

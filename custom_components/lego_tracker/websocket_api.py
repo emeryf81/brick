@@ -30,12 +30,23 @@ def _coord(hass: HomeAssistant):
 
 
 def _bw_status(coord) -> dict[str, Any] | None:
+    """Hidden option: state per price-comparison site."""
     if not coord.brickwatch_enabled:
         return None
-    bw = coord.store.get("brickwatch") or {}
-    return {"sets": sum(1 for e in bw.values() if e.get("status") == "ok"),
-            "missing": sum(1 for e in bw.values() if e.get("status") == "missing"),
-            "last": max((e.get("ts", 0) for e in bw.values()), default=None) or None}
+    from . import compare
+
+    out = {}
+    for src, (name, _host) in compare.SOURCES.items():
+        st = (coord.store.get("compare") or {}).get(src) or {}
+        out[src] = {"name": name, "enabled": src in coord.compare_sources,
+                    "sets": sum(1 for e in st.values() if e.get("status") == "ok"),
+                    "missing": sum(1 for e in st.values() if e.get("status") == "missing"),
+                    "errors": sum(1 for e in st.values() if e.get("status") == "error" or e.get("last_error")),
+                    "last": max((e.get("ts", 0) for e in st.values()), default=None) or None,
+                    "paused_until": coord.fetcher.blocked_until.get(src) if coord.fetcher.cooldown_left(src) > 0 else None,
+                    "net_errors": coord._net_errors.get(src, 0)}
+    return {"sources": out, "sets": sum(v["sets"] for v in out.values()), "missing": sum(v["missing"] for v in out.values()),
+            "last": max((v["last"] or 0 for v in out.values()), default=0) or None}
 
 
 def _card(coord, num: str, with_history: bool = False) -> dict[str, Any]:
@@ -63,7 +74,11 @@ def _card(coord, num: str, with_history: bool = False) -> dict[str, Any]:
     if with_history:
         card["history"] = {rid: o.get("history", []) for rid, o in offers.items()}
         if coord.brickwatch_enabled:
-            card["brickwatch"] = (coord.store.get("brickwatch") or {}).get(num) or {"status": "none"}
+            from .compare import SOURCES
+
+            entries = coord.compare_entries(num)
+            card["compare"] = {src: {**(entries.get(src) or {"status": "none"}), "name": SOURCES[src][0]}
+                               for src in coord.compare_sources}
         card["combined"] = series
     return card
 
@@ -86,7 +101,9 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_offer_update)
     websocket_api.async_register_command(hass, ws_offer_fetch)
     websocket_api.async_register_command(hass, ws_set_enrich)
-    websocket_api.async_register_command(hass, ws_brickwatch_fetch)
+    websocket_api.async_register_command(hass, ws_compare_fetch)
+    websocket_api.async_register_command(hass, ws_compare_test)
+    websocket_api.async_register_command(hass, ws_compare_html)
     websocket_api.async_register_command(hass, ws_notify_set)
     websocket_api.async_register_command(hass, ws_notify_test)
     hass.http.register_view(UserscriptView())
@@ -406,14 +423,14 @@ async def ws_set_enrich(hass, connection, msg):
 
 
 @websocket_api.require_admin
-@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/brickwatch/fetch", vol.Optional("set_number"): str,
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/compare/fetch", vol.Optional("set_number"): str,
                                   vol.Optional("retry_missing", default=False): bool})
 @websocket_api.async_response
-async def ws_brickwatch_fetch(hass, connection, msg):
-    """Hidden option: one set's Brickwatch page now (and a price check), or a job for all sets."""
+async def ws_compare_fetch(hass, connection, msg):
+    """Hidden option: one set's comparison pages now (and a price check), or a job for all sets."""
     coord = _coord(hass)
     if not coord.brickwatch_enabled:
-        connection.send_error(msg["id"], "not_enabled", "Brickwatch is not enabled")
+        connection.send_error(msg["id"], "not_enabled", "Comparison sites are not enabled")
         return
     if not msg.get("set_number"):
         try:
@@ -425,12 +442,49 @@ async def ws_brickwatch_fetch(hass, connection, msg):
     if num not in coord.store["sets"]:
         connection.send_error(msg["id"], "not_found", tr("Set {number} is not tracked.", number=num))
         return
-    entry = await coord.brickwatch_refresh(num, force=True, retry_missing=msg["retry_missing"])
-    if entry:
+    found = await coord.compare_refresh(num, force=True, retry_missing=msg["retry_missing"])
+    if found:
         await coord.refresh_set(num, source="panel")
     coord._save()
     coord.push_update()
-    connection.send_result(msg["id"], {"found": bool(entry), "set": _card(coord, num, with_history=True)})
+    connection.send_result(msg["id"], {"found": bool(found), "set": _card(coord, num, with_history=True)})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/compare/test", vol.Required("source"): str,
+                                  vol.Required("set_number"): str})
+@websocket_api.async_response
+async def ws_compare_test(hass, connection, msg):
+    """Hidden option: try one site for one set (any set number) and show every step, for diagnosis."""
+    from . import compare
+
+    coord = _coord(hass)
+    src, num = msg["source"], normalize_set_number(msg["set_number"])
+    if src not in compare.SOURCES or not num:
+        connection.send_error(msg["id"], "invalid", "unknown source")
+        return
+    steps: list[dict[str, Any]] = []
+    tracked = num in coord.store["sets"]
+    if not tracked:                      # a set that isn't tracked: a temporary entry, removed afterwards
+        coord.store["sets"][num] = {"set_number": num}
+    try:
+        await coord._compare_one(src, num, True, True, True, steps)
+        entry = coord._cstore(src).get(num)
+    finally:
+        if not tracked:
+            coord.store["sets"].pop(num, None)
+            coord._cstore(src).pop(num, None)
+    dbg = coord._compare_debug.get(src) or {}
+    connection.send_result(msg["id"], {"steps": steps, "entry": entry, "size": len(dbg.get("html") or "")})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/compare/html", vol.Required("source"): str})
+@callback
+def ws_compare_html(hass, connection, msg):
+    """The last page a comparison site returned (to see why reading it fails)."""
+    dbg = _coord(hass)._compare_debug.get(msg["source"]) or {}
+    connection.send_result(msg["id"], {k: dbg.get(k) for k in ("url", "status", "error", "set", "ts", "via", "html")})
 
 
 class RelayView(HomeAssistantView):
@@ -463,12 +517,16 @@ class RelayView(HomeAssistantView):
             assert isinstance(results, list) and len(results) <= 100
         except Exception:  # noqa: BLE001 - any malformed body
             return self.json_message("invalid body", 400)
-        out = {"ok": 0, "fail": 0, "rejected": []}
+        out: dict[str, Any] = {"ok": 0, "fail": 0, "rejected": [], "follow": []}
         for item in results:
             if not isinstance(item, dict):
                 continue
             try:
-                out[coord.relay_result(item)] += 1
+                res = coord.relay_result(item)
+                if isinstance(res, dict):
+                    out["follow"].append(res)
+                else:
+                    out[res] += 1
             except ValueError as err:           # not tracked / suspicious price
                 out["rejected"].append(str(err))
         coord.push_update()
