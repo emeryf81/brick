@@ -1,0 +1,101 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "LEGO Price Tracker",
+        "description": "La mayoría de los ajustes también están en el panel de LEGO Price Tracker en Gestión → Ajustes.",
+        "data": {
+          "discount_threshold": "Umbral de descuento (%) para 'gran descuento'",
+          "retailers": "Tiendas a comprobar",
+          "language": "Idioma (panel, notificaciones, userscript)",
+          "refresh_mode": "Comprobaciones automáticas de precios",
+          "spread_hours": "Ciclo repartido: cada set una vez cada … horas",
+          "refresh_times": "Horas fijas (solo para 'A horas fijas', p. ej. 07:30, 19:30)",
+          "digest_time": "Hora del resumen diario",
+          "min_history_days": "Días mínimos de historial para que cuente un 'mínimo histórico'",
+          "use_impersonation": "Imitar el navegador Chrome (curl_cffi; muchos menos bloqueos)",
+          "notify_service": "Servicio notify para ofertas (opcional; mejor: la pestaña Notificaciones del panel)",
+          "brickset_api_key": "Clave API de Brickset (opcional, gratuita)",
+          "rebrickable_api_key": "Clave API de Rebrickable (opcional, gratuita)"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Ya está configurado"
+    },
+    "error": {
+      "invalid_times": "Introduce de 1 a 6 horas como HH:MM, separadas por comas"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "LEGO Price Tracker",
+        "description": "La mayoría de los ajustes también están en el panel de LEGO Price Tracker en Gestión → Ajustes.",
+        "data": {
+          "discount_threshold": "Umbral de descuento (%) para 'gran descuento'",
+          "retailers": "Tiendas a comprobar",
+          "language": "Idioma (panel, notificaciones, userscript)",
+          "refresh_mode": "Comprobaciones automáticas de precios",
+          "spread_hours": "Ciclo repartido: cada set una vez cada … horas",
+          "refresh_times": "Horas fijas (solo para 'A horas fijas', p. ej. 07:30, 19:30)",
+          "digest_time": "Hora del resumen diario",
+          "min_history_days": "Días mínimos de historial para que cuente un 'mínimo histórico'",
+          "use_impersonation": "Imitar el navegador Chrome (curl_cffi; muchos menos bloqueos)",
+          "notify_service": "Servicio notify para ofertas (opcional; mejor: la pestaña Notificaciones del panel)",
+          "brickset_api_key": "Clave API de Brickset (opcional, gratuita)",
+          "rebrickable_api_key": "Clave API de Rebrickable (opcional, gratuita)"
+        }
+      }
+    },
+    "error": {
+      "invalid_times": "Introduce de 1 a 6 horas como HH:MM, separadas por comas"
+    }
+  },
+  "selector": {
+    "refresh_mode": {
+      "options": {
+        "spread": "Repartido durante el día (cada set una vez por ciclo)",
+        "times": "A horas fijas",
+        "off": "Desactivado (solo manual)"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "tracked_sets": {
+        "name": "Sets seguidos"
+      },
+      "all_time_lows": {
+        "name": "Sets en mínimo histórico"
+      },
+      "high_discounts": {
+        "name": "Sets con gran descuento"
+      },
+      "collection_value": {
+        "name": "Valor de la colección"
+      },
+      "collection_cost": {
+        "name": "Coste de la colección"
+      },
+      "collection_growth": {
+        "name": "Crecimiento de la colección"
+      },
+      "wishlist_cost": {
+        "name": "Coste de la lista de deseos (mejores precios)"
+      },
+      "targets_reached": {
+        "name": "Sets en precio objetivo"
+      },
+      "offers_with_errors": {
+        "name": "Ofertas con errores"
+      },
+      "best_deal": {
+        "name": "Mejor puntuación de oferta"
+      },
+      "retiring_soon": {
+        "name": "Sets que se retiran pronto"
+      }
+    }
+  }
+}

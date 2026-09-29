@@ -1,0 +1,101 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "LEGO Price Tracker",
+        "description": "La plupart des paramètres sont aussi disponibles dans le panneau LEGO Price Tracker sous Gestion → Paramètres.",
+        "data": {
+          "discount_threshold": "Seuil de remise (%) pour 'forte remise'",
+          "retailers": "Boutiques à contrôler",
+          "language": "Langue (panneau, notifications, userscript)",
+          "refresh_mode": "Contrôles automatiques des prix",
+          "spread_hours": "Cycle réparti : chaque set une fois toutes les … heures",
+          "refresh_times": "Heures fixes (seulement pour 'À heures fixes', p. ex. 07:30, 19:30)",
+          "digest_time": "Heure du résumé quotidien",
+          "min_history_days": "Jours d'historique minimum avant qu'un 'prix le plus bas' compte",
+          "use_impersonation": "Imiter le navigateur Chrome (curl_cffi ; beaucoup moins de blocages)",
+          "notify_service": "Service notify pour les deals (facultatif ; mieux : l'onglet Notifications du panneau)",
+          "brickset_api_key": "Clé API Brickset (facultative, gratuite)",
+          "rebrickable_api_key": "Clé API Rebrickable (facultative, gratuite)"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Déjà configuré"
+    },
+    "error": {
+      "invalid_times": "Indiquez 1 à 6 heures au format HH:MM, séparées par des virgules"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "LEGO Price Tracker",
+        "description": "La plupart des paramètres sont aussi disponibles dans le panneau LEGO Price Tracker sous Gestion → Paramètres.",
+        "data": {
+          "discount_threshold": "Seuil de remise (%) pour 'forte remise'",
+          "retailers": "Boutiques à contrôler",
+          "language": "Langue (panneau, notifications, userscript)",
+          "refresh_mode": "Contrôles automatiques des prix",
+          "spread_hours": "Cycle réparti : chaque set une fois toutes les … heures",
+          "refresh_times": "Heures fixes (seulement pour 'À heures fixes', p. ex. 07:30, 19:30)",
+          "digest_time": "Heure du résumé quotidien",
+          "min_history_days": "Jours d'historique minimum avant qu'un 'prix le plus bas' compte",
+          "use_impersonation": "Imiter le navigateur Chrome (curl_cffi ; beaucoup moins de blocages)",
+          "notify_service": "Service notify pour les deals (facultatif ; mieux : l'onglet Notifications du panneau)",
+          "brickset_api_key": "Clé API Brickset (facultative, gratuite)",
+          "rebrickable_api_key": "Clé API Rebrickable (facultative, gratuite)"
+        }
+      }
+    },
+    "error": {
+      "invalid_times": "Indiquez 1 à 6 heures au format HH:MM, séparées par des virgules"
+    }
+  },
+  "selector": {
+    "refresh_mode": {
+      "options": {
+        "spread": "Réparti sur la journée (chaque set une fois par cycle)",
+        "times": "À heures fixes",
+        "off": "Désactivé (manuel uniquement)"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "tracked_sets": {
+        "name": "Sets suivis"
+      },
+      "all_time_lows": {
+        "name": "Sets au prix le plus bas"
+      },
+      "high_discounts": {
+        "name": "Sets avec forte remise"
+      },
+      "collection_value": {
+        "name": "Valeur de la collection"
+      },
+      "collection_cost": {
+        "name": "Coût de la collection"
+      },
+      "collection_growth": {
+        "name": "Croissance de la collection"
+      },
+      "wishlist_cost": {
+        "name": "Coût de la liste de souhaits (meilleurs prix)"
+      },
+      "targets_reached": {
+        "name": "Sets au prix cible"
+      },
+      "offers_with_errors": {
+        "name": "Offres en erreur"
+      },
+      "best_deal": {
+        "name": "Meilleur score deal"
+      },
+      "retiring_soon": {
+        "name": "Sets bientôt retirés"
+      }
+    }
+  }
+}

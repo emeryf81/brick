@@ -19,7 +19,7 @@ for name in ("const", "models", "shops", "parsers", "csv_import"):
 try:
     import pytest_homeassistant_custom_component  # noqa: F401
 except ImportError:  # logic-only run (tests/test_logic.py)
-    collect_ignore = ["test_integration.py", "test_fetcher.py"]
+    collect_ignore = ["test_integration.py", "test_fetcher.py", "test_i18n.py"]
 else:
     pytest_plugins = ["pytest_homeassistant_custom_component"]
 
@@ -31,3 +31,11 @@ else:
     def _allow_local_sockets(socket_enabled):
         """Fetcher tests talk to a local aiohttp server."""
         yield
+
+    @pytest.fixture(autouse=True)
+    def _english_again():
+        """The active language is module state: every test starts (and ends) in English."""
+        from custom_components.lego_tracker import i18n
+        i18n.set_language("en")
+        yield
+        i18n.set_language("en")

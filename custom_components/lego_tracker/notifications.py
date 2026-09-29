@@ -63,7 +63,7 @@ def default_rules(threshold: float, notify_service: str = "") -> list[dict[str, 
 
 
 def validate_rules(rules: Any) -> list[dict[str, Any]]:
-    """Clean user input. Raises ValueError with a Dutch message."""
+    """Clean user input. Raises LocalizedError (English template, translated)."""
     if not isinstance(rules, list) or len(rules) > 50:
         raise LocalizedError("Invalid list of rules (max 50).")
     out = []

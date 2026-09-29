@@ -3,17 +3,20 @@
     "step": {
       "user": {
         "title": "LEGO Price Tracker",
+        "description": "Most settings are also available in the LEGO Price Tracker panel under Manage → Settings.",
         "data": {
           "discount_threshold": "Discount threshold (%) for 'high discount'",
-          "retailers": "Retailers to check",
+          "retailers": "Shops to check",
+          "language": "Language (panel, notifications, userscript)",
+          "refresh_mode": "Automatic price checks",
+          "spread_hours": "Spread cycle: every set once every … hours",
+          "refresh_times": "Fixed times (only for 'At fixed times', e.g. 07:30, 19:30)",
           "digest_time": "Daily digest time",
           "min_history_days": "Minimum days of history before a 'record low' counts",
-          "brickset_api_key": "Brickset API key (optional, fills name/theme/RRP/image)",
-          "use_impersonation": "Mimic a Chrome browser (installs curl_cffi; far fewer blocks)",
-          "notify_service": "Notify service for deals (e.g. notify.mobile_app_phone, optional)",
-          "auto_refresh": "Fetch prices automatically",
-          "refresh_times": "Times (e.g. 07:30, 19:30)",
-          "rebrickable_api_key": "Rebrickable API key (optional, free; fills name/theme/year/pieces/image)"
+          "use_impersonation": "Imitate a Chrome browser (curl_cffi; far fewer blocks)",
+          "notify_service": "Notify service for deals (optional; better: the Notifications tab in the panel)",
+          "brickset_api_key": "Brickset API key (optional, free)",
+          "rebrickable_api_key": "Rebrickable API key (optional, free)"
         }
       }
     },
@@ -28,22 +31,34 @@
     "step": {
       "init": {
         "title": "LEGO Price Tracker",
+        "description": "Most settings are also available in the LEGO Price Tracker panel under Manage → Settings.",
         "data": {
           "discount_threshold": "Discount threshold (%) for 'high discount'",
-          "retailers": "Retailers to check",
+          "retailers": "Shops to check",
+          "language": "Language (panel, notifications, userscript)",
+          "refresh_mode": "Automatic price checks",
+          "spread_hours": "Spread cycle: every set once every … hours",
+          "refresh_times": "Fixed times (only for 'At fixed times', e.g. 07:30, 19:30)",
           "digest_time": "Daily digest time",
           "min_history_days": "Minimum days of history before a 'record low' counts",
-          "brickset_api_key": "Brickset API key (optional, fills name/theme/RRP/image)",
-          "use_impersonation": "Mimic a Chrome browser (installs curl_cffi; far fewer blocks)",
-          "notify_service": "Notify service for deals (e.g. notify.mobile_app_phone, optional)",
-          "auto_refresh": "Fetch prices automatically",
-          "refresh_times": "Times (e.g. 07:30, 19:30)",
-          "rebrickable_api_key": "Rebrickable API key (optional, free; fills name/theme/year/pieces/image)"
+          "use_impersonation": "Imitate a Chrome browser (curl_cffi; far fewer blocks)",
+          "notify_service": "Notify service for deals (optional; better: the Notifications tab in the panel)",
+          "brickset_api_key": "Brickset API key (optional, free)",
+          "rebrickable_api_key": "Rebrickable API key (optional, free)"
         }
       }
     },
     "error": {
       "invalid_times": "Enter 1 to 6 times as HH:MM, separated by commas"
+    }
+  },
+  "selector": {
+    "refresh_mode": {
+      "options": {
+        "spread": "Spread over the day (every set once per cycle)",
+        "times": "At fixed times",
+        "off": "Off (manual only)"
+      }
     }
   },
   "entity": {
@@ -80,6 +95,243 @@
       },
       "retiring_soon": {
         "name": "Sets retiring soon"
+      }
+    }
+  },
+  "services": {
+    "add_set": {
+      "name": "Add set",
+      "description": "Track a LEGO set (watchlist) or add it to your collection. Shop links and set data are looked up automatically.",
+      "fields": {
+        "set_number": {
+          "name": "Set number"
+        },
+        "name": {
+          "name": "Name"
+        },
+        "theme": {
+          "name": "Theme"
+        },
+        "subtheme": {
+          "name": "Subtheme"
+        },
+        "rrp": {
+          "name": "RRP"
+        },
+        "pieces": {
+          "name": "Pieces"
+        },
+        "target_price": {
+          "name": "Target price"
+        },
+        "owned": {
+          "name": "Owned"
+        },
+        "quantity": {
+          "name": "Quantity"
+        },
+        "paid": {
+          "name": "Paid (each)"
+        },
+        "purchase_date": {
+          "name": "Purchase date"
+        }
+      }
+    },
+    "remove_set": {
+      "name": "Remove set",
+      "description": "Stop tracking a set and delete its price history.",
+      "fields": {
+        "set_number": {
+          "name": "Set number"
+        }
+      }
+    },
+    "set_offer": {
+      "name": "Set shop link",
+      "description": "Link a shop product page (URL or ASIN) to a set by hand.",
+      "fields": {
+        "set_number": {
+          "name": "Set number"
+        },
+        "retailer": {
+          "name": "Shop"
+        },
+        "url": {
+          "name": "URL or ASIN"
+        }
+      }
+    },
+    "refresh": {
+      "name": "Refresh prices",
+      "description": "Fetch shop prices now (all sets, or one set).",
+      "fields": {
+        "set_number": {
+          "name": "Set number"
+        },
+        "force": {
+          "name": "Also try paused shops"
+        }
+      }
+    },
+    "import_collection": {
+      "name": "Import collection",
+      "description": "Import or update your collection from CSV text or a CSV file.",
+      "fields": {
+        "csv_text": {
+          "name": "CSV text"
+        },
+        "file_path": {
+          "name": "CSV file path"
+        },
+        "replace": {
+          "name": "Replace current collection"
+        },
+        "track_prices": {
+          "name": "Track prices"
+        }
+      }
+    },
+    "report_price": {
+      "name": "Report price",
+      "description": "Store a price for a tracked product (by URL, or by set number and shop). Used by the userscript and automations.",
+      "fields": {
+        "price": {
+          "name": "Price"
+        },
+        "url": {
+          "name": "Product URL"
+        },
+        "set_number": {
+          "name": "Set number"
+        },
+        "retailer": {
+          "name": "Shop"
+        }
+      }
+    },
+    "send_digest": {
+      "name": "Send digest",
+      "description": "Send the daily deals digest now.",
+      "fields": {}
+    },
+    "add_sets": {
+      "name": "Add sets",
+      "description": "Add several sets at once.",
+      "fields": {
+        "set_numbers": {
+          "name": "Set numbers"
+        },
+        "theme": {
+          "name": "Theme"
+        },
+        "owned": {
+          "name": "Owned"
+        }
+      }
+    },
+    "discover_offers": {
+      "name": "Find shop links",
+      "description": "Search every active shop for missing product links (background job).",
+      "fields": {
+        "set_number": {
+          "name": "Set number"
+        },
+        "force": {
+          "name": "Also try paused shops"
+        }
+      }
+    },
+    "enrich_sets": {
+      "name": "Fill in set data",
+      "description": "Fill in name, theme, RRP, image… from LEGO.com, Brickset and Rebrickable.",
+      "fields": {
+        "set_number": {
+          "name": "Set number"
+        },
+        "all": {
+          "name": "Also complete sets"
+        }
+      }
+    },
+    "verify_links": {
+      "name": "Verify links",
+      "description": "Judge all shop links again (right product, accessories, price).",
+      "fields": {}
+    },
+    "confirm_offer": {
+      "name": "Approve link",
+      "description": "Mark a shop link as the correct product.",
+      "fields": {
+        "set_number": {
+          "name": "Set number"
+        },
+        "retailer": {
+          "name": "Shop"
+        }
+      }
+    },
+    "remove_offer": {
+      "name": "Remove link",
+      "description": "Remove a shop link (and block it from being found again).",
+      "fields": {
+        "set_number": {
+          "name": "Set number"
+        },
+        "retailer": {
+          "name": "Shop"
+        },
+        "block": {
+          "name": "Block this link"
+        }
+      }
+    },
+    "cancel_job": {
+      "name": "Cancel job",
+      "description": "Stop the running background job after the current set.",
+      "fields": {}
+    },
+    "export_collection": {
+      "name": "Export collection",
+      "description": "Return the collection as CSV.",
+      "fields": {}
+    },
+    "export_data": {
+      "name": "Export data",
+      "description": "Return a full backup as JSON.",
+      "fields": {}
+    },
+    "import_data": {
+      "name": "Restore backup",
+      "description": "Restore a backup made with Export data (validated first).",
+      "fields": {
+        "data": {
+          "name": "Backup data"
+        },
+        "file_path": {
+          "name": "Backup file path"
+        },
+        "merge": {
+          "name": "Merge with current data"
+        }
+      }
+    },
+    "fix_offer": {
+      "name": "Fix shop link / price",
+      "description": "Set the correct link and/or a manual price for a set at a shop. Manual values always win over automatic ones.",
+      "fields": {
+        "set_number": {
+          "name": "Set number"
+        },
+        "retailer": {
+          "name": "Shop"
+        },
+        "url": {
+          "name": "URL or ASIN"
+        },
+        "price": {
+          "name": "Manual price"
+        }
       }
     }
   }

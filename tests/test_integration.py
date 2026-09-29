@@ -78,8 +78,9 @@ async def test_options_flow_and_reload(hass: HomeAssistant, entry):
     assert flow["type"] == "form"
     out = await hass.config_entries.options.async_configure(flow["flow_id"], {
         "discount_threshold": 40, "retailers": ["bol"], "digest_time": "09:00:00", "min_history_days": 2,
-        "auto_refresh": True, "refresh_times": "8:00, 20.15"})
+        "refresh_mode": "times", "refresh_times": "8:00, 20.15", "language": "nl", "spread_hours": 12})
     assert out["type"] == "create_entry"
+    assert entry.options["refresh_mode"] == "times" and entry.options["language"] == "nl" and entry.options["spread_hours"] == 12
     await hass.async_block_till_done()          # reload must not raise on re-registering panel/services
     assert entry.state.value == "loaded"
 
@@ -89,12 +90,13 @@ async def test_config_flow(hass: HomeAssistant):
     assert r["type"] == "form"
     r = await hass.config_entries.flow.async_configure(r["flow_id"], {
         "discount_threshold": 30, "retailers": ["bol", "kruidvat_be"], "digest_time": "08:00:00", "min_history_days": 3,
-        "auto_refresh": True, "refresh_times": "nooit"})
+        "refresh_mode": "times", "refresh_times": "nooit"})
     assert r["type"] == "form" and r["errors"] == {"refresh_times": "invalid_times"}
     r = await hass.config_entries.flow.async_configure(r["flow_id"], {
         "discount_threshold": 30, "retailers": ["bol", "kruidvat_be"], "digest_time": "08:00:00", "min_history_days": 3,
-        "auto_refresh": True, "refresh_times": "19:30, 7:30"})
+        "refresh_mode": "spread", "refresh_times": "19:30, 7:30"})
     assert r["type"] == "create_entry" and r["options"]["discount_threshold"] == 30
+    assert r["options"]["refresh_mode"] == "spread" and r["options"]["language"] == "en" and r["options"]["auto_refresh"]
     assert r["options"]["refresh_times"] == "07:30, 19:30"
 
 
@@ -579,3 +581,123 @@ async def test_logbook_records_everything(hass: HomeAssistant, entry, no_network
     assert len(us) == 2 and {e["level"] for e in us} == {"ok", "warning"}
     await ws.send_json({"id": 3, "type": "lego_tracker/log", "level": "problems", "retailer": "amazon_nl"})
     assert all(e["level"] in ("error", "warning") and (e.get("retailer") == "amazon_nl" or "amazon_nl" in (e.get("results") or {})) for e in (await ws.receive_json())["result"]["entries"])
+
+
+async def test_manual_link_and_price_win_until_cleared(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281", "rrp": 49.99}, blocking=True)
+    ws = await hass_ws_client(hass)
+    # add a link by hand for a shop without one
+    await ws.send_json({"id": 1, "type": "lego_tracker/offer/update", "set_number": "10281", "retailer": "bol",
+                        "url": "https://www.bol.com/nl/nl/p/lego-bonsai/9300000012345/"})
+    card = (await ws.receive_json())["result"]
+    bol = card["offers"]["bol"]
+    assert bol["manual_url"] and bol["link_status"] == "confirmed"
+    # a manual price wins over the automatic one and survives a refresh
+    await ws.send_json({"id": 2, "type": "lego_tracker/offer/update", "set_number": "10281", "retailer": "bol", "manual_price": "35.5"})
+    assert (await ws.receive_json())["success"]
+    await c.refresh_all()
+    o = c.store["offers"]["10281"]["bol"]
+    assert o["manual_price"]["price"] == 35.5 and o["auto_price"] == 30.0
+    assert c.compute()["statuses"]["10281"]["best_price"] == 35.5
+    # clearing the manual price hands the field back to automation
+    await ws.send_json({"id": 3, "type": "lego_tracker/offer/update", "set_number": "10281", "retailer": "bol", "manual_price": None})
+    card = (await ws.receive_json())["result"]
+    assert c.compute()["statuses"]["10281"]["best_price"] == 30.0 and "manual_price" not in o
+    # discover never replaces a manual link
+    assert c._missing("10281", ["bol"]) == []
+    # an invalid price is refused with a readable error
+    await ws.send_json({"id": 4, "type": "lego_tracker/offer/update", "set_number": "10281", "retailer": "bol", "manual_price": "abc"})
+    assert (await ws.receive_json())["error"]["message"] == "Invalid price."
+    # a price without a link is refused
+    await ws.send_json({"id": 5, "type": "lego_tracker/offer/update", "set_number": "10281", "retailer": "amazon_nl", "manual_price": 20})
+    assert "link" in (await ws.receive_json())["error"]["message"]
+    # clearing the link removes it without blocking it
+    c.store.setdefault("rejected", {})["10281"] = ["other-rejected"]
+    await ws.send_json({"id": 6, "type": "lego_tracker/offer/update", "set_number": "10281", "retailer": "bol", "url": ""})
+    assert (await ws.receive_json())["success"]
+    assert "bol" not in c.store["offers"]["10281"] and c.store["rejected"]["10281"] == ["other-rejected"]
+    msgs = [e["message"] for e in c.store["activity"]]
+    assert any("manual price €35.50" in m for m in msgs) and any("link cleared" in m for m in msgs)
+
+
+async def test_cleared_set_fields_are_refilled(hass: HomeAssistant, entry, no_network):
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281", "name": "My name", "rrp": 49.99}, blocking=True)
+    c.update_set("10281", {"name": "Custom", "rrp": 55})
+    s = c.store["sets"]["10281"]
+    assert s["name_source"] == "user" and s["rrp_source"] == "user"
+    with patch.object(c, "enrich_set", AsyncMock()) as enrich:
+        c.update_set("10281", {"rrp": ""})
+        await hass.async_block_till_done(wait_background_tasks=True)
+    assert "rrp" not in s and "rrp_source" not in s and s["name"] == "Custom"
+    enrich.assert_awaited_once_with("10281")
+
+
+async def test_spread_scheduler(hass: HomeAssistant, entry, no_network):
+    c = await _setup(hass, entry)
+    assert c.refresh_mode == "spread"
+    for n in ("10281", "42143", "21028"):
+        await hass.services.async_call(DOMAIN, "add_set", {"set_number": n}, blocking=True)
+        await hass.services.async_call(DOMAIN, "set_offer", {"set_number": n, "retailer": "bol",
+                                                             "url": f"https://www.bol.com/nl/nl/p/x/{n}00/"}, blocking=True)
+    assert c.spread_interval() == 24 * 3600 / 3
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "spread_hours": 1})
+    c = hass.data[DOMAIN][entry.entry_id] if entry.entry_id in hass.data[DOMAIN] else c
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][entry.entry_id]
+    assert c.spread_interval() == 1200
+    c.store["sets"]["42143"]["checked"] = 1          # oldest check goes first
+    c.store["sets"]["10281"]["checked"] = time.time()
+    c.store["sets"]["21028"]["checked"] = 5
+    assert c.next_spread_set() == "42143"
+    await c._spread_tick()
+    assert c.store["sets"]["42143"]["checked"] > 1 and c.next_spread_set() == "21028"
+    check = [e for e in c.store["activity"] if e["kind"] == "check"][-1]
+    assert check["source"] == "schedule" and check["results"]["bol"]["ok"] and check["set_number"] == "42143"
+    info = c.schedule_info()
+    assert info["mode"] == "spread" and info["per_hour"] == 3.0 and info["checked_24h"] == 2 and info["total"] == 3
+    for n in c.store["sets"]:
+        c.store["sets"][n]["checked"] = time.time()
+    assert c.next_spread_set() is None                # all recently checked: nothing to do
+    c.stop_spread()
+
+
+async def test_log_status_filter(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
+    for rid in ("bol", "amazon_nl"):
+        await hass.services.async_call(DOMAIN, "set_offer", {"set_number": "10281", "retailer": rid,
+                                                             "url": "https://www.bol.com/nl/nl/p/x/1/" if rid == "bol" else "https://www.amazon.nl/dp/B0AAAAAAAA"}, blocking=True)
+    no_network.side_effect = lambda rid, url: (Parsed(price=30.0), None) if rid == "bol" else (None, "blocked (HTTP 403)")
+    await c.refresh_all()
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/log", "kind": "check", "retailer": "amazon_nl", "status": "fail"})
+    res = (await ws.receive_json())["result"]
+    assert len(res["entries"]) == 1 and res["facets"]["retailer"].get("amazon_nl")
+    await ws.send_json({"id": 2, "type": "lego_tracker/log", "kind": "check", "retailer": "amazon_nl", "status": "ok"})
+    assert (await ws.receive_json())["result"]["entries"] == []
+    await ws.send_json({"id": 3, "type": "lego_tracker/log", "kind": "check", "retailer": "bol", "status": "ok"})
+    assert len((await ws.receive_json())["result"]["entries"]) == 1
+
+
+async def test_language_setting_translates_outbound_texts(hass: HomeAssistant, entry, hass_client_no_auth, hass_ws_client):
+    from custom_components.lego_tracker import i18n
+
+    c = await _setup(hass, entry)
+    assert c.language == "en" and i18n.tr("Shop paused") == "Shop paused"
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/settings/set", "fields": {"language": "nl"}})
+    assert (await ws.receive_json())["success"]
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][entry.entry_id]
+    assert c.language == "nl" and i18n.tr("Shop paused") != "Shop paused"
+    assert i18n.tr("€{price} at {shop}", price="9.99", shop="bol.com").startswith("€9.99")
+    with pytest.raises(ValueError, match="niet"):
+        c.update_offer("99999", "bol", manual_price=1)
+    client = await hass_client_no_auth()
+    text = await (await client.get("/api/lego_tracker/lego-tracker.user.js")).text()
+    assert "{{" not in text and "LEGO Price Tracker" in text
+    await ws.send_json({"id": 2, "type": "lego_tracker/settings/set", "fields": {"language": "xx"}})
+    assert not (await ws.receive_json())["success"]
+    i18n.set_language("en")

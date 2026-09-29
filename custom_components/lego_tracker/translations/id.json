@@ -1,0 +1,101 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "LEGO Price Tracker",
+        "description": "Sebagian besar pengaturan juga tersedia di panel LEGO Price Tracker pada Kelola → Pengaturan.",
+        "data": {
+          "discount_threshold": "Ambang diskon (%) untuk 'diskon besar'",
+          "retailers": "Toko yang diperiksa",
+          "language": "Bahasa (panel, notifikasi, userscript)",
+          "refresh_mode": "Pemeriksaan harga otomatis",
+          "spread_hours": "Siklus tersebar: setiap set sekali tiap … jam",
+          "refresh_times": "Waktu tetap (hanya untuk 'Pada waktu tetap', mis. 07:30, 19:30)",
+          "digest_time": "Waktu ringkasan harian",
+          "min_history_days": "Minimal hari riwayat sebelum 'harga terendah' dihitung",
+          "use_impersonation": "Tiru browser Chrome (curl_cffi; jauh lebih sedikit pemblokiran)",
+          "notify_service": "Layanan notify untuk promo (opsional; lebih baik: tab Notifikasi di panel)",
+          "brickset_api_key": "Kunci API Brickset (opsional, gratis)",
+          "rebrickable_api_key": "Kunci API Rebrickable (opsional, gratis)"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Sudah dikonfigurasi"
+    },
+    "error": {
+      "invalid_times": "Masukkan 1 sampai 6 waktu sebagai HH:MM, dipisahkan koma"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "LEGO Price Tracker",
+        "description": "Sebagian besar pengaturan juga tersedia di panel LEGO Price Tracker pada Kelola → Pengaturan.",
+        "data": {
+          "discount_threshold": "Ambang diskon (%) untuk 'diskon besar'",
+          "retailers": "Toko yang diperiksa",
+          "language": "Bahasa (panel, notifikasi, userscript)",
+          "refresh_mode": "Pemeriksaan harga otomatis",
+          "spread_hours": "Siklus tersebar: setiap set sekali tiap … jam",
+          "refresh_times": "Waktu tetap (hanya untuk 'Pada waktu tetap', mis. 07:30, 19:30)",
+          "digest_time": "Waktu ringkasan harian",
+          "min_history_days": "Minimal hari riwayat sebelum 'harga terendah' dihitung",
+          "use_impersonation": "Tiru browser Chrome (curl_cffi; jauh lebih sedikit pemblokiran)",
+          "notify_service": "Layanan notify untuk promo (opsional; lebih baik: tab Notifikasi di panel)",
+          "brickset_api_key": "Kunci API Brickset (opsional, gratis)",
+          "rebrickable_api_key": "Kunci API Rebrickable (opsional, gratis)"
+        }
+      }
+    },
+    "error": {
+      "invalid_times": "Masukkan 1 sampai 6 waktu sebagai HH:MM, dipisahkan koma"
+    }
+  },
+  "selector": {
+    "refresh_mode": {
+      "options": {
+        "spread": "Tersebar sepanjang hari (setiap set sekali per siklus)",
+        "times": "Pada waktu tetap",
+        "off": "Nonaktif (hanya manual)"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "tracked_sets": {
+        "name": "Set dipantau"
+      },
+      "all_time_lows": {
+        "name": "Set pada harga terendah"
+      },
+      "high_discounts": {
+        "name": "Set dengan diskon besar"
+      },
+      "collection_value": {
+        "name": "Nilai koleksi"
+      },
+      "collection_cost": {
+        "name": "Biaya koleksi"
+      },
+      "collection_growth": {
+        "name": "Pertumbuhan koleksi"
+      },
+      "wishlist_cost": {
+        "name": "Biaya daftar keinginan (harga terbaik)"
+      },
+      "targets_reached": {
+        "name": "Set pada harga target"
+      },
+      "offers_with_errors": {
+        "name": "Penawaran dengan kesalahan"
+      },
+      "best_deal": {
+        "name": "Skor promo terbaik"
+      },
+      "retiring_soon": {
+        "name": "Set yang segera pensiun"
+      }
+    }
+  }
+}

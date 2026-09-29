@@ -1,0 +1,101 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "LEGO Price Tracker",
+        "description": "大多数设置也可在 LEGO Price Tracker 面板的 管理 → 设置 中找到。",
+        "data": {
+          "discount_threshold": "“高折扣”的折扣阈值（%）",
+          "retailers": "要检查的商店",
+          "language": "语言（面板、通知、用户脚本）",
+          "refresh_mode": "自动价格检查",
+          "spread_hours": "分散周期：每个套装每 … 小时一次",
+          "refresh_times": "固定时间（仅用于“固定时间”，例如 07:30, 19:30）",
+          "digest_time": "每日摘要时间",
+          "min_history_days": "“历史最低”生效所需的最少历史天数",
+          "use_impersonation": "模拟 Chrome 浏览器（curl_cffi；大幅减少拦截）",
+          "notify_service": "优惠通知的 notify 服务（可选；更推荐：面板中的“通知”页）",
+          "brickset_api_key": "Brickset API 密钥（可选，免费）",
+          "rebrickable_api_key": "Rebrickable API 密钥（可选，免费）"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "已配置"
+    },
+    "error": {
+      "invalid_times": "请输入 1 到 6 个 HH:MM 格式的时间，用逗号分隔"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "LEGO Price Tracker",
+        "description": "大多数设置也可在 LEGO Price Tracker 面板的 管理 → 设置 中找到。",
+        "data": {
+          "discount_threshold": "“高折扣”的折扣阈值（%）",
+          "retailers": "要检查的商店",
+          "language": "语言（面板、通知、用户脚本）",
+          "refresh_mode": "自动价格检查",
+          "spread_hours": "分散周期：每个套装每 … 小时一次",
+          "refresh_times": "固定时间（仅用于“固定时间”，例如 07:30, 19:30）",
+          "digest_time": "每日摘要时间",
+          "min_history_days": "“历史最低”生效所需的最少历史天数",
+          "use_impersonation": "模拟 Chrome 浏览器（curl_cffi；大幅减少拦截）",
+          "notify_service": "优惠通知的 notify 服务（可选；更推荐：面板中的“通知”页）",
+          "brickset_api_key": "Brickset API 密钥（可选，免费）",
+          "rebrickable_api_key": "Rebrickable API 密钥（可选，免费）"
+        }
+      }
+    },
+    "error": {
+      "invalid_times": "请输入 1 到 6 个 HH:MM 格式的时间，用逗号分隔"
+    }
+  },
+  "selector": {
+    "refresh_mode": {
+      "options": {
+        "spread": "全天分散（每个套装每周期一次）",
+        "times": "固定时间",
+        "off": "关闭（仅手动）"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "tracked_sets": {
+        "name": "已跟踪的套装"
+      },
+      "all_time_lows": {
+        "name": "处于历史最低价的套装"
+      },
+      "high_discounts": {
+        "name": "高折扣套装"
+      },
+      "collection_value": {
+        "name": "收藏价值"
+      },
+      "collection_cost": {
+        "name": "收藏成本"
+      },
+      "collection_growth": {
+        "name": "收藏增长"
+      },
+      "wishlist_cost": {
+        "name": "愿望清单成本（最低价）"
+      },
+      "targets_reached": {
+        "name": "达到目标价的套装"
+      },
+      "offers_with_errors": {
+        "name": "有错误的商品"
+      },
+      "best_deal": {
+        "name": "最佳优惠评分"
+      },
+      "retiring_soon": {
+        "name": "即将停产的套装"
+      }
+    }
+  }
+}

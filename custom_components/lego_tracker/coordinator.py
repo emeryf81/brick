@@ -86,6 +86,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for e in self.store["collection"].values():
             if e.get("condition") in LEGACY_CONDITIONS:
                 e["condition"] = LEGACY_CONDITIONS[e["condition"]]
+        for offers in self.store["offers"].values():          # link reasons stored by versions < 0.9
+            for o in offers.values():
+                if o.get("link_status") == "confirmed" and o.get("link_reason") in ("handmatig goedgekeurd", "handmatig ingesteld"):
+                    o["link_reason"] = T("confirmed by hand")
         if "notify_rules" not in self.store:     # first run / upgrade: sensible defaults
             self.store["notify_rules"] = default_rules(self.threshold, self.opt(self.entry, CONF_NOTIFY, "") or "")
         cd = self.store.get("cooldowns") or {}
@@ -592,7 +596,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
     def settings_validate(self, fields: dict[str, Any]) -> dict[str, Any]:
-        """Merge + validate panel settings into a new options dict. Raises ValueError (Dutch message)."""
+        """Merge + validate panel settings into a new options dict. Raises LocalizedError."""
         from .models import parse_times
         from .shops import validate_custom_shop
 
@@ -651,8 +655,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for rid, tpl in (fields["shop_search"] or {}).items():
                 tpl = str(tpl or "").strip()
                 if tpl and not valid_search(tpl):
-                    raise LocalizedError("Search URL for {shop}: must start with https:// and contain {{query}} or {{number}}",
-                                         shop=RETAILERS.get(rid, (rid,))[0])
+                    raise LocalizedError("Search URL for {shop}: must start with https:// and contain {query} or {number}",
+                                         shop=RETAILERS.get(rid, (rid,))[0], query="{query}", number="{number}")
                 if tpl == DEFAULT_SEARCH.get(rid):
                     continue                     # default: don't store, so future default fixes still apply
                 searches[rid] = tpl
@@ -710,7 +714,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         offer = self._offer(set_number, retailer)
         self.log("ok", "link", T("link approved"), set_number=normalize_set_number(set_number), retailer=retailer,
                  url=offer.get("url"), source="panel")
-        offer["link_status"], offer["link_reason"] = "confirmed", "handmatig goedgekeurd"
+        offer["link_status"], offer["link_reason"] = "confirmed", T("confirmed by hand")
         self.push_update()
 
     def remove_offer(self, set_number: str, retailer: str, block: bool = True) -> None:
@@ -750,11 +754,12 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self.log("info", "link", T("link cleared: automatic search allowed again"), set_number=num,
                              retailer=retailer, url=offers[retailer].get("url"), source="panel")
                     del offers[retailer]
-                    rej = self.store.setdefault("rejected", {}).get(num, [])
-                    rej.clear()
                 manual_price = self._UNSET
             else:
                 new = normalize_url(retailer, str(url))
+                rej = self.store.setdefault("rejected", {}).get(num, [])
+                if url_key(retailer, new) in rej:          # chosen by hand: no longer blocked
+                    rej.remove(url_key(retailer, new))
                 old = offers.get(retailer)
                 if old and old.get("url") and url_key(retailer, old["url"]) == url_key(retailer, new):
                     old["url"] = new
@@ -881,7 +886,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if url_key(retailer, url) in rej:
             rej.remove(url_key(retailer, url))
         self.store["offers"].setdefault(num, {})[retailer] = {
-            "url": url, "history": [], "link_status": "confirmed", "link_reason": "handmatig ingesteld"}
+            "url": url, "history": [], "link_status": "confirmed", "link_reason": T("set by hand")}
         self.log("ok", "link", T("link set by hand"), set_number=num, retailer=retailer, url=url, source="panel")
         self.push_update()
 

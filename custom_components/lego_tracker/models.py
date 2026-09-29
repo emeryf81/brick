@@ -242,7 +242,7 @@ def link_check(offer: dict[str, Any], lego_set: dict[str, Any], set_number: str)
     from .parsers import slug_title, title_check  # local import: parsers imports this module
 
     if offer.get("link_status") == "confirmed":
-        return "confirmed", "handmatig goedgekeurd"
+        return "confirmed", T("confirmed by hand")
     if re.search(rf"lego\.com/[a-z]{{2}}-[a-z]{{2}}/product/[^?#]*?(?<!\d){re.escape(set_number)}/?(?:[?#]|$)", offer.get("url") or ""):
         return "ok", T("official LEGO.com page of this set")
     title = offer.get("title")
@@ -453,6 +453,7 @@ def add_activity(store: dict[str, Any], level: str, kind: str, message: str, *, 
             if prev["message"] == message and prev["level"] == level:
                 prev["count"] = prev.get("count", 1) + 1
                 prev["ts"] = now
+                prev.update(fields)             # keep the latest details (e.g. per-shop results)
                 return prev
             break
     entry = {"id": f"{int(now * 1000):x}{len(log) % 1000:03d}", "ts": now, "level": level, "kind": kind,
