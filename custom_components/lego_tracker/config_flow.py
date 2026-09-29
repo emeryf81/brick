@@ -85,7 +85,7 @@ class LegoTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             try:
-                return self.async_create_entry(title="LEGO Price Tracker", data={},
+                return self.async_create_entry(title="LEGO Organizing Tool", data={},
                                                options={**_clean(user_input), CONF_KNOWN_SHOPS: list(BUILTIN_RETAILERS)})
             except InvalidTimes:
                 errors[CONF_REFRESH_TIMES] = "invalid_times"
