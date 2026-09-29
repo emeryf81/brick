@@ -1,6 +1,7 @@
 """Config + options flow."""
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import voluptuous as vol
@@ -9,9 +10,9 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
-    CONF_BRICKSET_KEY, CONF_DIGEST_TIME, CONF_IMPERSONATE, CONF_NOTIFY, CONF_DISCOUNT_THRESHOLD, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
-    CONF_UPDATE_HOURS, DEFAULT_DIGEST_TIME, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS,
-    DEFAULT_RETAILERS, DEFAULT_UPDATE_HOURS, DOMAIN, RETAILERS,
+    BUILTIN_RETAILERS, CONF_KNOWN_SHOPS, CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_DIGEST_TIME, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, DEFAULT_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_DISCOUNT_THRESHOLD, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
+    DEFAULT_DIGEST_TIME, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS,
+    DEFAULT_RETAILERS, DOMAIN, RETAILERS,
 )
 
 
@@ -23,22 +24,34 @@ def _schema(d: dict[str, Any]) -> vol.Schema:
         vol.Required(CONF_RETAILERS, default=d.get(CONF_RETAILERS, DEFAULT_RETAILERS)):
             selector.SelectSelector(selector.SelectSelectorConfig(
                 options=[{"value": k, "label": v[0]} for k, v in RETAILERS.items()], multiple=True)),
-        vol.Required(CONF_UPDATE_HOURS, default=d.get(CONF_UPDATE_HOURS, DEFAULT_UPDATE_HOURS)):
-            selector.NumberSelector(selector.NumberSelectorConfig(min=1, max=48, step=1, unit_of_measurement="h",
-                                                                  mode=selector.NumberSelectorMode.BOX)),
+        vol.Required(CONF_AUTO_REFRESH, default=d.get(CONF_AUTO_REFRESH, True)): selector.BooleanSelector(),
+        vol.Required(CONF_REFRESH_TIMES, default=d.get(CONF_REFRESH_TIMES, DEFAULT_REFRESH_TIMES)): selector.TextSelector(),
         vol.Required(CONF_DIGEST_TIME, default=d.get(CONF_DIGEST_TIME, DEFAULT_DIGEST_TIME)): selector.TimeSelector(),
         vol.Required(CONF_MIN_HISTORY_DAYS, default=d.get(CONF_MIN_HISTORY_DAYS, DEFAULT_MIN_HISTORY_DAYS)):
             selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=90, step=1, unit_of_measurement="d",
                                                                   mode=selector.NumberSelectorMode.BOX)),
         vol.Required(CONF_IMPERSONATE, default=d.get(CONF_IMPERSONATE, True)): selector.BooleanSelector(),
         vol.Optional(CONF_NOTIFY, description={"suggested_value": d.get(CONF_NOTIFY, "")}): str,
+        vol.Optional(CONF_REBRICKABLE_KEY, description={"suggested_value": d.get(CONF_REBRICKABLE_KEY, "")}): str,
         vol.Optional(CONF_BRICKSET_KEY, description={"suggested_value": d.get(CONF_BRICKSET_KEY, "")}): str,
     })
 
 
+class InvalidTimes(ValueError):
+    pass
+
+
 def _clean(user_input: dict[str, Any]) -> dict[str, Any]:
     out = dict(user_input)
-    for k in (CONF_DISCOUNT_THRESHOLD, CONF_UPDATE_HOURS, CONF_MIN_HISTORY_DAYS):
+    times = re.findall(r"(\d{1,2})[:.hu](\d{2})", str(out.get(CONF_REFRESH_TIMES, "")))
+    valid = sorted({f"{int(h):02d}:{m}" for h, m in times if int(h) < 24 and int(m) < 60})
+    if out.get(CONF_AUTO_REFRESH) and not valid:
+        raise InvalidTimes
+    if len(valid) > 6:
+        raise InvalidTimes
+    out[CONF_REFRESH_TIMES] = ", ".join(valid) or DEFAULT_REFRESH_TIMES
+    out.pop("update_hours", None)
+    for k in (CONF_DISCOUNT_THRESHOLD, CONF_MIN_HISTORY_DAYS):
         out[k] = int(out[k])
     return out
 
@@ -49,9 +62,14 @@ class LegoTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if self._async_current_entries():
             return self.async_abort(reason="single_instance_allowed")
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_create_entry(title="LEGO Price Tracker", data={}, options=_clean(user_input))
-        return self.async_show_form(step_id="user", data_schema=_schema({}))
+            try:
+                return self.async_create_entry(title="LEGO Price Tracker", data={},
+                                               options={**_clean(user_input), CONF_KNOWN_SHOPS: list(BUILTIN_RETAILERS)})
+            except InvalidTimes:
+                errors[CONF_REFRESH_TIMES] = "invalid_times"
+        return self.async_show_form(step_id="user", data_schema=_schema(user_input or {}), errors=errors)
 
     @staticmethod
     @callback
@@ -61,6 +79,12 @@ class LegoTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
 
 class LegoTrackerOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_create_entry(data=_clean(user_input))
-        return self.async_show_form(step_id="init", data_schema=_schema(dict(self.config_entry.options)))
+            try:
+                # merge: settings made in the panel (custom shops, keys, pauses…) must survive
+                return self.async_create_entry(data={**self.config_entry.options, **_clean(user_input)})
+            except InvalidTimes:
+                errors[CONF_REFRESH_TIMES] = "invalid_times"
+        return self.async_show_form(step_id="init", data_schema=_schema(user_input or dict(self.config_entry.options)),
+                                    errors=errors)

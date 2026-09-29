@@ -6,17 +6,22 @@
         "data": {
           "discount_threshold": "Discount threshold (%) for 'high discount'",
           "retailers": "Retailers to check",
-          "update_hours": "Refresh interval (hours)",
           "digest_time": "Daily digest time",
           "min_history_days": "Minimum days of history before a 'record low' counts",
           "brickset_api_key": "Brickset API key (optional, fills name/theme/RRP/image)",
           "use_impersonation": "Mimic a Chrome browser (installs curl_cffi; far fewer blocks)",
-          "notify_service": "Notify service for deals (e.g. notify.mobile_app_phone, optional)"
+          "notify_service": "Notify service for deals (e.g. notify.mobile_app_phone, optional)",
+          "auto_refresh": "Fetch prices automatically",
+          "refresh_times": "Times (e.g. 07:30, 19:30)",
+          "rebrickable_api_key": "Rebrickable API key (optional, free; fills name/theme/year/pieces/image)"
         }
       }
     },
     "abort": {
       "single_instance_allowed": "Already configured"
+    },
+    "error": {
+      "invalid_times": "Enter 1 to 6 times as HH:MM, separated by commas"
     }
   },
   "options": {
@@ -26,14 +31,19 @@
         "data": {
           "discount_threshold": "Discount threshold (%) for 'high discount'",
           "retailers": "Retailers to check",
-          "update_hours": "Refresh interval (hours)",
           "digest_time": "Daily digest time",
           "min_history_days": "Minimum days of history before a 'record low' counts",
           "brickset_api_key": "Brickset API key (optional, fills name/theme/RRP/image)",
           "use_impersonation": "Mimic a Chrome browser (installs curl_cffi; far fewer blocks)",
-          "notify_service": "Notify service for deals (e.g. notify.mobile_app_phone, optional)"
+          "notify_service": "Notify service for deals (e.g. notify.mobile_app_phone, optional)",
+          "auto_refresh": "Fetch prices automatically",
+          "refresh_times": "Times (e.g. 07:30, 19:30)",
+          "rebrickable_api_key": "Rebrickable API key (optional, free; fills name/theme/year/pieces/image)"
         }
       }
+    },
+    "error": {
+      "invalid_times": "Enter 1 to 6 times as HH:MM, separated by commas"
     }
   },
   "entity": {

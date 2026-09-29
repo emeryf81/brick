@@ -26,6 +26,7 @@ set_offer:
 refresh:
   fields:
     set_number: {selector: {text: {}}}
+    force: {default: false, selector: {boolean: {}}}
 import_collection:
   fields:
     csv_text: {selector: {text: {multiline: true}}}
@@ -50,6 +51,22 @@ add_sets:
 discover_offers:
   fields:
     set_number: {selector: {text: {}}}
+    force: {default: false, selector: {boolean: {}}}
+enrich_sets:
+  fields:
+    set_number: {selector: {text: {}}}
+    all: {default: false, selector: {boolean: {}}}
+verify_links: {}
+confirm_offer:
+  fields:
+    set_number: {required: true, selector: {text: {}}}
+    retailer: {required: true, selector: {select: {options: [amazon_nl, amazon_de, amazon_be, bol, kruidvat_be]}}}
+remove_offer:
+  fields:
+    set_number: {required: true, selector: {text: {}}}
+    retailer: {required: true, selector: {select: {options: [amazon_nl, amazon_de, amazon_be, bol, kruidvat_be]}}}
+    block: {default: true, selector: {boolean: {}}}
+cancel_job: {}
 export_collection: {}
 export_data: {}
 import_data:

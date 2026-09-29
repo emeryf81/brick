@@ -1,29 +1,39 @@
 // ==UserScript==
 // @name         LEGO Price Tracker -> Home Assistant
 // @namespace    https://github.com/emeryf81/lot
-// @version      0.1.0
-// @description  Stuurt de prijs van LEGO-productpagina's die je zelf bezoekt naar je Home Assistant (lego_tracker.report_price).
-// @match        https://www.amazon.nl/*
-// @match        https://www.amazon.de/*
-// @match        https://www.amazon.com.be/*
-// @match        https://www.bol.com/*
-// @match        https://www.kruidvat.be/*
+// @version      {{VERSION}}
+// @description  Stuurt prijs en producttitel van LEGO-pagina's die je zelf bezoekt naar je Home Assistant (lego_tracker.report_price).
+{{MATCHES}}
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
 // @connect      *
+// @downloadURL  {{SELF_URL}}
+// @updateURL    {{SELF_URL}}
 // ==/UserScript==
-// Werkt in Tampermonkey/Violentmonkey. Jouw eigen browser wordt niet als bot geblokkeerd.
-// Stel via het Tampermonkey-menu "HA instellen" je HA-URL en een long-lived access token in
-// (Home Assistant -> profiel -> Beveiliging). Alleen prijzen van sets die al gevolgd worden
-// (zelfde product-URL) worden bijgewerkt; andere pagina's geven een stille 400 en doen niets.
+// Door Home Assistant gegenereerd voor {{HA_URL}}. Jouw eigen browser wordt niet als bot geblokkeerd.
+// Eenmalig: Tampermonkey-menu → "HA instellen" → plak een long-lived access token
+// (Home Assistant → profiel → Beveiliging → Long-lived access tokens).
+// Alleen producten die de integratie al volgt (zelfde URL/ASIN) worden bijgewerkt; andere pagina's doen niets.
 (function () {
   "use strict";
+  const DEFAULT_HA = "{{HA_URL}}";
+  if (!GM_getValue("ha_url", "")) GM_setValue("ha_url", DEFAULT_HA);
   GM_registerMenuCommand("HA instellen", () => {
-    GM_setValue("ha_url", prompt("Home Assistant URL (bv. http://homeassistant.local:8123)", GM_getValue("ha_url", "")) || "");
-    GM_setValue("ha_token", prompt("Long-lived access token", GM_getValue("ha_token", "")) || "");
+    const url = prompt("Home Assistant URL", GM_getValue("ha_url", DEFAULT_HA));
+    if (url !== null) GM_setValue("ha_url", url.trim());
+    const token = prompt("Long-lived access token (profiel → Beveiliging)", GM_getValue("ha_token", ""));
+    if (token !== null) GM_setValue("ha_token", token.trim());
   });
+  const note = (text, ok) => {
+    const d = document.createElement("div");
+    d.textContent = "🧱 " + text;
+    d.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:2147483647;padding:10px 14px;border-radius:10px;font:13px system-ui;color:#fff;box-shadow:0 6px 20px rgba(0,0,0,.3);background:" + (ok ? "#0b5d22" : "#8e0b0c");
+    document.body.appendChild(d); setTimeout(() => d.remove(), 3500);
+  };
+  const pageTitle = () => (document.querySelector("#productTitle, h1[data-test='title'], h1")?.textContent
+    || document.querySelector('meta[property="og:title"]')?.content || document.title || "").replace(/\s+/g, " ").trim().slice(0, 300);
   const parse = (t) => {
     if (t == null) return null;
     let s = String(t).replace(/[^\d.,]/g, "");
@@ -65,7 +75,7 @@
   }
   function report() {
     const ha = GM_getValue("ha_url", ""), token = GM_getValue("ha_token", "");
-    if (!ha || !token) return;
+    if (!ha || !token) { if (!GM_getValue("hinted", false)) { GM_setValue("hinted", true); note("LEGO Price Tracker: stel je token in via het Tampermonkey-menu → HA instellen", false); } return; }
     const price = fromDom() ?? fromJsonLd();
     if (!price) return;
     const key = "sent:" + location.pathname, last = GM_getValue(key, 0);
@@ -73,8 +83,8 @@
     GM_xmlhttpRequest({
       method: "POST", url: ha.replace(/\/$/, "") + "/api/services/lego_tracker/report_price",
       headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
-      data: JSON.stringify({ url: location.href, price }),
-      onload: (r) => { if (r.status === 200) GM_setValue(key, Date.now()); },
+      data: JSON.stringify({ url: location.href, price, title: pageTitle() }),
+      onload: (r) => { if (r.status === 200) { GM_setValue(key, Date.now()); note(`Prijs €${price.toFixed(2)} naar Home Assistant gestuurd`, true); } else if (r.status === 401) note("Home Assistant weigert het token (401)", false); },
     });
   }
   setTimeout(report, 2500);   // wait for late-rendered prices

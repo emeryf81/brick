@@ -140,9 +140,47 @@ def test_amazon_offscreen_and_block():
 
 
 def test_search_result_finders():
-    az = '<div data-asin="B0ABCDEFGH"><span>LEGO Icons Bonsai Boom 10281</span></div><div data-asin="B0ZZZZZZZZ"><span>Other</span></div>'
+    az = ('<div data-asin="B0LEDLEDLE"><h2><span>Led-verlichting voor LEGO 10281 Bonsai Boom (geen LEGO)</span></h2></div>'
+          '<div data-asin="B0KEEPPLEY"><h2><span>Keeppley 10281 bonsai compatibel</span></h2></div>'
+          '<div data-asin="B0ABCDEFGH"><h2 class="a-size-base"><span>LEGO Icons Bonsai Boom 10281</span></h2><span>€ 39,99</span></div>'
+          '<div data-asin="B0ZZZZZZZZ"><h2><span>Other</span></h2></div>')
     assert parsers.find_search_result("amazon_be", az, "10281") == "https://www.amazon.com.be/dp/B0ABCDEFGH"
     assert parsers.find_search_result("bol", '<a href="/nl/nl/p/lego-icons-bonsai-10281/9300000?x=1">', "10281") == "https://www.bol.com/nl/nl/p/lego-icons-bonsai-10281/9300000"
+    assert parsers.find_search_result("bol", '<a href="/nl/nl/p/led-verlichting-voor-lego-10281/93/">', "10281") is None
+    # old bug: kruidvat accepted any LEGO product
+    assert parsers.find_search_result("kruidvat_be", '<a href="/nl/lego-city-politiebureau-60316/p/123">', "10281") is None
+    assert parsers.find_search_result("kruidvat_be", '<a href="/nl/lego-icons-bonsai-10281/p/456">', "10281") == "https://www.kruidvat.be/nl/lego-icons-bonsai-10281/p/456"
+
+
+def test_title_check_and_clean_title():
+    tc = parsers.title_check
+    assert tc("Led-verlichting voor Lego 21028 Architecture New York", "21028")[0] == "suspect"
+    assert tc("Acryl transparante vitrine voor LEGO 42043", "42043")[0] == "suspect"
+    assert "ander merk" in tc("Keeppley City Corner compatibel met LEGO 356", "356")[1]
+    assert "staat niet" in tc("LEGO Speed Champions BMW M3 (E30) 77263", "358")[1]
+    assert tc("LEGO 102810 something", "10281")[0] == "suspect"            # no partial number match
+    assert tc("LEGO Icons 10311 Orchidee", "10311") == ("ok", "titel bevat setnummer")
+    assert tc(None, "1")[0] is None
+    assert parsers.clean_title("LEGO Icons 10311 Orchidee, kunstplanten | bol.com", "10311") == "Icons Orchidee"
+
+
+def test_link_check():
+    lc = models.link_check
+    assert lc({"title": "LEGO 10311 Orchidee"}, {}, "10311")[0] == "ok"
+    assert lc({"title": "LED kit for LEGO 10311"}, {}, "10311")[0] == "suspect"
+    assert lc({"url": "https://www.bol.com/nl/nl/p/vitrine-voor-lego-10311/93/"}, {}, "10311")[0] == "suspect"
+    assert lc({"url": "https://www.amazon.nl/dp/B0ABCDEFGH"}, {}, "10311")[0] is None
+    assert "te laag" in lc({"title": "LEGO 10311", "history": [[1, 9.99]]}, {"rrp": 49.99}, "10311")[1]
+    assert lc({"title": "LED kit", "link_status": "confirmed"}, {}, "10311")[0] == "confirmed"
+
+
+def test_suspect_offers_do_not_count():
+    now = time.time()
+    good, bad = {}, {"link_status": "suspect"}
+    models.record_price(good, 45.0, now=now)
+    models.record_price(bad, 12.0, now=now)
+    st = models.compute_set_status({"rrp": 50}, {"bol": good, "amazon_nl": bad}, threshold=25, min_history_days=0, now=now)
+    assert st["best_price"] == 45.0 and st["all_time_low"] == 45.0 and st["offers_suspect"] == 1
 
 
 def test_url_key_and_retailer_detection():
@@ -298,3 +336,52 @@ def test_backup_validation_rejects_bad_offers():
         models.validate_backup(base)
     with pytest.raises(ValueError, match="onbekende set"):
         models.validate_backup({"sets": {}, "offers": {"1": {}}})
+
+
+# ---------------------------------------------------------------- 0.6.0
+def test_parse_times():
+    assert models.parse_times("19.30, 7:05 en 23u00, 25:00, 7:05") == ["07:05", "19:30", "23:00"]
+    assert models.parse_times("") == []
+
+
+def test_value_source_and_value_history():
+    store = models.new_store()
+    store["sets"]["1"] = {"rrp": 100}
+    rows = [{"set_number": "1", "qty": 1, "paid": 80, "current_value": 150.0}]
+    csv_import.apply_import(store, rows, now=1_000_000)
+    csv_import.apply_import(store, [dict(rows[0], current_value=150.0)], now=1_100_000)   # unchanged: no new point
+    csv_import.apply_import(store, [dict(rows[0], current_value=175.0)], now=1_200_000)
+    assert store["collection"]["1"]["value_history"] == [[1_000_000, 150.0], [1_200_000, 175.0]]
+    st = {"1": {"best_price": 90.0}}
+    assert models.collection_summary(store, st)["value"] == 90.0          # shop first (default)
+    store["value_source"] = "import_first"
+    assert models.collection_summary(store, st)["value"] == 175.0
+    # replace keeps the history of sets that are in the new file, and drops the others
+    csv_import.apply_import(store, [dict(rows[0], current_value=180.0), {"set_number": "2", "qty": 1}],
+                            replace=True, now=1_300_000)
+    assert len(store["collection"]["1"]["value_history"]) == 3
+    csv_import.apply_import(store, [{"set_number": "2", "qty": 1}], replace=True)
+    assert "1" not in store["collection"]
+
+
+def test_custom_shops_registry_and_generic_search():
+    from lego_pkg import shops
+    from lego_pkg.const import RETAILERS, GENERIC_SHOPS
+    with pytest.raises(ValueError):
+        shops.validate_custom_shop({"name": "x", "domain": "not a domain"})
+    with pytest.raises(ValueError):
+        shops.validate_custom_shop({"name": "x", "domain": "shop.be", "search": "https://evil.com/?q={query}"})
+    shops.apply_shop_options({"custom_shops": [{"name": "Speelgoed Van Dijk", "domain": "https://www.vandijk.be/",
+                                                "search": "https://www.vandijk.be/zoek?q={query}"}],
+                              "shop_search": {"dreamland_be": "https://www.dreamland.be/zoeken?term={query}"}})
+    assert RETAILERS["c_speelgoed_van_dijk"][0] == "Speelgoed Van Dijk"
+    assert parsers.search_url("c_speelgoed_van_dijk", "10311") == "https://www.vandijk.be/zoek?q=LEGO+10311"
+    assert parsers.search_url("dreamland_be", "10311") == "https://www.dreamland.be/zoeken?term=LEGO+10311"
+    assert parsers.retailer_from_url("https://www.vandijk.be/p/lego-10311") == "c_speelgoed_van_dijk"
+    assert parsers.normalize_url("c_speelgoed_van_dijk", "https://www.vandijk.be/p/1#x") == "https://www.vandijk.be/p/1"
+    page = ('<a href="/zoek?q=lego">zoek</a><a href="/p/led-set-lego-10311">LED verlichting LEGO 10311</a>'
+            '<a href="https://www.vandijk.be/p/lego-icons-orchidee-10311-123"><span>LEGO Icons 10311 Orchidee</span></a>')
+    assert parsers.find_search_result("c_speelgoed_van_dijk", page, "10311") == "https://www.vandijk.be/p/lego-icons-orchidee-10311-123"
+    shops.apply_shop_options({})                      # removing custom shops cleans the registry
+    assert "c_speelgoed_van_dijk" not in RETAILERS and "dreamland_be" in RETAILERS
+    assert GENERIC_SHOPS["dreamland_be"]["search"].startswith("https://www.dreamland.be/")

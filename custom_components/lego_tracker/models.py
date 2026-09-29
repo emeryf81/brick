@@ -21,7 +21,7 @@ def normalize_set_number(value: str | int) -> str:
 
 
 def new_store() -> dict[str, Any]:
-    return {"sets": {}, "offers": {}, "collection": {}, "snapshots": [], "events": []}
+    return {"sets": {}, "offers": {}, "collection": {}, "snapshots": [], "events": [], "rejected": {}, "cooldowns": {}}
 
 
 def parse_price(text: str | float | int | None) -> float | None:
@@ -87,14 +87,20 @@ def price_at(history: list[list[float]], ts: float) -> float | None:
     return result
 
 
+def trusted(offers: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Offers whose link is not flagged as pointing to the wrong product."""
+    return {rid: o for rid, o in offers.items() if o.get("link_status") != "suspect"}
+
+
 def best_offer(offers: dict[str, dict[str, Any]]) -> tuple[str, dict[str, Any]] | None:
-    """Cheapest currently available offer."""
-    live = [(rid, o) for rid, o in offers.items() if o.get("available") and o.get("last_price")]
+    """Cheapest currently available offer (suspect links excluded)."""
+    live = [(rid, o) for rid, o in trusted(offers).items() if o.get("available") and o.get("last_price")]
     return min(live, key=lambda x: x[1]["last_price"]) if live else None
 
 
 def combined_history(offers: dict[str, dict[str, Any]]) -> list[list[float]]:
-    """Cheapest-of-all-retailers series (forward filled) across all timestamps."""
+    """Cheapest-of-all-retailers series (forward filled) across all timestamps; suspect links excluded."""
+    offers = trusted(offers)
     stamps = sorted({t for o in offers.values() for t, _ in o.get("history", [])})
     out: list[list[float]] = []
     for ts in stamps:
@@ -124,6 +130,7 @@ def compute_set_status(
         "price_per_piece": None, "change_7d": None, "change_30d": None,
         "target_price": lego_set.get("target_price"), "target_hit": False,
         "offers_error": sum(1 for o in offers.values() if o.get("error")),
+        "offers_suspect": sum(1 for o in offers.values() if o.get("link_status") == "suspect"),
         "deal_score": 0, "deal_label": None, **retirement_status(lego_set, now),
     }
     status["offers_live"] = sum(1 for o in offers.values() if o.get("available"))
@@ -201,6 +208,33 @@ def retirement_status(lego_set: dict[str, Any], now: float | None = None) -> dic
     }
 
 
+def link_check(offer: dict[str, Any], lego_set: dict[str, Any], set_number: str) -> tuple[str | None, str]:
+    """Is this shop link the right product? Uses the page title (or URL slug) and the price.
+
+    Returns (status, reason) with status 'ok', 'suspect' or None (cannot judge yet).
+    A manual 'confirmed' is never overridden."""
+    from .parsers import slug_title, title_check  # local import: parsers imports this module
+
+    if offer.get("link_status") == "confirmed":
+        return "confirmed", "handmatig goedgekeurd"
+    title = offer.get("title")
+    status, reason = title_check(title, set_number) if title else (None, "")
+    if status is None and offer.get("url"):
+        slug = slug_title(offer["url"])
+        if slug:
+            status, reason = title_check(f"lego {slug}", set_number)
+            reason = f"URL: {reason}"
+    if status == "suspect":
+        return status, reason
+    rrp = lego_set.get("rrp")
+    low = min((p for _, p in offer.get("history", [])), default=None)
+    if rrp and low is not None and low < rrp * 0.3:
+        return "suspect", f"prijs €{low:.2f} is veel te laag voor deze set (adviesprijs €{rrp:.2f})"
+    if status is None:
+        return None, "nog geen producttitel bekend (wordt ingevuld bij de volgende prijsronde)"
+    return status, reason
+
+
 def is_suspicious_price(price: float, lego_set: dict[str, Any], offer: dict[str, Any]) -> str | None:
     """Catch parse errors (accessory/marketplace/multi-pack prices) before they pollute history."""
     rrp = lego_set.get("rrp")
@@ -217,15 +251,25 @@ def is_suspicious_price(price: float, lego_set: dict[str, Any], offer: dict[str,
 
 
 # ----------------------------------------------------------------- collection
-def collection_value(entry: dict[str, Any], status: dict[str, Any], lego_set: dict[str, Any]) -> tuple[float, str]:
-    """Value of one unit and where it came from."""
-    if status.get("best_price"):
-        return status["best_price"], "tracked"
-    if entry.get("current_value"):
-        return float(entry["current_value"]), "imported"
+def collection_value(entry: dict[str, Any], status: dict[str, Any], lego_set: dict[str, Any],
+                     prefer_import: bool = False) -> tuple[float, str]:
+    """Value of one unit and where it came from.
+
+    shop_first (default): cheapest current shop price, else the imported value (e.g. BrickEconomy), else RRP.
+    import_first: imported value first (better for retired sets that shops no longer sell new)."""
+    shop = status.get("best_price")
+    imported = entry.get("current_value")
+    order = (("imported", imported), ("tracked", shop)) if prefer_import else (("tracked", shop), ("imported", imported))
+    for source, value in order:
+        if value:
+            return float(value), source
     if lego_set.get("rrp"):
         return float(lego_set["rrp"]), "rrp"
     return 0.0, "none"
+
+
+def _prefer_import(store: dict[str, Any]) -> bool:
+    return store.get("value_source") == "import_first"
 
 
 def _added_ts(entry: dict[str, Any]) -> float | None:
@@ -249,6 +293,7 @@ def collection_series(store: dict[str, Any], now: float | None = None, points: i
     if not coll:
         return []
     hists = {n: combined_history(store["offers"].get(n, {})) for n in coll}
+    pref = _prefer_import(store)
     starts = [h[0][0] for h in hists.values() if h]
     starts += [t for e in coll.values() if (t := _added_ts(e))]
     if not starts:
@@ -266,7 +311,13 @@ def collection_series(store: dict[str, Any], now: float | None = None, points: i
                 continue
             qty = int(entry.get("qty", 1) or 1)
             hist = hists[num]
-            unit = price_at(hist, t)
+            shop = price_at(hist, t)
+            imported = price_at(entry.get("value_history", []), t) or (
+                entry.get("current_value") if not entry.get("value_history") else None)
+            if pref:
+                unit = imported or shop
+            else:
+                unit = shop or imported
             if unit is None:
                 unit = entry.get("current_value") or store["sets"].get(num, {}).get("rrp") or 0
             value += qty * float(unit)
@@ -285,7 +336,7 @@ def collection_summary(store: dict[str, Any], statuses: dict[str, dict[str, Any]
     for num, entry in store["collection"].items():
         s = store["sets"].get(num, {})
         qty = int(entry.get("qty", 1) or 1)
-        unit, _ = collection_value(entry, statuses.get(num, {}), s)
+        unit, _ = collection_value(entry, statuses.get(num, {}), s, _prefer_import(store))
         value += qty * unit
         cost += qty * float(entry.get("paid") or 0)
         pieces += qty * int(s.get("pieces") or 0)
@@ -311,7 +362,7 @@ def collection_analytics(store: dict[str, Any], statuses: dict[str, dict[str, An
     for num, entry in store["collection"].items():
         s = store["sets"].get(num, {})
         qty = int(entry.get("qty", 1) or 1)
-        unit, _ = collection_value(entry, statuses.get(num, {}), s)
+        unit, _ = collection_value(entry, statuses.get(num, {}), s, _prefer_import(store))
         t = by_theme.setdefault(s.get("theme") or "Onbekend", {"count": 0, "value": 0.0, "cost": 0.0})
         t["count"] += qty
         t["value"] += unit * qty
@@ -346,6 +397,12 @@ def add_event(store: dict[str, Any], kind: str, payload: dict[str, Any], now: fl
     del events[: max(0, len(events) - keep)]
 
 
+def parse_times(raw: str) -> list[str]:
+    """'7:30, 19.30 en 23u05' -> ['07:30', '19:30', '23:05'] (sorted, unique, valid only)."""
+    out = {f"{int(h):02d}:{mm}" for h, mm in re.findall(r"(\d{1,2})[:.hu](\d{2})", raw or "") if int(h) < 24 and int(mm) < 60}
+    return sorted(out)
+
+
 def today_iso(now: float | None = None) -> str:
     return date.fromtimestamp(now or time.time()).isoformat()
 
@@ -376,7 +433,7 @@ def collection_rows(store: dict[str, Any], statuses: dict[str, dict[str, Any]]) 
     rows = []
     for num, entry in store["collection"].items():
         s = store["sets"].get(num, {})
-        unit, _ = collection_value(entry, statuses.get(num, {}), s)
+        unit, _ = collection_value(entry, statuses.get(num, {}), s, _prefer_import(store))
         rows.append({
             "Number": num, "Name": s.get("name", ""), "Theme": s.get("theme", ""), "Subtheme": s.get("subtheme", ""),
             "Year": s.get("year", ""), "Pieces": s.get("pieces", ""), "Qty": entry.get("qty", 1),

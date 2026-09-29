@@ -8,6 +8,7 @@ from __future__ import annotations
 import csv
 import io
 import re
+import time
 from datetime import date
 from typing import Any
 
@@ -230,8 +231,10 @@ def parse_collection_csv(text: str) -> tuple[list[dict[str, Any]], list[str]]:
 COLLECTION_FIELDS = ("qty", "paid", "current_value", "added", "condition", "location", "notes")
 
 
-def apply_import(store: dict[str, Any], rows: list[dict[str, Any]], replace: bool = False) -> dict[str, int]:
+def apply_import(store: dict[str, Any], rows: list[dict[str, Any]], replace: bool = False,
+                 now: float | None = None) -> dict[str, int]:
     """Merge validated rows into the store. Existing set metadata is kept when already filled."""
+    old_hist = {n: e.get("value_history") for n, e in store["collection"].items() if e.get("value_history")}
     if replace:
         store["collection"] = {}
     added = updated = 0
@@ -254,8 +257,15 @@ def apply_import(store: dict[str, Any], rows: list[dict[str, Any]], replace: boo
         for f in ("name", "theme", "subtheme", "year", "pieces", "rrp"):
             if r.get(f) and not s.get(f):
                 s[f] = r[f]
+                if f == "name":
+                    s["name_source"] = "import"
         entry = store["collection"].get(num)
         new = {k: r[k] for k in COLLECTION_FIELDS if k in r}
+        if "current_value" in new:   # keep a value history so the growth chart follows your re-imports
+            hist = list((entry or {}).get("value_history") or old_hist.get(num) or [])
+            if not hist or abs(hist[-1][1] - new["current_value"]) > 0.005:
+                hist.append([now or time.time(), new["current_value"]])
+            new["value_history"] = hist[-500:]
         if entry is None:
             store["collection"][num] = new
             added += 1

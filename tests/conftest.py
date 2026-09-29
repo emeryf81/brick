@@ -9,7 +9,7 @@ PKG = Path(__file__).parent.parent / "custom_components" / "lego_tracker"
 pkg = types.ModuleType("lego_pkg")
 pkg.__path__ = [str(PKG)]
 sys.modules["lego_pkg"] = pkg
-for name in ("const", "models", "parsers", "csv_import"):
+for name in ("const", "models", "shops", "parsers", "csv_import"):
     spec = importlib.util.spec_from_file_location(f"lego_pkg.{name}", PKG / f"{name}.py")
     mod = importlib.util.module_from_spec(spec)
     sys.modules[f"lego_pkg.{name}"] = mod
