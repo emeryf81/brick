@@ -1,10 +1,6 @@
 <p align="center"><img src="https://raw.githubusercontent.com/emeryf81/lot/main/images/logo.png" alt="LEGO Organizing Tool – Collection Manager &amp; Price Tracker for Home Assistant" width="340"></p>
 
-# lot – Lego Organizing Tool
-
-<img width="1024" height="559" alt="LEGO Price Tracker panel" src="https://github.com/user-attachments/assets/fe8aea1b-0443-4675-8136-d3f0b021fe98" />
-
-**LEGO Organizing Tool – collection manager & price tracker for Home Assistant**
+**LOT (LEGO Organizing Tool) – collection manager & price tracker for Home Assistant**
 <center><a href="https://www.buymeacoffee.com/emeryf" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;" ></a></center>
 
 *IMPORTANT*
