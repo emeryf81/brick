@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .i18n import LocalizedError
 from .const import BUILTIN_RETAILERS, DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, GENERIC_SHOPS, RETAILERS
 
 SEARCH: dict[str, str] = dict(DEFAULT_SEARCH)      # effective search template per shop
@@ -27,11 +28,11 @@ def validate_custom_shop(shop: dict[str, Any]) -> dict[str, str]:
     domain = re.sub(r"^https?://(www\.)?", "", str(shop.get("domain", "")).strip().lower()).split("/")[0]
     search = str(shop.get("search", "")).strip()
     if not name:
-        raise ValueError("Geef de winkel een naam.")
+        raise LocalizedError("Give the shop a name.")
     if not re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+", domain):
-        raise ValueError(f"Ongeldig domein {domain!r} (bv. dreamland.be).")
+        raise LocalizedError("Invalid domain {domain} (e.g. dreamland.be).", domain=domain)
     if search and (not valid_search(search) or domain not in search):
-        raise ValueError("Zoek-URL moet met https:// beginnen, op het domein van de winkel liggen en {query} of {number} bevatten.")
+        raise LocalizedError("The search URL must start with https://, be on the shop's domain and contain {query} or {number}.")
     return {"id": str(shop.get("id") or shop_id(name)), "name": name, "domain": domain, "search": search}
 
 

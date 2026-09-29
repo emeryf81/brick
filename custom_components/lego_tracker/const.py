@@ -20,6 +20,11 @@ CONF_NOTIFY = "notify_service"
 CONF_REBRICKABLE_KEY = "rebrickable_api_key"
 CONF_AUTO_REFRESH = "auto_refresh"
 CONF_REFRESH_TIMES = "refresh_times"
+CONF_REFRESH_MODE = "refresh_mode"          # spread | times | off
+CONF_SPREAD_HOURS = "spread_hours"
+DEFAULT_REFRESH_MODE = "spread"
+DEFAULT_SPREAD_HOURS = 24
+CONF_LANGUAGE = "language"
 DEFAULT_REFRESH_TIMES = "07:30, 19:30"
 
 DEFAULT_DISCOUNT_THRESHOLD = 25

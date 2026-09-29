@@ -8,6 +8,8 @@ from statistics import median
 from typing import Any
 
 from .const import MAX_HISTORY
+from .i18n import LocalizedError, T
+
 
 DAY = 86400
 
@@ -88,14 +90,21 @@ def price_at(history: list[list[float]], ts: float) -> float | None:
 
 
 def trusted(offers: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Offers whose link is not flagged as pointing to the wrong product."""
-    return {rid: o for rid, o in offers.items() if o.get("link_status") != "suspect"}
+    """Offers whose link is not flagged as pointing to the wrong product (manual links always count)."""
+    return {rid: o for rid, o in offers.items() if o.get("link_status") != "suspect" or o.get("manual_price")}
+
+
+def offer_price(o: dict[str, Any]) -> float | None:
+    """Price that counts for an offer: a manual price always wins over the automatic one."""
+    if (m := o.get("manual_price")) and m.get("price"):
+        return float(m["price"])
+    return o.get("last_price") if o.get("available") else None
 
 
 def best_offer(offers: dict[str, dict[str, Any]]) -> tuple[str, dict[str, Any]] | None:
     """Cheapest currently available offer (suspect links excluded)."""
-    live = [(rid, o) for rid, o in trusted(offers).items() if o.get("available") and o.get("last_price")]
-    return min(live, key=lambda x: x[1]["last_price"]) if live else None
+    live = [(rid, o) for rid, o in trusted(offers).items() if offer_price(o)]
+    return min(live, key=lambda x: offer_price(x[1])) if live else None
 
 
 def combined_history(offers: dict[str, dict[str, Any]]) -> list[list[float]]:
@@ -140,7 +149,7 @@ def compute_set_status(
     if not best:
         return status
     rid, offer = best
-    price = offer["last_price"]
+    price = offer_price(offer)
     status.update(best_price=price, best_retailer=rid, best_url=offer.get("url"))
     if status["all_time_low"] is not None:
         # "record low" needs enough history to be meaningful
@@ -168,7 +177,7 @@ def compute_set_status(
     ref = status["discount_rrp"] if status["discount_rrp"] is not None else status["discount_avg"]
     status["high_discount"] = ref is not None and ref >= threshold
     status["deal_score"] = deal_score(status)
-    status["deal_label"] = "Topdeal" if status["deal_score"] >= 70 else "Goede deal" if status["deal_score"] >= 45 else None
+    status["deal_label"] = "top" if status["deal_score"] >= 70 else "good" if status["deal_score"] >= 45 else None
     return status
 
 
@@ -214,7 +223,8 @@ def clean_history(offer: dict[str, Any], rrp: float | None) -> int:
     if not rrp:
         return 0
     hist = offer.get("history", [])
-    keep = [h for h in hist if rrp * 0.2 <= h[1] <= rrp * 4]
+    manual = (offer.get("manual_price") or {}).get("price")
+    keep = [h for h in hist if rrp * 0.2 <= h[1] <= rrp * 4 or (manual and abs(h[1] - manual) < 0.005)]
     removed = len(hist) - len(keep)
     if removed:
         offer["history"] = keep
@@ -232,24 +242,24 @@ def link_check(offer: dict[str, Any], lego_set: dict[str, Any], set_number: str)
     from .parsers import slug_title, title_check  # local import: parsers imports this module
 
     if offer.get("link_status") == "confirmed":
-        return "confirmed", "handmatig goedgekeurd"
+        return "confirmed", T("confirmed by hand")
     if re.search(rf"lego\.com/[a-z]{{2}}-[a-z]{{2}}/product/[^?#]*?(?<!\d){re.escape(set_number)}/?(?:[?#]|$)", offer.get("url") or ""):
-        return "ok", "officiële LEGO.com-pagina van deze set"
+        return "ok", T("official LEGO.com page of this set")
     title = offer.get("title")
     status, reason = title_check(title, set_number) if title else (None, "")
     if status is None and offer.get("url"):
         slug = slug_title(offer["url"])
         if slug:
             status, reason = title_check(f"lego {slug}", set_number)
-            reason = f"URL: {reason}"
+            reason = T("URL: {reason}", reason=reason)
     if status == "suspect":
         return status, reason
     rrp = lego_set.get("rrp")
     low = min((p for _, p in offer.get("history", [])), default=None)
     if rrp and low is not None and low < rrp * 0.3:
-        return "suspect", f"prijs €{low:.2f} is veel te laag voor deze set (adviesprijs €{rrp:.2f})"
+        return "suspect", T("price €{price} is far too low for this set (RRP €{rrp})", price=f"{low:.2f}", rrp=f"{rrp:.2f}")
     if status is None:
-        return None, "nog geen producttitel bekend (wordt ingevuld bij de volgende prijsronde)"
+        return None, T("no product title yet (filled in at the next price check)")
     return status, reason
 
 
@@ -257,14 +267,14 @@ def is_suspicious_price(price: float, lego_set: dict[str, Any], offer: dict[str,
     """Catch parse errors (accessory/marketplace/multi-pack prices) before they pollute history."""
     rrp = lego_set.get("rrp")
     if rrp and price < rrp * 0.2:
-        return f"verdachte prijs €{price:.2f} (<20% van adviesprijs) genegeerd"
+        return T("suspicious price €{price} (under 20% of RRP) ignored", price=f"{price:.2f}")
     if rrp and price > rrp * 4:
-        return f"verdachte prijs €{price:.2f} (>4× adviesprijs) genegeerd"
+        return T("suspicious price €{price} (over 4× RRP) ignored", price=f"{price:.2f}")
     prices = [p for _, p in offer.get("history", [])]
     if not rrp and len(prices) >= 3:
         mid = median(prices)
         if price < mid * 0.25 or price > mid * 4:
-            return f"verdachte prijs €{price:.2f} (wijkt sterk af van €{mid:.2f}) genegeerd"
+            return T("suspicious price €{price} (far from €{usual}) ignored", price=f"{price:.2f}", usual=f"{mid:.2f}")
     return None
 
 
@@ -381,14 +391,14 @@ def collection_analytics(store: dict[str, Any], statuses: dict[str, dict[str, An
         s = store["sets"].get(num, {})
         qty = int(entry.get("qty", 1) or 1)
         unit, _ = collection_value(entry, statuses.get(num, {}), s, _prefer_import(store))
-        t = by_theme.setdefault(s.get("theme") or "Onbekend", {"count": 0, "value": 0.0, "cost": 0.0})
+        t = by_theme.setdefault(s.get("theme") or "Unknown", {"count": 0, "value": 0.0, "cost": 0.0})
         t["count"] += qty
         t["value"] += unit * qty
         t["cost"] += float(entry.get("paid") or 0) * qty
         y = by_year.setdefault(str(s.get("year") or "?"), {"count": 0, "value": 0.0})
         y["count"] += qty
         y["value"] += unit * qty
-        cond = entry.get("condition") or "Onbekend"
+        cond = entry.get("condition") or "Unknown"
         by_condition[cond] = by_condition.get(cond, 0) + qty
         if entry.get("paid") and unit:
             movers.append({"set_number": num, "name": s.get("name"), "paid": entry["paid"], "value": round(unit, 2),
@@ -422,11 +432,11 @@ def parse_times(raw: str) -> list[str]:
 
 
 # ------------------------------------------------------------------ activity log
-ACTIVITY_MAX = 3000
+ACTIVITY_MAX = 6000
 ACTIVITY_KINDS = {
-    "price": "Prijswijziging", "fetch": "Winkelverbinding", "discover": "Links zoeken", "link": "Linkcontrole",
-    "userscript": "Userscript (Tampermonkey)", "import": "Import", "job": "Taak", "notify": "Melding",
-    "meta": "Setgegevens", "user": "Eigen actie", "settings": "Instellingen", "shop": "Winkelstatus",
+    "check": "Shop check", "price": "Price change", "fetch": "Shop connection", "discover": "Link search", "link": "Link check",
+    "userscript": "Userscript (Tampermonkey)", "import": "Import", "job": "Job", "notify": "Notification",
+    "meta": "Set data", "user": "Your action", "settings": "Settings", "shop": "Shop status",
 }
 
 
@@ -443,6 +453,7 @@ def add_activity(store: dict[str, Any], level: str, kind: str, message: str, *, 
             if prev["message"] == message and prev["level"] == level:
                 prev["count"] = prev.get("count", 1) + 1
                 prev["ts"] = now
+                prev.update(fields)             # keep the latest details (e.g. per-shop results)
                 return prev
             break
     entry = {"id": f"{int(now * 1000):x}{len(log) % 1000:03d}", "ts": now, "level": level, "kind": kind,
@@ -454,7 +465,8 @@ def add_activity(store: dict[str, Any], level: str, kind: str, message: str, *, 
 
 
 def query_activity(store: dict[str, Any], *, level: str = "", kind: str = "", retailer: str = "", source: str = "",
-                   set_number: str = "", q: str = "", before: float | None = None, limit: int = 100) -> dict[str, Any]:
+                   set_number: str = "", q: str = "", status: str = "", before: float | None = None,
+                   limit: int = 100) -> dict[str, Any]:
     """Filter the log (newest first). level: '' | 'problems' (error+warning) | 'events' (info+ok) | exact."""
     log = store.get("activity", [])
     q = q.strip().lower()
@@ -467,8 +479,18 @@ def query_activity(store: dict[str, Any], *, level: str = "", kind: str = "", re
             return False
         if level not in ("", "problems", "events") and e["level"] != level:
             return False
-        if kind and e["kind"] != kind or retailer and e.get("retailer") != retailer or source and e.get("source") != source:
+        if kind and e["kind"] != kind or source and e.get("source") != source:
             return False
+        res = e.get("results") or {}
+        if retailer and e.get("retailer") != retailer and retailer not in res:
+            return False
+        if status in ("ok", "fail"):
+            if retailer and retailer in res:
+                good = res[retailer].get("ok")
+            else:
+                good = e["level"] in ("ok", "info") if not res else all(r.get("ok") is not False for r in res.values())
+            if (status == "ok") != bool(good):
+                return False
         if num and e.get("set_number") != num:
             return False
         if q and q not in (e["message"] + " " + (e.get("url") or "") + " " + (e.get("set_number") or "")).lower():
@@ -481,6 +503,9 @@ def query_activity(store: dict[str, Any], *, level: str = "", kind: str = "", re
         for f in facets:
             if e.get(f):
                 facets[f][e[f]] = facets[f].get(e[f], 0) + 1
+        for rid in (e.get("results") or {}):
+            if rid != e.get("retailer"):
+                facets["retailer"][rid] = facets["retailer"].get(rid, 0) + 1
     return {"entries": matched[:limit], "total": len(matched), "more": len(matched) > limit, "facets": facets,
             "kinds": ACTIVITY_KINDS}
 
@@ -543,32 +568,32 @@ def rows_to_csv(rows: list[dict[str, Any]], columns: list[str]) -> str:
 def validate_backup(data: Any) -> dict[str, Any]:
     """Sanity-check an imported backup and return a clean store (never trusts the file blindly)."""
     if not isinstance(data, dict) or not isinstance(data.get("sets"), dict):
-        raise ValueError("Geen LEGO Price Tracker-back-up (veld 'sets' ontbreekt).")
+        raise LocalizedError("Not a LEGO Price Tracker backup (field 'sets' is missing).")
     clean = new_store()
     for key in clean:
         if key in data:
             if type(data[key]) is not type(clean[key]):
-                raise ValueError(f"Veld {key!r} in de back-up heeft een verkeerd type.")
+                raise LocalizedError("Field {field} in the backup has the wrong type.", field=key)
             clean[key] = data[key]
     for num, s in clean["sets"].items():
         if not re.fullmatch(r"\d{3,7}", str(num)) or not isinstance(s, dict):
-            raise ValueError(f"Ongeldige set {num!r} in back-up.")
+            raise LocalizedError("Invalid set {number} in the backup.", number=num)
         for k in ("rrp", "target_price", "pieces", "year"):
             if k in s and s[k] is not None and not isinstance(s[k], (int, float)):
-                raise ValueError(f"Set {num}: {k} is geen getal.")
+                raise LocalizedError("Set {number}: {field} is not a number.", number=num, field=k)
     for num, offers in clean["offers"].items():
         if num not in clean["sets"] or not isinstance(offers, dict):
-            raise ValueError(f"Aanbiedingen voor onbekende set {num!r}.")
+            raise LocalizedError("Offers for unknown set {number}.", number=num)
         for rid, o in offers.items():
             url = o.get("url", "") if isinstance(o, dict) else None
             if url is None or (url and not str(url).startswith(("https://", "http://"))):
-                raise ValueError(f"Set {num}/{rid}: ongeldige URL.")
+                raise LocalizedError("Set {number}/{shop}: invalid URL.", number=num, shop=rid)
             hist = o.get("history", [])
             if not isinstance(hist, list) or any(
                 not isinstance(h, list) or len(h) != 2 or not all(isinstance(x, (int, float)) for x in h) for h in hist
             ):
-                raise ValueError(f"Set {num}/{rid}: ongeldige prijshistoriek.")
+                raise LocalizedError("Set {number}/{shop}: invalid price history.", number=num, shop=rid)
     for num, e in clean["collection"].items():
         if num not in clean["sets"] or not isinstance(e, dict):
-            raise ValueError(f"Collectie-item {num!r} zonder set.")
+            raise LocalizedError("Collection item {number} without a set.", number=num)
     return clean

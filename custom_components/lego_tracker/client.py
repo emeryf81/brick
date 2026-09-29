@@ -11,6 +11,7 @@ from typing import Any
 import aiohttp
 
 from .models import normalize_set_number
+from .i18n import T
 from .shops import domain_of
 from .parsers import Parsed, find_search_result, lego_product_url, parse_brickset_page, parse_page, search_url
 
@@ -160,24 +161,24 @@ class Fetcher:
     async def fetch_offer(self, retailer: str, url: str) -> tuple[Parsed | None, str | None]:
         """Returns (parsed, error)."""
         if (left := self.cooldown_left(retailer)) > 0:
-            return None, f"paused {left / 3600:.1f} h after being blocked (use report_price / userscript, or wait)"
+            return None, T("paused {hours} h after being blocked", hours=f"{left / 3600:.1f}")
         try:
             status, page = await self._get(retailer, url)
         except Exception as err:  # noqa: BLE001 - aiohttp and curl_cffi raise different types
-            return None, f"network: {err}"
+            return None, T("network error: {error}", error=str(err)[:120])
         if status in (403, 429, 503):
             self._note_block(retailer)
-            return None, f"blocked (HTTP {status})"
+            return None, T("blocked (HTTP {status})", status=status)
         if status == 404:
-            return None, "not found (HTTP 404)"
+            return None, T("page not found (HTTP 404)")
         if status >= 400:
-            return None, f"HTTP {status}"
+            return None, T("HTTP error {status}", status=status)
         parsed = parse_page(retailer, page)
         if parsed.blocked:
             self._note_block(retailer)
-            return None, "blocked (captcha / bot protection)"
+            return None, T("blocked (captcha / bot protection)")
         if parsed.price is None and not parsed.unavailable:
-            return None, "price not found on page (markup changed?)"
+            return None, T("price not found on the page")
         self.blocks[retailer] = 0
         return parsed, None
 
@@ -325,8 +326,8 @@ async def test_metadata_source(session: aiohttp.ClientSession, source: str, key:
     """Settings panel 'test' button: try a well known set."""
     fn = {"brickset": brickset_lookup, "rebrickable": rebrickable_lookup}[source]
     if not key:
-        return False, "geen sleutel ingevuld"
+        return False, T("no key entered")
     data = await fn(session, key, "10281")
     if data and data.get("name"):
-        return True, f"werkt: 10281 = {data['name']}"
-    return False, "geen antwoord of sleutel ongeldig"
+        return True, T("works: 10281 = {name}", name=data["name"])
+    return False, T("no answer or invalid key")

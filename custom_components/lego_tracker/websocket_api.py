@@ -1,6 +1,8 @@
 """Websocket API used by the sidebar panel."""
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +14,13 @@ from homeassistant.core import HomeAssistant, callback
 
 from .const import DOMAIN, RETAILERS
 from .csv_import import analyze_csv
-from .models import combined_history, normalize_set_number
+from .models import combined_history, normalize_set_number, offer_price
+
+
+def _languages() -> dict[str, str]:
+    from .i18n import LANGUAGES
+
+    return LANGUAGES
 
 
 def _coord(hass: HomeAssistant):
@@ -33,7 +41,8 @@ def _card(coord, num: str, with_history: bool = False) -> dict[str, Any]:
         "collection": coll,
         "spark": [p for _, p in series][-60:],
         "offers": {
-            rid: {"label": RETAILERS[rid][0], "url": o.get("url"), "price": o.get("last_price") if o.get("available") else None,
+            rid: {"label": RETAILERS[rid][0], "url": o.get("url"), "price": offer_price(o), "auto_price": o.get("auto_price") if o.get("manual_price") else None,
+                  "manual_price": (o.get("manual_price") or {}).get("price"), "manual_url": bool(o.get("manual_url")),
                   "available": o.get("available"), "error": o.get("error"), "checked": o.get("last_checked"),
                   "low": min((p for _, p in o.get("history", [])), default=None),
                   "title": o.get("title"), "link_status": o.get("link_status"), "link_reason": o.get("link_reason"),
@@ -62,6 +71,7 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_notify_get)
     websocket_api.async_register_command(hass, ws_ignore_error)
     websocket_api.async_register_command(hass, ws_log)
+    websocket_api.async_register_command(hass, ws_offer_update)
     websocket_api.async_register_command(hass, ws_notify_set)
     websocket_api.async_register_command(hass, ws_notify_test)
     hass.http.register_view(UserscriptView())
@@ -88,6 +98,7 @@ def ws_overview(hass, connection, msg):
         "events": list(reversed(coord.store.get("events", [])[-40:])),
         "retailer_stats": coord.retailer_stats(),
         **coord.job_info(),
+        "language": coord.language, "languages": _languages(),
         "userscript_last": coord.store.get("userscript_last"),
         "value_source": coord.store.get("value_source", "shop_first"),
         "health": {
@@ -239,7 +250,7 @@ def ws_ignore_error(hass, connection, msg):
     coord = _coord(hass)
     offer = (coord.store["offers"].get(normalize_set_number(msg["set_number"])) or {}).get(msg["retailer"]) if coord else None
     if offer is None:
-        connection.send_error(msg["id"], "not_found", "Onbekende link")
+        connection.send_error(msg["id"], "not_found", "Unknown link")
         return
     if msg["ignore"]:
         offer["ignored_error"] = offer.get("error")
@@ -284,6 +295,7 @@ def ws_notify_set(hass, connection, msg):
 @websocket_api.async_response
 async def ws_notify_test(hass, connection, msg):
     """Send a sample message to every target of a (possibly unsaved) rule."""
+    from .i18n import tr
     from .notifications import validate_rules
 
     coord = _coord(hass)
@@ -294,8 +306,9 @@ async def ws_notify_test(hass, connection, msg):
         return
     sample = next((s for s in coord.store["sets"].values() if s.get("image")), {})
     res = await coord.notifier.send(
-        rule, "🧱 Testmelding LEGO Price Tracker",
-        f"Zo ziet een melding van '{rule['name']}' eruit." + (f" Voorbeeld: {sample.get('set_number')} {sample.get('name') or ''}" if sample else ""),
+        rule, "🧱 " + tr("Test notification LEGO Price Tracker"),
+        tr("This is what a notification of '{rule}' looks like.", rule=rule["name"])
+        + (" " + tr("Example: {set}", set=f"{sample.get('set_number')} {sample.get('name') or ''}".strip()) if sample else ""),
         url="https://www.lego.com" if rule.get("link") else None, image=sample.get("image") if rule.get("image") else None,
         force=True)
     connection.send_result(msg["id"], {"results": res})
@@ -304,7 +317,7 @@ async def ws_notify_test(hass, connection, msg):
 @websocket_api.websocket_command({
     vol.Required("type"): f"{DOMAIN}/log", vol.Optional("level", default=""): str, vol.Optional("kind", default=""): str,
     vol.Optional("retailer", default=""): str, vol.Optional("source", default=""): str,
-    vol.Optional("set_number", default=""): str, vol.Optional("q", default=""): str,
+    vol.Optional("set_number", default=""): str, vol.Optional("q", default=""): str, vol.Optional("status", default=""): str,
     vol.Optional("before"): vol.Any(None, vol.Coerce(float)), vol.Optional("limit", default=100): vol.All(int, vol.Range(1, 500)),
 })
 @callback
@@ -316,7 +329,25 @@ def ws_log(hass, connection, msg):
         connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
         return
     connection.send_result(msg["id"], query_activity(coord.store, **{k: msg[k] for k in (
-        "level", "kind", "retailer", "source", "set_number", "q", "limit")}, before=msg.get("before")))
+        "level", "kind", "retailer", "source", "set_number", "q", "status", "limit")}, before=msg.get("before")))
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({
+    vol.Required("type"): f"{DOMAIN}/offer/update", vol.Required("set_number"): str, vol.Required("retailer"): str,
+    vol.Optional("url"): vol.Any(None, str), vol.Optional("manual_price"): vol.Any(None, str, int, float),
+})
+@callback
+def ws_offer_update(hass, connection, msg):
+    """Set or clear a manual link / manual price (empty = back to automatic)."""
+    coord = _coord(hass)
+    kwargs = {k: msg[k] for k in ("url", "manual_price") if k in msg}
+    try:
+        coord.update_offer(msg["set_number"], msg["retailer"], **kwargs)
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
+    connection.send_result(msg["id"], _card(coord, normalize_set_number(msg["set_number"]), with_history=True))
 
 
 class UserscriptView(HomeAssistantView):
@@ -331,6 +362,7 @@ class UserscriptView(HomeAssistantView):
 
     async def get(self, request: web.Request) -> web.Response:
         from . import VERSION
+        from .i18n import tr
         from .shops import all_domains
 
         hass = request.app[KEY_HASS]
@@ -343,5 +375,8 @@ class UserscriptView(HomeAssistantView):
                             for d in sorted(set(all_domains().values())))
         body = (template.replace("{{VERSION}}", VERSION).replace("{{MATCHES}}", matches)
                 .replace("{{HA_URL}}", base).replace("{{SELF_URL}}", base + self.url))
+        # {{t:English}} -> translated text, {{tj:English}} -> translated JS string literal
+        body = re.sub(r"\{\{tj:(.+?)\}\}", lambda m: json.dumps(tr(m.group(1))), body)
+        body = re.sub(r"\{\{t:(.+?)\}\}", lambda m: tr(m.group(1)), body)
         return web.Response(text=body, content_type="text/javascript", charset="utf-8",
                             headers={"Cache-Control": "no-cache"})

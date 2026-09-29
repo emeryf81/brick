@@ -12,6 +12,7 @@ import time
 from datetime import date
 from typing import Any
 
+from .i18n import T
 from .models import normalize_set_number, parse_price
 
 MAX_BYTES = 2_000_000
@@ -39,16 +40,19 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "notes": ("notes", "note", "comment", "comments", "notitie", "opmerking"),
 }
 FIELD_LABELS = {
-    "set_number": "Setnummer", "name": "Naam", "theme": "Thema", "subtheme": "Subthema", "year": "Jaar",
-    "pieces": "Stenen", "rrp": "Adviesprijs", "qty": "Aantal", "paid": "Betaald", "current_value": "Waarde",
-    "added": "Aankoopdatum", "condition": "Staat", "location": "Locatie", "notes": "Notitie",
+    "set_number": "Set number", "name": "Name", "theme": "Theme", "subtheme": "Subtheme", "year": "Year",
+    "pieces": "Pieces", "rrp": "RRP", "qty": "Quantity", "paid": "Paid", "current_value": "Value",
+    "added": "Purchase date", "condition": "Condition", "location": "Location", "notes": "Notes",
 }
-CONDITIONS = {
-    "sealed": "Sealed", "new": "Sealed", "nieuw": "Sealed", "misb": "Sealed", "nisb": "Sealed", "gesealed": "Sealed",
-    "opened": "Geopend", "open": "Geopend", "geopend": "Geopend",
-    "built": "Gebouwd", "assembled": "Gebouwd", "gebouwd": "Gebouwd", "used": "Gebouwd", "gebruikt": "Gebouwd",
-    "incomplete": "Incompleet", "incompleet": "Incompleet", "parts": "Incompleet",
+CONDITIONS = {   # any language in -> canonical English value (translated in the panel)
+    **{k: "Sealed" for k in ("sealed", "new", "nieuw", "misb", "nisb", "gesealed", "neuf", "neu", "nuevo", "baru", "새제품", "全新")},
+    **{k: "Opened" for k in ("opened", "open", "geopend", "ouvert", "geöffnet", "abierto", "dibuka", "개봉", "已开封")},
+    **{k: "Built" for k in ("built", "assembled", "gebouwd", "used", "gebruikt", "monté", "gebaut", "montado", "dirakit", "조립", "已拼装")},
+    **{k: "Incomplete" for k in ("incomplete", "incompleet", "parts", "incomplet", "unvollständig", "incompleto", "tidak lengkap", "불완전", "不完整")},
+    # values stored by versions < 0.9
+    "geopend": "Opened", "gebouwd": "Built", "incompleet": "Incomplete",
 }
+LEGACY_CONDITIONS = {"Geopend": "Opened", "Gebouwd": "Built", "Incompleet": "Incomplete"}
 
 
 def _map_headers(headers: list[str]) -> dict[str, str]:
@@ -99,11 +103,11 @@ def analyze_csv(text: str, store: dict[str, Any] | None = None, *, replace: bool
     result: dict[str, Any] = {"columns": {}, "ignored_columns": [], "rows": [], "fatal": None,
                               "summary": {"ok": 0, "warning": 0, "error": 0, "new": 0, "update": 0, "merged": 0}}
     if len(text.encode("utf-8", "ignore")) > MAX_BYTES:
-        result["fatal"] = f"Bestand te groot (max {MAX_BYTES // 1_000_000} MB)."
+        result["fatal"] = T("File too large (max {mb} MB).", mb=MAX_BYTES // 1_000_000)
         return result
     text = text.lstrip("﻿")
     if not text.strip():
-        result["fatal"] = "Leeg bestand."
+        result["fatal"] = T("Empty file.")
         return result
     reader = csv.DictReader(io.StringIO(text), dialect=_sniff(text))
     headers = reader.fieldnames or []
@@ -111,14 +115,14 @@ def analyze_csv(text: str, store: dict[str, Any] | None = None, *, replace: bool
     result["columns"] = {h: FIELD_LABELS[f] for h, f in mapping.items()}
     result["ignored_columns"] = [h for h in headers if h and h not in mapping]
     if "set_number" not in mapping.values():
-        result["fatal"] = ("Geen kolom met setnummers gevonden. Verwacht bv. 'Number', 'Set Number' of 'Setnummer'. "
-                           f"Gevonden kolommen: {', '.join(h for h in headers if h) or 'geen'}.")
+        result["fatal"] = T("No column with set numbers found. Expected e.g. 'Number' or 'Set Number'. Columns found: {columns}.",
+                            columns=", ".join(h for h in headers if h) or "-")
         return result
 
     seen: dict[str, int] = {}
     for line, raw in enumerate(reader, start=2):
         if line - 1 > MAX_ROWS:
-            result["fatal"] = f"Te veel regels (max {MAX_ROWS}); alleen de eerste {MAX_ROWS} zijn bekeken."
+            result["fatal"] = T("Too many lines (max {max}); only the first {max} were checked.", max=MAX_ROWS)
             break
         row = {mapping[k]: (v or "").strip() for k, v in raw.items() if k in mapping and isinstance(v, str)}
         if not any(row.values()):
@@ -128,16 +132,16 @@ def analyze_csv(text: str, store: dict[str, Any] | None = None, *, replace: bool
 
         num = normalize_set_number(row.get("set_number", ""))
         if not num:
-            issues.append(("error", "setnummer ontbreekt"))
+            issues.append(("error", T("set number missing")))
         elif not re.fullmatch(r"\d{3,7}", num):
-            issues.append(("error", f"ongeldig setnummer '{row.get('set_number')}'"))
+            issues.append(("error", T("invalid set number '{value}'", value=row.get("set_number"))))
         item["set_number"] = num
 
         for f in ("name", "theme", "subtheme", "location", "notes"):
             if row.get(f):
                 val = re.sub(r"[\x00-\x1f]", " ", row[f])
                 if len(val) > MAX_TEXT:
-                    issues.append(("warning", f"{FIELD_LABELS[f].lower()} ingekort tot {MAX_TEXT} tekens"))
+                    issues.append(("warning", T("{field} shortened to {max} characters", field=FIELD_LABELS[f], max=MAX_TEXT)))
                 item[f] = val[:MAX_TEXT]
         if cond := normalize_condition(row.get("condition")):
             item["condition"] = cond
@@ -147,59 +151,59 @@ def analyze_csv(text: str, store: dict[str, Any] | None = None, *, replace: bool
                 continue
             m = re.search(r"-?\d+", row[f])
             if not m:
-                issues.append(("warning", f"{FIELD_LABELS[f].lower()} '{row[f]}' is geen getal, genegeerd"))
+                issues.append(("warning", T("{field} '{value}' is not a number, ignored", field=FIELD_LABELS[f], value=row[f])))
                 continue
             n = int(m.group(0))
             if f == "qty" and n <= 0:
-                issues.append(("error", f"aantal is {n}"))
+                issues.append(("error", T("quantity is {n}", n=n)))
             elif not lo <= n <= hi:
-                issues.append(("warning", f"{FIELD_LABELS[f].lower()} {n} lijkt onwaarschijnlijk, genegeerd"))
+                issues.append(("warning", T("{field} {value} looks unlikely, ignored", field=FIELD_LABELS[f], value=n)))
                 continue
             item[f] = n
         if item.get("qty", 1) > 50:
-            issues.append(("warning", f"aantal {item['qty']} is erg hoog"))
+            issues.append(("warning", T("quantity {n} is very high", n=item["qty"])))
 
         for f in ("rrp", "paid", "current_value"):
             if not row.get(f):
                 continue
             if re.match(r"\s*-", row[f]):
-                issues.append(("error", f"{FIELD_LABELS[f].lower()} is negatief"))
+                issues.append(("error", T("{field} is negative", field=FIELD_LABELS[f])))
                 continue
             p = parse_price(row[f])
             if p is None:
                 if re.search(r"[1-9]", row[f]):
-                    issues.append(("warning", f"{FIELD_LABELS[f].lower()} '{row[f]}' niet herkend, genegeerd"))
+                    issues.append(("warning", T("{field} '{value}' not recognised, ignored", field=FIELD_LABELS[f], value=row[f])))
                 continue
             if p > 10000:
-                issues.append(("warning", f"{FIELD_LABELS[f].lower()} €{p:.2f} lijkt te hoog, genegeerd"))
+                issues.append(("warning", T("{field} €{value} looks too high, ignored", field=FIELD_LABELS[f], value=f"{p:.2f}")))
                 continue
             item[f] = p
         ref = item.get("rrp") or store["sets"].get(num, {}).get("rrp")
         if ref and item.get("paid") and item["paid"] > ref * 3:
-            issues.append(("warning", f"betaald €{item['paid']:.2f} is meer dan 3× de adviesprijs"))
+            issues.append(("warning", T("paid €{value} is more than 3× the RRP", value=f"{item['paid']:.2f}")))
 
         if row.get("added"):
             d = _date(row["added"])
             if d is None:
-                issues.append(("warning", f"datum '{row['added']}' niet herkend, genegeerd"))
+                issues.append(("warning", T("date '{value}' not recognised, ignored", value=row["added"])))
             elif d > today.isoformat():
-                issues.append(("warning", f"aankoopdatum {d} ligt in de toekomst, genegeerd"))
+                issues.append(("warning", T("purchase date {date} is in the future, ignored", date=d)))
             elif item.get("year") and int(d[:4]) < item["year"] - 1:
-                issues.append(("warning", f"aankoopdatum {d} ligt vóór het uitgavejaar {item['year']}"))
+                issues.append(("warning", T("purchase date {date} is before the release year {year}", date=d, year=item["year"])))
                 item["added"] = d
             else:
                 item["added"] = d
 
         item.setdefault("qty", 1)
         if not item.get("name") and not store["sets"].get(num, {}).get("name"):
-            issues.append(("info", "geen naam; wordt aangevuld als Brickset of een winkel die kent"))
+            issues.append(("info", T("no name; will be filled in from LEGO.com or Brickset")))
         if num in seen and not any(lvl == "error" for lvl, _ in issues):
-            issues.append(("info", f"zelfde set als regel {seen[num]}: telt als extra exemplaar"))
+            issues.append(("info", T("same set as line {line}: counts as an extra copy", line=seen[num])))
             result["summary"]["merged"] += 1
         elif num and not any(lvl == "error" for lvl, _ in issues):
             seen[num] = line
             if not replace and num in store["collection"]:
-                issues.append(("info", "staat al in je collectie: wordt bijgewerkt"))
+                issues.append(("info", T("already in your collection: will be updated")))
                 result["summary"]["update"] += 1
             else:
                 result["summary"]["new"] += 1
@@ -210,7 +214,7 @@ def analyze_csv(text: str, store: dict[str, Any] | None = None, *, replace: bool
         result["summary"][item["status"]] += 1
         result["rows"].append(item)
     if not result["rows"] and not result["fatal"]:
-        result["fatal"] = "Geen regels met gegevens gevonden."
+        result["fatal"] = T("No lines with data found.")
     return result
 
 
@@ -223,7 +227,7 @@ def parse_collection_csv(text: str) -> tuple[list[dict[str, Any]], list[str]]:
     a = analyze_csv(text)
     if a["fatal"] and not a["rows"]:
         return [], [a["fatal"]]
-    msgs = [f"regel {r['line']}: {'; '.join(i['text'] for i in r['issues'] if i['level'] == 'error')}"
+    msgs = [T("line {line}: {issues}", line=r["line"], issues="; ".join(i["text"] for i in r["issues"] if i["level"] == "error"))
             for r in a["rows"] if r["status"] == "error"]
     return importable_rows(a), msgs
 

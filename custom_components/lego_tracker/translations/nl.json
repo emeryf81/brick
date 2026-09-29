@@ -3,17 +3,20 @@
     "step": {
       "user": {
         "title": "LEGO Price Tracker",
+        "description": "De meeste instellingen vind je ook in het LEGO Price Tracker-paneel onder Beheer → Instellingen.",
         "data": {
           "discount_threshold": "Kortingsdrempel (%) voor 'hoge korting'",
           "retailers": "Winkels om te controleren",
+          "language": "Taal (paneel, meldingen, userscript)",
+          "refresh_mode": "Automatische prijscontroles",
+          "spread_hours": "Gespreide cyclus: elke set eens per … uur",
+          "refresh_times": "Vaste tijdstippen (alleen bij 'Op vaste tijdstippen', bv. 07:30, 19:30)",
           "digest_time": "Tijdstip dagelijkse samenvatting",
           "min_history_days": "Minimaal aantal dagen historiek voor een 'laagste prijs ooit'",
-          "brickset_api_key": "Brickset API-sleutel (optioneel, vult naam/thema/adviesprijs/afbeelding aan)",
-          "use_impersonation": "Chrome-browser nabootsen (installeert curl_cffi; veel minder blokkades)",
-          "notify_service": "Notify-service voor deals (bv. notify.mobile_app_telefoon, optioneel)",
-          "auto_refresh": "Prijzen automatisch ophalen",
-          "refresh_times": "Tijdstippen (bv. 07:30, 19:30)",
-          "rebrickable_api_key": "Rebrickable API-sleutel (optioneel, gratis; vult naam/thema/jaar/stenen/afbeelding aan)"
+          "use_impersonation": "Chrome-browser nabootsen (curl_cffi; veel minder blokkades)",
+          "notify_service": "Notify-service voor deals (optioneel; beter: het tabblad Notificaties in het paneel)",
+          "brickset_api_key": "Brickset API-sleutel (optioneel, gratis)",
+          "rebrickable_api_key": "Rebrickable API-sleutel (optioneel, gratis)"
         }
       }
     },
@@ -28,22 +31,34 @@
     "step": {
       "init": {
         "title": "LEGO Price Tracker",
+        "description": "De meeste instellingen vind je ook in het LEGO Price Tracker-paneel onder Beheer → Instellingen.",
         "data": {
           "discount_threshold": "Kortingsdrempel (%) voor 'hoge korting'",
           "retailers": "Winkels om te controleren",
+          "language": "Taal (paneel, meldingen, userscript)",
+          "refresh_mode": "Automatische prijscontroles",
+          "spread_hours": "Gespreide cyclus: elke set eens per … uur",
+          "refresh_times": "Vaste tijdstippen (alleen bij 'Op vaste tijdstippen', bv. 07:30, 19:30)",
           "digest_time": "Tijdstip dagelijkse samenvatting",
           "min_history_days": "Minimaal aantal dagen historiek voor een 'laagste prijs ooit'",
-          "brickset_api_key": "Brickset API-sleutel (optioneel, vult naam/thema/adviesprijs/afbeelding aan)",
-          "use_impersonation": "Chrome-browser nabootsen (installeert curl_cffi; veel minder blokkades)",
-          "notify_service": "Notify-service voor deals (bv. notify.mobile_app_telefoon, optioneel)",
-          "auto_refresh": "Prijzen automatisch ophalen",
-          "refresh_times": "Tijdstippen (bv. 07:30, 19:30)",
-          "rebrickable_api_key": "Rebrickable API-sleutel (optioneel, gratis; vult naam/thema/jaar/stenen/afbeelding aan)"
+          "use_impersonation": "Chrome-browser nabootsen (curl_cffi; veel minder blokkades)",
+          "notify_service": "Notify-service voor deals (optioneel; beter: het tabblad Notificaties in het paneel)",
+          "brickset_api_key": "Brickset API-sleutel (optioneel, gratis)",
+          "rebrickable_api_key": "Rebrickable API-sleutel (optioneel, gratis)"
         }
       }
     },
     "error": {
       "invalid_times": "Geef 1 tot 6 tijdstippen als UU:MM, gescheiden door komma's"
+    }
+  },
+  "selector": {
+    "refresh_mode": {
+      "options": {
+        "spread": "Gespreid over de dag (elke set eens per cyclus)",
+        "times": "Op vaste tijdstippen",
+        "off": "Uit (alleen handmatig)"
+      }
     }
   },
   "entity": {
@@ -61,19 +76,19 @@
         "name": "Collectiewaarde"
       },
       "collection_cost": {
-        "name": "Collectie-aankoopkost"
+        "name": "Collectiekost"
       },
       "collection_growth": {
         "name": "Collectiegroei"
       },
       "wishlist_cost": {
-        "name": "Wishlist-kost (beste prijzen)"
+        "name": "Kost watchlist (beste prijzen)"
       },
       "targets_reached": {
-        "name": "Sets onder streefprijs"
+        "name": "Sets op streefprijs"
       },
       "offers_with_errors": {
-        "name": "Aanbiedingen met fout"
+        "name": "Aanbiedingen met fouten"
       },
       "best_deal": {
         "name": "Beste dealscore"
