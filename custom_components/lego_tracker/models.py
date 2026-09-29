@@ -21,7 +21,7 @@ def normalize_set_number(value: str | int) -> str:
 
 
 def new_store() -> dict[str, Any]:
-    return {"sets": {}, "offers": {}, "collection": {}, "snapshots": []}
+    return {"sets": {}, "offers": {}, "collection": {}, "snapshots": [], "events": []}
 
 
 def parse_price(text: str | float | int | None) -> float | None:
@@ -124,6 +124,7 @@ def compute_set_status(
         "price_per_piece": None, "change_7d": None, "change_30d": None,
         "target_price": lego_set.get("target_price"), "target_hit": False,
         "offers_error": sum(1 for o in offers.values() if o.get("error")),
+        "deal_score": 0, "deal_label": None, **retirement_status(lego_set, now),
     }
     status["offers_live"] = sum(1 for o in offers.values() if o.get("available"))
     if series:
@@ -159,7 +160,60 @@ def compute_set_status(
     status["target_hit"] = bool(target) and price <= float(target)
     ref = status["discount_rrp"] if status["discount_rrp"] is not None else status["discount_avg"]
     status["high_discount"] = ref is not None and ref >= threshold
+    status["deal_score"] = deal_score(status)
+    status["deal_label"] = "Topdeal" if status["deal_score"] >= 70 else "Goede deal" if status["deal_score"] >= 45 else None
     return status
+
+
+def deal_score(st: dict[str, Any]) -> int:
+    """0-100: how good is the current price? Weighs list-price discount, distance to the
+    all-time low, discount vs. the 90-day median and a reached target price."""
+    price = st.get("best_price")
+    if not price:
+        return 0
+    score = 0.0
+    if st.get("discount_rrp") is not None:
+        score += min(max(st["discount_rrp"], 0), 50) / 50 * 45
+    atl = st.get("all_time_low")
+    if atl and st.get("history_days", 0) >= 1:
+        gap = (price - atl) / atl
+        score += 25 if gap <= 0.005 else max(0.0, 1 - gap / 0.2) * 20
+    if st.get("discount_avg") is not None:
+        score += min(max(st["discount_avg"], 0), 25) / 25 * 20
+    if st.get("target_hit"):
+        score += 10
+    return int(round(min(score, 100)))
+
+
+def retirement_status(lego_set: dict[str, Any], now: float | None = None) -> dict[str, Any]:
+    """'Retiring soon' = exit date within 180 days, or flagged manually."""
+    exit_date = lego_set.get("exit_date")
+    days = None
+    if exit_date:
+        try:
+            days = (date.fromisoformat(str(exit_date)[:10]) - date.fromtimestamp(now or time.time())).days
+        except ValueError:
+            days = None
+    return {
+        "retiring_soon": bool(lego_set.get("retiring")) or (days is not None and 0 <= days <= 180),
+        "retired": days is not None and days < 0,
+        "retires_in_days": days,
+    }
+
+
+def is_suspicious_price(price: float, lego_set: dict[str, Any], offer: dict[str, Any]) -> str | None:
+    """Catch parse errors (accessory/marketplace/multi-pack prices) before they pollute history."""
+    rrp = lego_set.get("rrp")
+    if rrp and price < rrp * 0.2:
+        return f"verdachte prijs €{price:.2f} (<20% van adviesprijs) genegeerd"
+    if rrp and price > rrp * 4:
+        return f"verdachte prijs €{price:.2f} (>4× adviesprijs) genegeerd"
+    prices = [p for _, p in offer.get("history", [])]
+    if not rrp and len(prices) >= 3:
+        mid = median(prices)
+        if price < mid * 0.25 or price > mid * 4:
+            return f"verdachte prijs €{price:.2f} (wijkt sterk af van €{mid:.2f}) genegeerd"
+    return None
 
 
 # ----------------------------------------------------------------- collection
@@ -247,6 +301,51 @@ def collection_summary(store: dict[str, Any], statuses: dict[str, dict[str, Any]
     }
 
 
+def collection_analytics(store: dict[str, Any], statuses: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Breakdowns for the collection overview."""
+    by_theme: dict[str, dict[str, float]] = {}
+    by_year: dict[str, dict[str, float]] = {}
+    by_condition: dict[str, int] = {}
+    movers = []
+    paid_total = paid_pieces = 0.0
+    for num, entry in store["collection"].items():
+        s = store["sets"].get(num, {})
+        qty = int(entry.get("qty", 1) or 1)
+        unit, _ = collection_value(entry, statuses.get(num, {}), s)
+        t = by_theme.setdefault(s.get("theme") or "Onbekend", {"count": 0, "value": 0.0, "cost": 0.0})
+        t["count"] += qty
+        t["value"] += unit * qty
+        t["cost"] += float(entry.get("paid") or 0) * qty
+        y = by_year.setdefault(str(s.get("year") or "?"), {"count": 0, "value": 0.0})
+        y["count"] += qty
+        y["value"] += unit * qty
+        cond = entry.get("condition") or "Onbekend"
+        by_condition[cond] = by_condition.get(cond, 0) + qty
+        if entry.get("paid") and unit:
+            movers.append({"set_number": num, "name": s.get("name"), "paid": entry["paid"], "value": round(unit, 2),
+                           "pct": round((unit - entry["paid"]) / entry["paid"] * 100, 1)})
+            if s.get("pieces"):
+                paid_total += entry["paid"] * qty
+                paid_pieces += s["pieces"] * qty
+    movers.sort(key=lambda m: -m["pct"])
+    rnd = lambda d: {k: {kk: round(vv, 2) for kk, vv in v.items()} for k, v in d.items()}  # noqa: E731
+    return {
+        "by_theme": rnd(dict(sorted(by_theme.items(), key=lambda x: -x[1]["value"]))),
+        "by_year": rnd(dict(sorted(by_year.items()))),
+        "by_condition": by_condition,
+        "top_gainers": movers[:5],
+        "top_losers": [m for m in reversed(movers) if m["pct"] < 0][:5],
+        "avg_paid_per_piece": round(paid_total / paid_pieces, 4) if paid_pieces else None,
+    }
+
+
+def add_event(store: dict[str, Any], kind: str, payload: dict[str, Any], now: float | None = None,
+              keep: int = 200) -> None:
+    events = store.setdefault("events", [])
+    events.append({"ts": now or time.time(), "kind": kind, **payload})
+    del events[: max(0, len(events) - keep)]
+
+
 def today_iso(now: float | None = None) -> str:
     return date.fromtimestamp(now or time.time()).isoformat()
 
@@ -295,21 +394,42 @@ def rows_to_csv(rows: list[dict[str, Any]], columns: list[str]) -> str:
     out = io.StringIO()
     w = csv.DictWriter(out, fieldnames=columns, lineterminator="\n")
     w.writeheader()
-    w.writerows(rows)
+    def safe(v: Any) -> Any:  # spreadsheet formula injection guard
+        return "'" + v if isinstance(v, str) and v[:1] in ("=", "+", "-", "@") else v
+
+    w.writerows({k: safe(v) for k, v in r.items()} for r in rows)
     return out.getvalue()
 
 
 def validate_backup(data: Any) -> dict[str, Any]:
-    """Sanity-check an imported backup and return a clean store."""
+    """Sanity-check an imported backup and return a clean store (never trusts the file blindly)."""
     if not isinstance(data, dict) or not isinstance(data.get("sets"), dict):
-        raise ValueError("Not a LEGO Price Tracker backup (missing 'sets').")
+        raise ValueError("Geen LEGO Price Tracker-back-up (veld 'sets' ontbreekt).")
     clean = new_store()
     for key in clean:
         if key in data:
             if type(data[key]) is not type(clean[key]):
-                raise ValueError(f"Backup field {key!r} has the wrong type.")
+                raise ValueError(f"Veld {key!r} in de back-up heeft een verkeerd type.")
             clean[key] = data[key]
-    for num in clean["sets"]:
-        if not str(num).isdigit():
-            raise ValueError(f"Invalid set number {num!r} in backup.")
+    for num, s in clean["sets"].items():
+        if not re.fullmatch(r"\d{3,7}", str(num)) or not isinstance(s, dict):
+            raise ValueError(f"Ongeldige set {num!r} in back-up.")
+        for k in ("rrp", "target_price", "pieces", "year"):
+            if k in s and s[k] is not None and not isinstance(s[k], (int, float)):
+                raise ValueError(f"Set {num}: {k} is geen getal.")
+    for num, offers in clean["offers"].items():
+        if num not in clean["sets"] or not isinstance(offers, dict):
+            raise ValueError(f"Aanbiedingen voor onbekende set {num!r}.")
+        for rid, o in offers.items():
+            url = o.get("url", "") if isinstance(o, dict) else None
+            if url is None or (url and not str(url).startswith(("https://", "http://"))):
+                raise ValueError(f"Set {num}/{rid}: ongeldige URL.")
+            hist = o.get("history", [])
+            if not isinstance(hist, list) or any(
+                not isinstance(h, list) or len(h) != 2 or not all(isinstance(x, (int, float)) for x in h) for h in hist
+            ):
+                raise ValueError(f"Set {num}/{rid}: ongeldige prijshistoriek.")
+    for num, e in clean["collection"].items():
+        if num not in clean["sets"] or not isinstance(e, dict):
+            raise ValueError(f"Collectie-item {num!r} zonder set.")
     return clean

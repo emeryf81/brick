@@ -64,6 +64,12 @@
       },
       "offers_with_errors": {
         "name": "Offers with errors"
+      },
+      "best_deal": {
+        "name": "Best deal score"
+      },
+      "retiring_soon": {
+        "name": "Sets retiring soon"
       }
     }
   }

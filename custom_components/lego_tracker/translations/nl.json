@@ -64,6 +64,12 @@
       },
       "offers_with_errors": {
         "name": "Aanbiedingen met fout"
+      },
+      "best_deal": {
+        "name": "Beste dealscore"
+      },
+      "retiring_soon": {
+        "name": "Sets die binnenkort verdwijnen"
       }
     }
   }

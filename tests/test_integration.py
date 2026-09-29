@@ -159,3 +159,41 @@ async def test_diagnostics_and_health_sensor(hass: HomeAssistant, entry, no_netw
     diag = await async_get_config_entry_diagnostics(hass, entry)
     assert diag["per_retailer"]["bol"]["errors"] == 1 and "blocked (HTTP 403)" in diag["errors"]
     assert diag["options"]["notify_service"] == "**REDACTED**" if "notify_service" in entry.options else True
+
+
+async def test_import_preview_ws_and_validated_import(hass: HomeAssistant, entry, hass_ws_client):
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    csv = "Number;Name;Qty;Paid\n10281;Bonsai;1;40\nxx;bad;1;1\n42143;Ferrari;0;300\n"
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/import_preview", "csv_text": csv})
+    prev = (await ws.receive_json())["result"]
+    assert prev["summary"]["ok"] == 1 and prev["summary"]["error"] == 2
+    assert hass.states.get("sensor.lego_price_tracker_tracked_sets").state == "0"      # preview wrote nothing
+    res = await hass.services.async_call(DOMAIN, "import_collection", {"csv_text": csv, "track_prices": False},
+                                         blocking=True, return_response=True)
+    assert res["added"] == 1 and res["skipped"] == 2
+
+
+async def test_update_set_validation_and_overview_extras(hass: HomeAssistant, entry, hass_ws_client, no_network):
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281", "name": "Bonsai", "rrp": 49.99}, blocking=True)
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/update_set", "set_number": "10281", "fields": {"paid": -3}})
+    assert (await ws.receive_json())["error"]["code"] == "invalid_format"
+    await ws.send_json({"id": 2, "type": "lego_tracker/update_set", "set_number": "10281",
+                        "fields": {"added": "2999-01-01", "owned": True}})
+    assert "toekomst" in (await ws.receive_json())["error"]["message"]
+    await ws.send_json({"id": 3, "type": "lego_tracker/update_set", "set_number": "10281",
+                        "fields": {"owned": True, "qty": "2", "condition": "Sealed", "priority": 3, "retiring": True}})
+    card = (await ws.receive_json())["result"]
+    assert card["collection"]["qty"] == 2 and card["priority"] == 3 and card["retiring_soon"]
+    await hass.services.async_call(DOMAIN, "set_offer", {"set_number": "10281", "retailer": "bol", "url": "https://www.bol.com/nl/nl/p/x/1/"}, blocking=True)
+    no_network.return_value = (Parsed(price=3.0), None)                             # parse error: accessory price
+    await hass.services.async_call(DOMAIN, "refresh", {}, blocking=True)
+    await ws.send_json({"id": 4, "type": "lego_tracker/overview"})
+    ov = (await ws.receive_json())["result"]
+    assert "verdachte prijs" in ov["sets"][0]["offers"]["bol"]["error"] and ov["sets"][0]["best_price"] is None
+    assert ov["retailer_stats"]["bol"]["errors"] == 1 and "analytics" in ov and isinstance(ov["events"], list)
+    assert hass.states.get("sensor.lego_price_tracker_sets_retiring_soon").state == "1"
