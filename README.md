@@ -1,3 +1,5 @@
+<p align="center"><img src="https://raw.githubusercontent.com/emeryf81/lot/main/images/logo.png" alt="LEGO Track & Collect – Price & Collection Manager for Home Assistant" width="340"></p>
+
 # lot – Lego Organizing Tool
 
 <img width="1024" height="559" alt="LEGO Price Tracker panel" src="https://github.com/user-attachments/assets/fe8aea1b-0443-4675-8136-d3f0b021fe98" />
@@ -137,6 +139,9 @@ Amazon and bol.com mainly recognise scrapers by their **TLS fingerprint**, not t
 ## Limitations
 - Amazon and bol.com **don't allow scraping** in their terms. Use this for personal use at a reasonable rate.
 - Shop markup changes; parsers try JSON-LD → meta tags → shop-specific markup. See `tests/test_logic.py`.
+
+## Logo and brand images
+The icon and logo live in `custom_components/lego_tracker/brand/` (`icon.png`, `logo.png`, `dark_logo.png` and their `@2x` versions). Since Home Assistant 2026.3 these local brand images are used automatically on the integrations page and by HACS; no submission to the `home-assistant/brands` repository is needed. `images/` holds the README logo and the GitHub social preview.
 
 ## Development
 ```
