@@ -13,7 +13,7 @@ from urllib.parse import quote_plus, urlparse
 
 from .const import GENERIC_SHOPS
 from .models import parse_price
-from .shops import all_domains, domain_of
+from .shops import LOCALE, SEARCH, all_domains, domain_of
 
 
 @dataclass
@@ -23,6 +23,8 @@ class Parsed:
     image: str | None = None
     blocked: bool = False
     unavailable: bool = False
+    list_price: float | None = None      # LEGO.com: regular price = RRP (price may be a sale price)
+    retiring: bool = False
 
 
 AMAZON_DOMAINS = {"amazon_nl": "amazon.nl", "amazon_de": "amazon.de", "amazon_be": "amazon.com.be"}
@@ -109,20 +111,58 @@ def parse_amazon(page: str) -> Parsed:
     m = re.search(r'"hiRes"\s*:\s*"(https:[^"]+)"', page) or re.search(r'id="landingImage"[^>]+src="([^"]+)"', page)
     if m:
         image = m.group(1)
-    # Buy-box / core price blocks first, then any first .a-price
-    for scope_pattern in (
-        r'id="(?:corePrice_feature_div|corePriceDisplay_desktop_feature_div|apex_desktop|buybox)".*?</div>\s*</div>\s*</div>',
-        r'class="a-price[^"]*"[^>]*>.*?</span>\s*</span>',
-    ):
-        for scope in re.findall(scope_pattern, page, re.S)[:3]:
-            m = re.search(r'class="a-offscreen"[^>]*>([^<]+)<', scope)
-            if m and (price := parse_price(m.group(1))):
-                return Parsed(price, title, image)
-    m = re.search(r'"priceAmount"\s*:\s*([\d.]+)', page)
-    if m and (price := parse_price(m.group(1))):
+    price = amazon_buybox_price(page)
+    if price is not None:
         return Parsed(price, title, image)
     unavailable = bool(re.search(r'id="outOfStock"|Momenteel niet verkrijgbaar|Derzeit nicht verfügbar|Currently unavailable', page))
     return Parsed(None, title, image, unavailable=unavailable)
+
+
+AMAZON_BUYBOX_IDS = ("corePriceDisplay_desktop_feature_div", "corePrice_feature_div", "apex_desktop",
+                     "corePrice_desktop", "buybox", "desktop_buybox", "newAccordionRow")
+
+
+def _offscreen_prices(block: str) -> list[float]:
+    """Prices inside a block, skipping struck-through list prices (a-text-price / data-a-strike)."""
+    out = []
+    for cls, inner in re.findall(r'<span class="(a-price[^"]*)"[^>]*>(.*?)</span>\s*</span>', block, re.S):
+        if "a-text-price" in cls or "a-size-small" in cls:
+            continue
+        m = re.search(r'class="a-offscreen"[^>]*>([^<]+)', inner)
+        if m and (p := parse_price(m.group(1))):
+            out.append(p)
+    return out
+
+
+def amazon_buybox_price(page: str) -> float | None:
+    """The price in the buy box, never just the first price on the page (that can be an
+    accessory, a unit price, a coupon or a struck-through list price)."""
+    # 1. structured data Amazon ships for the buy box / twister
+    for pat in (r'name="items\[0\.base\]\[customerVisiblePrice\]\[amount\]"\s+value="([\d.]+)"',
+                r'id="twister-plus-price-data-price"\s+value="([\d.]+)"',
+                r'"priceToPay"\s*:\s*\{[^{}]*?"(?:amount|price)"\s*:\s*"?([\d.]+)',
+                r'"desktop_buybox_group_1"\s*:\s*\[\s*\{[^\]]*?"priceAmount"\s*:\s*([\d.]+)'):
+        m = re.search(pat, page)
+        if m and (p := parse_price(float(m.group(1)))):
+            return p
+    # 2. "price to pay" inside the buy box
+    for bid in AMAZON_BUYBOX_IDS:
+        i = page.find(f'id="{bid}"')
+        if i < 0:
+            continue
+        block = page[i:i + 8000]
+        m = re.search(r'class="a-price[^"]*priceToPay[^"]*"[^>]*>.*?class="a-offscreen"[^>]*>([^<]+)<', block, re.S)
+        if m and (p := parse_price(m.group(1))):
+            return p
+        if prices := _offscreen_prices(block):
+            return prices[0]
+    # 3. older layouts
+    for pid in ("priceblock_dealprice", "priceblock_ourprice", "priceblock_saleprice", "price_inside_buybox",
+                "newBuyBoxPrice", "kindle-price"):
+        m = re.search(rf'id="{pid}"[^>]*>\s*([^<]+)<', page)
+        if m and (p := parse_price(m.group(1))):
+            return p
+    return None
 
 
 def parse_bol(page: str) -> Parsed:
@@ -160,7 +200,31 @@ def parse_kruidvat(page: str) -> Parsed:
                   _meta(page, "og:title") or _title(page), _meta(page, "og:image"))
 
 
+# Only structured availability values count; plain words can appear in translation bundles on every page.
+LEGO_RETIRING_RE = re.compile(r'"(?:availabilityStatus|availability|productStatus|stockStatus)"\s*:\s*"[^"]*RETIRING[^"]*"', re.I)
+LEGO_GONE_RE = re.compile(r'"(?:availabilityStatus|availability|productStatus)"\s*:\s*"[^"]*(?:RETIRED|Discontinued)[^"]*"', re.I)
+
+
+def parse_lego(page: str) -> Parsed:
+    """LEGO.com product page: JSON-LD + the Next.js/Apollo state (centAmount prices)."""
+    if "Access Denied" in page[:3000] or "captcha" in page[:5000].lower():
+        return Parsed(None, blocked=True)
+    ld = _from_jsonld(page)
+    cents = {k: int(m.group(1)) / 100 for k in ("price", "listPrice", "originalPrice")
+             if (m := re.search(rf'"{k}"\s*:\s*\{{[^{{}}]*?"centAmount"\s*:\s*(\d+)', page))}
+    price = (ld.price if ld else None) or cents.get("price")
+    list_price = cents.get("listPrice") or cents.get("originalPrice") or price
+    if list_price and price and list_price < price:
+        list_price = price
+    title = (ld.title if ld else None) or _meta(page, "og:title") or _title(page)
+    image = (ld.image if ld else None) or _meta(page, "og:image")
+    head = page[:400000]
+    return Parsed(price, title, image, unavailable=price is None and bool(LEGO_GONE_RE.search(head)),
+                  list_price=list_price, retiring=bool(LEGO_RETIRING_RE.search(head)))
+
+
 PARSERS = {
+    "lego_com": parse_lego,
     "amazon_nl": parse_amazon, "amazon_de": parse_amazon, "amazon_be": parse_amazon,
     "bol": parse_bol, "kruidvat_be": parse_kruidvat,
 }
@@ -198,17 +262,15 @@ def normalize_url(retailer: str, url_or_id: str) -> str:
 
 
 def search_url(retailer: str, set_number: str) -> str | None:
-    q = quote_plus(f"LEGO {set_number}")
-    if retailer in GENERIC_SHOPS:
-        tpl = GENERIC_SHOPS[retailer].get("search")
-        return tpl.replace("{query}", q) if tpl else None
-    if retailer in AMAZON_DOMAINS:
-        return f"https://www.{AMAZON_DOMAINS[retailer]}/s?k={q}"
-    if retailer == "bol":
-        return f"https://www.bol.com/nl/nl/s/?searchtext={q}"
-    if retailer == "kruidvat_be":
-        return f"https://www.kruidvat.be/nl/search?text={q}"
-    return None
+    tpl = SEARCH.get(retailer)
+    if not tpl:
+        return None
+    return (tpl.replace("{query}", quote_plus(f"LEGO {set_number}")).replace("{number}", quote_plus(set_number))
+            .replace("{locale}", LOCALE["lego"]))
+
+
+def lego_product_url(set_number: str) -> str:
+    return f"https://www.lego.com/{LOCALE['lego']}/product/{set_number}"
 
 
 # ------------------------------------------------------------ product matching
@@ -283,6 +345,10 @@ def find_search_result(retailer: str, page: str, set_number: str) -> str | None:
             url = "https://www.kruidvat.be" + href.split("?")[0]
             if title_check(slug_title(url), set_number)[0] == "ok":
                 return url
+    elif retailer == "lego_com":
+        for href in dict.fromkeys(re.findall(r'href="((?:https://www\.lego\.com)?/[a-z]{2}-[a-z]{2}/product/[^"?#]+)"', page)):
+            if re.search(rf"(?<!\d){re.escape(set_number)}/?$", href):
+                return href if href.startswith("http") else "https://www.lego.com" + href
     elif retailer in GENERIC_SHOPS:
         return _generic_result(page, GENERIC_SHOPS[retailer]["domain"], set_number)
     return None

@@ -385,3 +385,70 @@ def test_custom_shops_registry_and_generic_search():
     shops.apply_shop_options({})                      # removing custom shops cleans the registry
     assert "c_speelgoed_van_dijk" not in RETAILERS and "dreamland_be" in RETAILERS
     assert GENERIC_SHOPS["dreamland_be"]["search"].startswith("https://www.dreamland.be/")
+
+
+# ---------------------------------------------------------------- 0.7.0
+AMAZON_B06W2KC5R5_LIKE = """
+<div id="sims-carousel"><span class="a-price" data-a-size="l"><span class="a-offscreen">13,69&nbsp;€</span><span aria-hidden="true">13,69 €</span></span></div>
+<span id="productTitle"> LEGO 42082 Technic Rough Terrain Crane </span>
+<div id="corePriceDisplay_desktop_feature_div"><div class="a-section">
+ <span class="a-price a-text-price" data-a-strike="true"><span class="a-offscreen">119,99&nbsp;€</span></span>
+ <span class="a-price aok-align-center reinventPricePriceToPayMargin priceToPay"><span class="a-offscreen">99,95&nbsp;€</span><span aria-hidden="true"><span class="a-price-whole">99<span class="a-price-decimal">,</span></span><span class="a-price-fraction">95</span></span></span>
+</div></div>
+<div id="similar"><span class="a-price"><span class="a-offscreen">5,99 €</span></span></div>
+"""
+
+
+def test_amazon_uses_buybox_not_first_price():
+    p = parsers.parse_page("amazon_de", AMAZON_B06W2KC5R5_LIKE)
+    assert p.price == 99.95 and "42082" in p.title
+    hidden = '<span class="a-price"><span class="a-offscreen">13,69 €</span></span><input type="hidden" name="items[0.base][customerVisiblePrice][amount]" value="99.95">'
+    assert parsers.parse_page("amazon_de", hidden).price == 99.95
+    # no buy box at all: no price rather than a wrong one
+    only_carousel = '<span id="productTitle">LEGO 42082</span><span class="a-price"><span class="a-offscreen">13,69 €</span></span>'
+    assert parsers.parse_page("amazon_de", only_carousel).price is None
+
+
+LEGO_PAGE = """<html><head><meta property="og:image" content="https://www.lego.com/cdn/og.png">
+<title>Orchidee 10311 | LEGO® Icons | Officiële LEGO® winkel BE</title>
+<script type="application/ld+json">{"@type":"Product","name":"Orchidee","sku":"10311","image":["https://www.lego.com/cdn/cs/set/assets/10311.png"],
+"offers":{"@type":"Offer","price":"39.99","priceCurrency":"EUR","availability":"https://schema.org/InStock"}}</script></head>
+<script id="__NEXT_DATA__">{"product":{"price":{"formattedAmount":"€ 39,99","centAmount":3999},"listPrice":{"formattedAmount":"€ 49,99","centAmount":4999},
+"availabilityStatus":"E_RETIRING_SOON"}}</script></html>"""
+
+
+def test_parse_lego_sale_and_retiring():
+    p = parsers.parse_page("lego_com", LEGO_PAGE)
+    assert p.price == 39.99 and p.list_price == 49.99 and p.retiring and p.image.endswith("10311.png")
+    plain = LEGO_PAGE.replace('"listPrice":{"formattedAmount":"€ 49,99","centAmount":4999},', "").replace("E_RETIRING_SOON", "E_AVAILABLE")
+    p = parsers.parse_page("lego_com", plain)
+    assert p.list_price == 39.99 and not p.retiring
+    # the word "retiring" in a translation bundle must not flag every set
+    assert not parsers.parse_page("lego_com", plain + '<script>{"i18n":{"retiring":"Retiring soon"}}</script>').retiring
+    assert parsers.clean_title(p.title, "10311") == "Orchidee"
+
+
+def test_search_templates_and_lego_links():
+    from lego_pkg import shops
+    shops.apply_shop_options({})
+    assert parsers.search_url("lego_com", "10311") == "https://www.lego.com/nl-be/search?q=10311"
+    assert parsers.search_url("bol", "10311") == "https://www.bol.com/nl/nl/s/?searchtext=LEGO+10311"
+    shops.apply_shop_options({"lego_locale": "de-de", "shop_search": {"bol": "https://www.bol.com/be/nl/s/?searchtext={query}",
+                                                                      "amazon_de": "javascript:alert(1)"}})
+    assert parsers.search_url("lego_com", "10311") == "https://www.lego.com/de-de/search?q=10311"
+    assert parsers.search_url("bol", "10311") == "https://www.bol.com/be/nl/s/?searchtext=LEGO+10311"
+    assert parsers.search_url("amazon_de", "1").startswith("https://www.amazon.de/s?k=")     # invalid override ignored
+    shops.apply_shop_options({})
+    page = '<a href="/nl-be/product/orchidee-103110">x</a><a href="/nl-be/product/orchidee-10311">Orchidee</a>'
+    assert parsers.find_search_result("lego_com", page, "10311") == "https://www.lego.com/nl-be/product/orchidee-10311"
+    assert parsers.retailer_from_url("https://www.lego.com/nl-be/product/orchidee-10311") == "lego_com"
+    assert models.link_check({"url": "https://www.lego.com/nl-be/product/orchidee-10311", "title": "Orchidee | LEGO"}, {}, "10311")[0] == "ok"
+
+
+def test_clean_history_drops_impossible_points():
+    offer = {"history": [[1, 229.99], [2, 13.69], [3, 219.0]], "last_price": 219.0, "available": True}
+    assert models.clean_history(offer, 229.99) == 1 and [p for _, p in offer["history"]] == [229.99, 219.0]
+    offer = {"history": [[1, 229.99], [2, 13.69]], "last_price": 13.69, "available": True}
+    models.clean_history(offer, 229.99)
+    assert offer["last_price"] == 229.99
+    assert models.clean_history({"history": [[1, 5.0]]}, None) == 0

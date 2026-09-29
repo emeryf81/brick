@@ -8,10 +8,13 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .const import BUILTIN_RETAILERS, GENERIC_SHOPS, RETAILERS
+from .const import BUILTIN_RETAILERS, DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, GENERIC_SHOPS, RETAILERS
+
+SEARCH: dict[str, str] = dict(DEFAULT_SEARCH)      # effective search template per shop
+LOCALE = {"lego": DEFAULT_LEGO_LOCALE}
 
 _BUILTIN_GENERIC = {k: dict(v) for k, v in GENERIC_SHOPS.items()}
-FIXED_DOMAINS = {"amazon_nl": "amazon.nl", "amazon_de": "amazon.de", "amazon_be": "amazon.com.be",
+FIXED_DOMAINS = {"lego_com": "lego.com", "amazon_nl": "amazon.nl", "amazon_de": "amazon.de", "amazon_be": "amazon.com.be",
                  "bol": "bol.com", "kruidvat_be": "kruidvat.be"}
 
 
@@ -27,9 +30,13 @@ def validate_custom_shop(shop: dict[str, Any]) -> dict[str, str]:
         raise ValueError("Geef de winkel een naam.")
     if not re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+", domain):
         raise ValueError(f"Ongeldig domein {domain!r} (bv. dreamland.be).")
-    if search and (not search.startswith("https://") or "{query}" not in search or domain not in search):
-        raise ValueError("Zoek-URL moet met https:// beginnen, op het domein van de winkel liggen en {query} bevatten.")
+    if search and (not valid_search(search) or domain not in search):
+        raise ValueError("Zoek-URL moet met https:// beginnen, op het domein van de winkel liggen en {query} of {number} bevatten.")
     return {"id": str(shop.get("id") or shop_id(name)), "name": name, "domain": domain, "search": search}
+
+
+def valid_search(tpl: str) -> bool:
+    return tpl.startswith("https://") and ("{query}" in tpl or "{number}" in tpl) and " " not in tpl
 
 
 def apply_shop_options(options: dict[str, Any]) -> None:
@@ -45,9 +52,17 @@ def apply_shop_options(options: dict[str, Any]) -> None:
             continue
         RETAILERS[s["id"]] = (s["name"], "EUR")
         GENERIC_SHOPS[s["id"]] = {"domain": s["domain"], "search": s["search"]}
+    SEARCH.clear()
+    SEARCH.update(DEFAULT_SEARCH)
+    for rid, g in GENERIC_SHOPS.items():
+        if g.get("search"):
+            SEARCH[rid] = g["search"]
     for rid, tpl in (options.get("shop_search", {}) or {}).items():
-        if rid in GENERIC_SHOPS and tpl:
-            GENERIC_SHOPS[rid]["search"] = tpl
+        if rid in RETAILERS and tpl and valid_search(tpl):
+            SEARCH[rid] = tpl
+            if rid in GENERIC_SHOPS:
+                GENERIC_SHOPS[rid]["search"] = tpl
+    LOCALE["lego"] = (options.get("lego_locale") or DEFAULT_LEGO_LOCALE).lower()
 
 
 def domain_of(rid: str) -> str | None:

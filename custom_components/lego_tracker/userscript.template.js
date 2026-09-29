@@ -60,12 +60,39 @@
     }
     return null;
   }
+  // Amazon: only the buy box. The first ".a-price" on the page is often an accessory, a unit
+  // price, a coupon or a struck-through list price (e.g. €13,69 on a €99,95 set).
+  function aPrice(el) {
+    if (!el) return null;
+    const off = el.querySelector(".a-offscreen");
+    const v = parse(off && off.textContent.trim());
+    if (v) return v;
+    const whole = el.querySelector(".a-price-whole"), frac = el.querySelector(".a-price-fraction");
+    return whole ? parse(`${whole.textContent.replace(/[^\d]/g, "")},${frac ? frac.textContent.replace(/[^\d]/g, "") : "00"}`) : null;
+  }
+  function amazonPrice() {
+    const hidden = document.querySelector('input[name="items[0.base][customerVisiblePrice][amount]"], #twister-plus-price-data-price');
+    if (hidden && parse(hidden.value)) return parse(hidden.value);
+    for (const id of ["corePriceDisplay_desktop_feature_div", "corePrice_feature_div", "apex_desktop", "corePrice_desktop", "desktop_buybox", "buybox"]) {
+      const box = document.getElementById(id);
+      if (!box) continue;
+      const pay = aPrice(box.querySelector(".priceToPay, .apexPriceToPay, .reinventPricePriceToPayMargin"));
+      if (pay) return pay;
+      for (const el of box.querySelectorAll(".a-price")) {
+        if (el.matches(".a-text-price, [data-a-strike]") || el.closest(".a-text-price, [data-a-strike], .basisPrice, .a-size-small")) continue;
+        const v = aPrice(el);
+        if (v) return v;
+      }
+    }
+    for (const id of ["priceblock_dealprice", "priceblock_ourprice", "priceblock_saleprice", "price_inside_buybox", "newBuyBoxPrice"]) {
+      const el = document.getElementById(id);
+      if (el && parse(el.textContent)) return parse(el.textContent);
+    }
+    return null;   // better no price than a wrong one
+  }
   function fromDom() {
     const host = location.hostname;
-    if (host.includes("amazon")) {
-      const el = document.querySelector("#corePrice_feature_div .a-offscreen, #corePriceDisplay_desktop_feature_div .a-offscreen, #apex_desktop .a-offscreen, .a-price .a-offscreen");
-      return el && parse(el.textContent);
-    }
+    if (host.includes("amazon")) return amazonPrice();
     if (host.includes("bol.com")) {
       const el = document.querySelector('[data-test="price"]');
       if (el) { const f = el.querySelector("sup"); const whole = (el.childNodes[0]?.textContent || "").trim(); return parse(`${whole},${f && /\d/.test(f.textContent) ? f.textContent.trim() : "00"}`); }
@@ -76,7 +103,7 @@
   function report() {
     const ha = GM_getValue("ha_url", ""), token = GM_getValue("ha_token", "");
     if (!ha || !token) { if (!GM_getValue("hinted", false)) { GM_setValue("hinted", true); note("LEGO Price Tracker: stel je token in via het Tampermonkey-menu → HA instellen", false); } return; }
-    const price = fromDom() ?? fromJsonLd();
+    const price = location.hostname.includes("amazon") ? fromDom() : (fromDom() ?? fromJsonLd());
     if (!price) return;
     const key = "sent:" + location.pathname, last = GM_getValue(key, 0);
     if (Date.now() - last < 3600 * 1000) return;   // max once per hour per page

@@ -372,3 +372,47 @@ async def test_userscript_is_generated(hass: HomeAssistant, entry, hass_client_n
     text = await resp.text()
     assert "// ==UserScript==" in text and "@match        https://www.dreamland.be/*" in text
     assert "{{" not in text and "@updateURL" in text and "title: pageTitle()" in text
+
+
+async def test_lego_com_is_first_source(hass: HomeAssistant, entry, no_network):
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10311"}, blocking=True)
+    lego = Parsed(price=39.99, list_price=49.99, title="Orchidee 10311 | LEGO® Icons | Officiële LEGO® winkel BE",
+                  image="https://www.lego.com/cdn/10311.png")
+    meta = {"name": "Orchid", "rrp": 45.0, "image": "https://other/x.jpg", "year": 2022, "pieces": 608, "theme": "Icons"}
+    with patch("custom_components.lego_tracker.client.Fetcher.discover",
+               AsyncMock(side_effect=lambda r, n: "https://www.lego.com/nl-be/product/orchidee-10311" if r == "lego_com" else None)), \
+         patch("custom_components.lego_tracker.client.Fetcher.fetch_offer", AsyncMock(return_value=(lego, None))), \
+         patch("custom_components.lego_tracker.coordinator.lookup_metadata", AsyncMock(return_value=(meta, "Brickset"))), \
+         patch("custom_components.lego_tracker.coordinator.asyncio.sleep", AsyncMock()):
+        await hass.services.async_call(DOMAIN, "enrich_sets", {"set_number": "10311"}, blocking=True, return_response=True)
+    s = c.store["sets"]["10311"]
+    assert (s["rrp"], s["rrp_source"], s["image"], s["name"]) == (49.99, "LEGO.com", "https://www.lego.com/cdn/10311.png", "Orchidee")
+    assert s["year"] == 2022                                           # the rest comes from the next source
+    offer = c.store["offers"]["10311"]["lego_com"]
+    assert offer["link_status"] == "ok" and offer["last_price"] == 39.99
+    assert c.compute()["statuses"]["10311"]["discount_rrp"] == 20.0    # LEGO.com sale counts as a deal
+    # a user-set RRP is never overwritten
+    c.update_set("10311", {"rrp": 55})
+    c._apply_lego("10311", lego)
+    assert s["rrp"] == 55 and s["rrp_source"] == "user"
+
+
+async def test_settings_search_templates(hass: HomeAssistant, entry, hass_ws_client):
+    c = await _setup(hass, entry)
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/settings/get"})
+    shops = {s["id"]: s for s in (await ws.receive_json())["result"]["shops"]}
+    assert shops["bol"]["search"] == shops["bol"]["default_search"] == "https://www.bol.com/nl/nl/s/?searchtext={query}"
+    assert shops["lego_com"]["search"].startswith("https://www.lego.com/{locale}/")
+    await ws.send_json({"id": 2, "type": "lego_tracker/settings/set", "fields": {"shop_search": {"bol": "ftp://x"}}})
+    assert (await ws.receive_json())["error"]["code"] == "invalid_format"
+    await ws.send_json({"id": 3, "type": "lego_tracker/settings/set", "fields": {
+        "lego_locale": "nl-NL", "shop_search": {"bol": "https://www.bol.com/be/nl/s/?searchtext={query}",
+                                                "amazon_nl": "https://www.amazon.nl/s?k={query}"}}})
+    assert (await ws.receive_json())["result"]["saved"]
+    await hass.async_block_till_done()
+    assert entry.options["shop_search"] == {"bol": "https://www.bol.com/be/nl/s/?searchtext={query}"}   # defaults not stored
+    from custom_components.lego_tracker.parsers import search_url
+    assert search_url("bol", "1") == "https://www.bol.com/be/nl/s/?searchtext=LEGO+1"
+    assert search_url("lego_com", "1") == "https://www.lego.com/nl-nl/search?q=1"

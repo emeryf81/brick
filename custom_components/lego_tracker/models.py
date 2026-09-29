@@ -208,6 +208,22 @@ def retirement_status(lego_set: dict[str, Any], now: float | None = None) -> dic
     }
 
 
+def clean_history(offer: dict[str, Any], rrp: float | None) -> int:
+    """Drop impossible price points (< 20 % or > 4× RRP), e.g. an accessory price read by mistake.
+    Returns the number of removed points; fixes last_price when the latest point was removed."""
+    if not rrp:
+        return 0
+    hist = offer.get("history", [])
+    keep = [h for h in hist if rrp * 0.2 <= h[1] <= rrp * 4]
+    removed = len(hist) - len(keep)
+    if removed:
+        offer["history"] = keep
+        if offer.get("last_price") is not None and not rrp * 0.2 <= offer["last_price"] <= rrp * 4:
+            offer["last_price"] = keep[-1][1] if keep else None
+            offer["available"] = bool(keep) and offer.get("available", False)
+    return removed
+
+
 def link_check(offer: dict[str, Any], lego_set: dict[str, Any], set_number: str) -> tuple[str | None, str]:
     """Is this shop link the right product? Uses the page title (or URL slug) and the price.
 
@@ -217,6 +233,8 @@ def link_check(offer: dict[str, Any], lego_set: dict[str, Any], set_number: str)
 
     if offer.get("link_status") == "confirmed":
         return "confirmed", "handmatig goedgekeurd"
+    if re.search(rf"lego\.com/[a-z]{{2}}-[a-z]{{2}}/product/[^?#]*?(?<!\d){re.escape(set_number)}/?(?:[?#]|$)", offer.get("url") or ""):
+        return "ok", "officiële LEGO.com-pagina van deze set"
     title = offer.get("title")
     status, reason = title_check(title, set_number) if title else (None, "")
     if status is None and offer.get("url"):
