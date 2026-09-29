@@ -150,12 +150,18 @@
       let ok = 0, fail = 0;
       tell({ type: "relay-status", running: true, done: 0, total: items.length, ok, fail });
       for (let i = 0; i < items.length; i++) {
-        const it = items[i];
-        if ((blocked[it.retailer] || 0) >= 2) { fail++; continue; }   // this shop blocks this browser too: stop asking it
+        const it = items[i], who = it.retailer || it.source;
+        if ((blocked[who] || 0) >= 2) { fail++; continue; }   // this site blocks this browser too: stop asking it
         const r = await req({ method: "GET", url: it.url, headers: { "Accept-Language": "nl-BE,nl;q=0.9,en;q=0.8", Accept: "text/html" } });
         const html = r.responseText || "";
         let result = { set_number: it.set_number, retailer: it.retailer, url: it.url };
-        if (r.status >= 400 || r.status === 0 || BLOCKED.test(html.slice(0, 20000))) {
+        if (it.kind === "page") {
+          // price-comparison page: Home Assistant reads it (same parser as on the server)
+          const bot = r.status && BLOCKED.test(html.slice(0, 20000));
+          result = { kind: "page", source: it.source, set_number: it.set_number, url: it.url, step: it.step || 0,
+                     status: bot ? 403 : r.status, html: bot ? "" : html.slice(0, 1500000), error: r.status ? null : "network error" };
+          blocked[who] = r.status && !bot && r.status < 400 ? 0 : (blocked[who] || 0) + 1;
+        } else if (r.status >= 400 || r.status === 0 || BLOCKED.test(html.slice(0, 20000))) {
           blocked[it.retailer] = (blocked[it.retailer] || 0) + 1;
           result.error = r.status ? (BLOCKED.test(html.slice(0, 20000)) ? "blocked (captcha / bot protection)" : "HTTP " + r.status) : "network error";
         } else {
@@ -165,7 +171,8 @@
         }
         const post = await req({ method: "POST", url: HA() + "/api/lego_tracker/relay", headers: auth, data: JSON.stringify({ results: [result] }) });
         let res = {}; try { res = JSON.parse(post.responseText || "{}"); } catch (e) { /* ignore */ }
-        if (result.price && res.ok) ok++; else fail++;
+        if ((result.price || result.kind === "page") && res.ok) ok++; else if (!(res.follow || []).length) fail++;
+        for (const f of res.follow || []) items.push(f);   // search result -> product page: fetch that one too
         tell({ type: "relay-status", running: true, done: i + 1, total: items.length, ok, fail, shop: it.shop, set_number: it.set_number });
         await sleep(4000 + Math.random() * 5000);   // calm, like a person clicking through
       }

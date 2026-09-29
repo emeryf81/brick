@@ -802,7 +802,7 @@ async def test_browser_relay_list_and_results(hass: HomeAssistant, entry, no_net
     assert data["enabled"] and [i["retailer"] for i in data["items"]] == ["bol"] and data["interval_hours"] == 6
     item = data["items"][0]
     r = await client.post("/api/lego_tracker/relay", json={"results": [{**item, "price": 36.99, "title": "LEGO Icons Bonsaiboompje 10281"}]})
-    assert (await r.json()) == {"ok": 1, "fail": 0, "rejected": []}
+    assert (await r.json()) == {"ok": 1, "fail": 0, "rejected": [], "follow": []}
     o = c.store["offers"]["10281"]["bol"]
     assert o["last_price"] == 36.99 and o["error"] is None
     relay_log = [e for e in c.store["activity"] if e.get("source") == "relay"]
@@ -831,10 +831,20 @@ BW_PAGE = '''<html><head><title>LEGO 10281 Bonsai - Brickwatch</title><meta prop
 <tr><td><img alt="Top1Toys"></td><td>€ 41,00</td><td><a href="/nl-BE/go/9">Naar winkel</a></td></tr></table></body></html>'''
 
 
+def _pages(**by_host):
+    """get_page mock: (status, html) per host fragment, 404 for the rest."""
+    async def get(src, url, force=False):
+        for frag, res in by_host.items():
+            if frag.replace("_", ".") in url or frag in url:
+                return res(url) if callable(res) else res
+        return 404, "", None
+    return AsyncMock(side_effect=get)
+
+
 async def test_brickwatch_hidden_source(hass: HomeAssistant, entry, no_network, hass_ws_client):
     c = await _setup(hass, entry)
     ws = await hass_ws_client(hass)
-    await ws.send_json({"id": 1, "type": "lego_tracker/brickwatch/fetch"})
+    await ws.send_json({"id": 1, "type": "lego_tracker/compare/fetch"})
     assert (await ws.receive_json())["error"]["code"] == "not_enabled"          # off by default
     hass.config_entries.async_update_entry(entry, options={**entry.options, "brickwatch": True})
     await hass.async_block_till_done()
@@ -843,10 +853,11 @@ async def test_brickwatch_hidden_source(hass: HomeAssistant, entry, no_network, 
     await hass.services.async_call(DOMAIN, "set_offer", {"set_number": "10281", "retailer": "bol",
                                                          "url": "https://www.bol.com/nl/nl/p/lego-bonsai/9300000038297067/"}, blocking=True)
     no_network.side_effect = lambda rid, url, force=False: (None, "blocked (HTTP 403)")    # every shop blocks us
-    page = AsyncMock(return_value=(200, BW_PAGE, None))
+    page = _pages(brickwatch=(200, BW_PAGE, None))
     with patch.object(c.fetcher, "get_page", page):
         await c.refresh_all()
-    assert page.await_args.args[1] == "https://www.brickwatch.net/nl-BE/set/10281/"
+    urls = [a.args[1] for a in page.await_args_list]
+    assert urls[0] == "https://www.brickwatch.net/nl-BE/set/10281/" and any("kieskeurig.be/search?q=lego+10281" in u for u in urls)
     offers = c.store["offers"]["10281"]
     assert offers["bol"]["last_price"] == 36.49 and offers["bol"]["error"] is None          # bol.com via Brickwatch
     assert offers["amazon_nl"]["via"] == "brickwatch" and offers["amazon_nl"]["last_price"] == 37.10   # new link via Brickwatch
@@ -854,32 +865,135 @@ async def test_brickwatch_hidden_source(hass: HomeAssistant, entry, no_network, 
     assert s["rrp"] == 49.99 and s["image"] == "https://img.brickwatch.net/10281.jpg" and "Bonsaiboompje" in s["name"]
     check = [e for e in c.store["activity"] if e["kind"] == "check"][-1]
     assert check["results"]["bol"]["via"] == "brickwatch" and check["results"]["bol"]["ok"]
-    shops = {sh["name"]: sh for sh in c.store["brickwatch"]["10281"]["shops"]}
+    shops = {sh["name"]: sh for sh in c.store["compare"]["brickwatch"]["10281"]["shops"]}
     assert shops["Top1Toys"]["retailer"] is None and shops["Top1Toys"]["price"] == 41.0      # every shop is kept
-    # the set dialog gets all Brickwatch shops; the page is re-used for a few hours
+    assert c.store["compare"]["kieskeurig"]["10281"]["status"] == "missing"
+    # the set dialog gets all shops per site; pages are re-used for a few hours
     await ws.send_json({"id": 2, "type": "lego_tracker/set", "set_number": "10281"})
-    assert len((await ws.receive_json())["result"]["brickwatch"]["shops"]) == 3
+    card = (await ws.receive_json())["result"]
+    assert len(card["compare"]["brickwatch"]["shops"]) == 3 and card["compare"]["kieskeurig"]["status"] == "missing"
+    n = page.await_count
     with patch.object(c.fetcher, "get_page", page):
         await c.refresh_set("10281")
-    assert page.await_count == 1
+    assert page.await_count == n
+    await ws.send_json({"id": 3, "type": "lego_tracker/overview"})
+    ov = (await ws.receive_json())["result"]["brickwatch"]
+    assert ov["sources"]["brickwatch"]["sets"] == 1 and ov["sources"]["kieskeurig"]["missing"] == 1
 
 
 async def test_brickwatch_missing_page_not_retried_within_a_day(hass: HomeAssistant, entry, no_network):
-    hass.config_entries.async_update_entry(entry, options={**entry.options, "brickwatch": True})
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "brickwatch": True, "compare_sources": ["brickwatch"]})
     c = await _setup(hass, entry)
     await hass.services.async_call(DOMAIN, "add_set", {"set_number": "385"}, blocking=True)
     page = AsyncMock(return_value=(404, "", None))
+    bw = lambda: c.store["compare"]["brickwatch"]   # noqa: E731
     with patch.object(c.fetcher, "get_page", page):
-        assert await c.brickwatch_refresh("385") is None
-        assert await c.brickwatch_refresh("385", force=True) is None                  # not even forced
-        assert page.await_count == 1 and c.store["brickwatch"]["385"]["status"] == "missing"
-        c.store["brickwatch"]["385"]["ts"] -= 25 * 3600                              # a day later
-        await c.brickwatch_refresh("385")
+        assert await c.compare_refresh("385") == {}
+        assert await c.compare_refresh("385", force=True) == {}                        # not even forced
+        assert page.await_count == 1 and bw()["385"]["status"] == "missing"
+        bw()["385"]["ts"] -= 25 * 3600                                                 # a day later
+        await c.compare_refresh("385")
         assert page.await_count == 2
     # a redirect to the home page counts as missing too
     home = AsyncMock(return_value=(200, "<html><title>Brickwatch België</title><h1>Welkom</h1></html>", None))
-    c.store["brickwatch"].pop("385")
+    bw().pop("385")
     with patch.object(c.fetcher, "get_page", home):
-        assert await c.brickwatch_refresh("385") is None
-    assert c.store["brickwatch"]["385"]["status"] == "missing"
+        assert await c.compare_refresh("385") == {}
+    assert bw()["385"]["status"] == "missing"
     assert "385" in c._spread_candidates()                                             # sets without links are checked too
+
+
+BW_LED = """<html><head><title>LED verlichting voor LEGO 43290 - Brickwatch</title></head><body>
+<h1>BriksMax LED-verlichtingsset voor LEGO 43290</h1>
+<table><tr><td>Shop X</td><td>€ 29,99</td><td><a href="https://shopx.example/led">Naar winkel</a></td></tr></table>
+<p>Hoort bij: <a href="/nl-BE/set/43290-1/lego-disney-magic-castle">LEGO Disney 43290 Het magische kasteel</a>
+<a href="/nl-BE/set/43290-2/led-kit">LED kit 43290</a></p></body></html>"""
+BW_REAL = """<html><head><title>LEGO 43290 - Brickwatch</title></head><body><h1>LEGO Disney 43290 Het magische kasteel</h1>
+<div class="offer"><span class="shop">bol.com</span><span class="price">€ 79,99</span><a href="/nl-BE/go/7">Bekijk</a></div>
+<div class="offer"><span class="shop">Dreamland</span><span class="price">€ 84,99</span><a href="/nl-BE/go/8">Bekijk</a></div>
+</body></html>"""
+KK_SEARCH = """<html><body><h1>Zoekresultaten lego 60454</h1><ul>
+<li><a href="/bouw_en_constructiespeelgoed/product/1111-led-light-kit-for-lego-60454">LED Light Kit for LEGO 60454</a> vanaf € 19,99</li>
+<li><a href="/bouw_en_constructiespeelgoed/product/52114913-lego-city-holiday-adventure-camper-van-60454">LEGO City 60454 Camper</a> vanaf € 24,99</li>
+</ul></body></html>"""
+KK_PRODUCT = """<html><head><title>LEGO City 60454 - Kieskeurig.be</title>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"Product","name":"LEGO City Vakantie camper 60454",
+"gtin13":"5702017583723","offers":{"@type":"AggregateOffer","lowPrice":"24.99","offers":[
+{"@type":"Offer","price":"24.99","priceCurrency":"EUR","seller":{"@type":"Organization","name":"bol.com"},"url":"https://www.kieskeurig.be/clickout/1"},
+{"@type":"Offer","price":"27.49","priceCurrency":"EUR","seller":{"@type":"Organization","name":"Amazon.nl"},"url":"https://www.kieskeurig.be/clickout/2"},
+{"@type":"Offer","price":"26.00","availability":"https://schema.org/OutOfStock","seller":{"name":"Fun"},"url":"https://www.kieskeurig.be/clickout/3"}]}}
+</script></head><body><h1>LEGO City 60454</h1></body></html>"""
+SHOPARIZE = """<html><body><script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"products":[
+{"title":"LEGO Icons 40460 Rozen","price":{"amount":12.99},"shop":{"name":"Dreamland"},"clickoutUrl":"https://www.shoparize.com/go/a"},
+{"title":"LEGO 40460 Rozen bouwset","price":"11,49","merchantName":"bol.com","url":"https://www.shoparize.com/go/b"},
+{"title":"LED verlichting voor LEGO 40460","price":9.99,"merchantName":"LightMyBricks","url":"https://www.shoparize.com/go/c"},
+{"title":"LEGO 40461 Tulpen","price":10.99,"merchantName":"bol.com","url":"https://www.shoparize.com/go/d"}]}}}</script></body></html>"""
+
+
+def test_compare_parsers_skip_led_and_follow():
+    from custom_components.lego_tracker import compare
+    from custom_components.lego_tracker.shops import all_domains
+
+    d = all_domains()
+    # Brickwatch: an LED-kit page for the number is not the set: follow the link to the real set page
+    r = compare.parse("brickwatch", BW_LED, "43290", "https://www.brickwatch.net/nl-BE/set/43290/", d)
+    assert r.kind == "follow" and r.url == "https://www.brickwatch.net/nl-BE/set/43290-1/lego-disney-magic-castle"
+    r = compare.parse("brickwatch", BW_LED.replace("/nl-BE/set/43290-1/lego-disney-magic-castle", "/x"), "43290",
+                      "https://www.brickwatch.net/nl-BE/set/43290/", d)
+    assert r.kind == "follow" and r.url == "https://www.brickwatch.net/nl-BE/search/?q=43290"      # or search the site
+    r = compare.parse("brickwatch", BW_REAL, "43290", "https://www.brickwatch.net/nl-BE/set/43290-1/x", d, step=1)
+    assert r.kind == "offers" and [(x["retailer"], x["price"]) for x in r.shops] == [("bol", 79.99), ("dreamland_be", 84.99)]
+    # Kieskeurig: search -> product page (not the LED kit), JSON-LD offers, out of stock skipped, EAN kept
+    r = compare.parse("kieskeurig", KK_SEARCH, "60454", "https://www.kieskeurig.be/search?q=lego+60454", d)
+    assert r.kind == "follow" and "52114913" in r.url
+    r = compare.parse("kieskeurig", KK_PRODUCT, "60454", r.url, d, step=1)
+    assert [(x["retailer"], x["price"]) for x in r.shops] == [("bol", 24.99), ("amazon_nl", 27.49)] and r.ean == "5702017583723"
+    # Shoparize: embedded JSON search results; LED kits and other sets are dropped
+    r = compare.parse("shoparize", SHOPARIZE, "40460", "https://www.shoparize.com/be/q?q=lego+40460", d)
+    assert [(x["name"], x["price"]) for x in r.shops] == [("bol.com", 11.49), ("Dreamland", 12.99)] and r.name is None
+    # Producthero needs the EAN
+    assert compare.first_url("producthero", "60454", "nl-be") is None
+    assert compare.first_url("producthero", "60454", "nl-be", "5702016914177") == \
+        "https://shopping.producthero.com/nl/product/05702016914177?country=be"
+    assert compare.first_url("channable", "10328", "nl-be") == "https://shopping.channable.com/?country=BE&search=lego+10328"
+
+
+async def test_compare_network_errors_pause_one_hour_and_job_stops(hass: HomeAssistant, entry, no_network):
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "brickwatch": True, "compare_sources": ["brickwatch"]})
+    c = await _setup(hass, entry)
+    for n in ("10281", "10300", "10305", "10311", "10313", "10316", "10317"):
+        await hass.services.async_call(DOMAIN, "add_set", {"set_number": n}, blocking=True)
+    err = "network error: Failed to perform, curl: (35) BoringSSL SSL_connect: Connection closed abruptly"
+    page = AsyncMock(return_value=(0, "", err))
+    with patch.object(c.fetcher, "get_page", page), \
+            patch("homeassistant.helpers.event.async_call_later") as later:
+        c.start_brickwatch()
+        await c._job_task
+    assert page.await_count == 5                                   # 5 network errors in a row: stop asking
+    assert 3500 < c.fetcher.cooldown_left("brickwatch") <= 3600
+    assert c.last_job["cancelled"] and later.call_args.args[1] > 3600    # the rest follows after the pause
+    assert any("5 network errors in a row" in e["message"] for e in c.store["activity"])
+    with patch.object(c.fetcher, "get_page", page):
+        await c.compare_refresh("10281")                           # paused: skipped
+    assert page.await_count == 5
+
+
+async def test_relay_fetches_comparison_pages(hass: HomeAssistant, entry, no_network, hass_client):
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "brickwatch": True, "compare_sources": ["kieskeurig"]})
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "60454"}, blocking=True)
+    c.fetcher.blocked_until["kieskeurig"] = time.time() + 3600       # the server is refused
+    client = await hass_client()
+    items = (await (await client.get("/api/lego_tracker/relay")).json())["items"]
+    it = next(i for i in items if i.get("kind") == "page")
+    assert it["url"] == "https://www.kieskeurig.be/search?q=lego+60454" and it["step"] == 0
+    r = await (await client.post("/api/lego_tracker/relay", json={"results": [{**it, "status": 200, "html": KK_SEARCH}]})).json()
+    nxt = r["follow"][0]
+    assert "52114913" in nxt["url"] and nxt["step"] == 1
+    r = await (await client.post("/api/lego_tracker/relay", json={"results": [{**nxt, "status": 200, "html": KK_PRODUCT}]})).json()
+    assert r["ok"] == 1
+    e = c.store["compare"]["kieskeurig"]["60454"]
+    assert e["status"] == "ok" and e["via"] == "relay" and c.store["sets"]["60454"]["ean"] == "5702017583723"
+    # only pages of comparison sites for tracked sets
+    r = await (await client.post("/api/lego_tracker/relay", json={"results": [{**it, "url": "https://evil.example/", "status": 200, "html": ""}]})).json()
+    assert r["rejected"]
