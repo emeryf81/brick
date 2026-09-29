@@ -3,7 +3,9 @@
 **LOT (LEGO Organizing Tool) – collection manager & price tracker for Home Assistant**
 <center><a href="https://www.buymeacoffee.com/emeryf" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;" ></a></center>
 
+
 *IMPORTANT*
+
 LOT is an independent Home Assistant integration for organizing LEGO® sets. LOT is not affiliated with, sponsored by, or endorsed by the LEGO Group. LEGO® is a trademark of the LEGO Group.
 
 A custom integration (HACS compatible) that tracks LEGO sets and their prices at **LEGO.com, Amazon.nl, Amazon.de, Amazon.com.be, bol.com, Kruidvat.be, Dreamland.be and your own shops**, with a daily deals dashboard, price charts, a collection value chart and a full logbook.
