@@ -412,6 +412,8 @@ def _dom_offers(root: _Node, page_url: str, search: bool) -> list[dict[str, Any]
         name = _shop_name(row, link)
         if not search and CTA_RE.search(name):
             continue                                  # "Naar goedkoopste shop": a button, not a shop
+        if is_accessory(text) or is_accessory(link.attrs.get("title")):
+            continue                                  # an LED kit / display case offer: take the next one
         out.append({"name": name, "price": min(prices), "url": urljoin(page_url, htmllib.unescape(href)),
                     "title": text[:300] if search else None})
     return out
@@ -523,11 +525,11 @@ def parse(source: str, page: str, num: str, page_url: str, domains: dict[str, st
     path = urlparse(page_url).path
     if source == "brickwatch":
         search = "/search" in path or "q=" in page_url
-        head = " ".join(filter(None, (_h1(page), _page_title(page), _meta(page, "og:title"), _meta(page, "description"),
-                                      _meta(page, "og:description"))))
         info, offers = _jsonld(page)
-        head += " " + str(info.get("name") or "") + " " + str(info.get("description") or "")
-        if search or is_accessory(head):
+        head = " ".join(filter(None, (_h1(page), _page_title(page), _meta(page, "og:title"), str(info.get("name") or ""))))
+        desc = " ".join(filter(None, (_meta(page, "description"), _meta(page, "og:description"), str(info.get("description") or ""))))
+        # the title: any accessory word; the description: only LED (a real set's text may say 'display model')
+        if search or is_accessory(head) or NOT_THE_SET.search(desc):
             # an LED kit (or other accessory) page for this number, or a search page: look further on the site
             links = _links(root, page_url, r"/set/", num)
             if links and step < MAX_STEPS - 1:

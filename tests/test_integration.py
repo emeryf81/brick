@@ -930,6 +930,17 @@ SHOPARIZE = """<html><body><script id="__NEXT_DATA__" type="application/json">{"
 {"title":"LEGO 40461 Tulpen","price":10.99,"merchantName":"bol.com","url":"https://www.shoparize.com/go/d"}]}}}</script></body></html>"""
 
 
+def test_accessory_words_never_count_as_the_set():
+    from custom_components.lego_tracker.parsers import title_check
+
+    for t in ("LMB verlichtingsset voor LEGO 10368", "Lichtjes geschikt voor LEGO 10368", "LEGO 10368 lights kit",
+              "Acrylglas vitrine LEGO 10368", "LEGO 10368 display case", "LED licht voor LEGO 10368"):
+        assert title_check(t, "10368")[0] == "suspect", t
+    for t, num in (("LEGO Icons Chrysant - Botanical Collection - 10368", "10368"),
+                   ("LEGO City 60316 - geschikt voor kinderen vanaf 6 jaar", "60316")):
+        assert title_check(t, num)[0] == "ok", t
+
+
 def test_compare_parsers_skip_led_and_follow():
     from custom_components.lego_tracker import compare
     from custom_components.lego_tracker.shops import all_domains
@@ -956,6 +967,18 @@ def test_compare_parsers_skip_led_and_follow():
               '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"page":{"title":"x"}}},"page":"/","query":{}}</script></body></html>'
     r = compare.parse("channable", js_page, "10368", "https://shopping.channable.com/?country=BE&search=lego+10368", d)
     assert r.kind == "missing" and r.note == "js"
+    # accessories anywhere on a page are skipped; the next row with the set number counts
+    mixed = """<html><body><h1>Zoekresultaten lego 10368</h1>
+    <div class="card"><a href="https://shopx.example/lmb">LMB verlichtingsset voor LEGO 10368</a> <b>€ 19,99</b> <span class="shop">ShopX</span></div>
+    <div class="card"><a href="https://shopy.example/acryl">Acryl display vitrine geschikt voor LEGO 10368</a> <b>€ 24,99</b> <span class="shop">ShopY</span></div>
+    <div class="card"><a href="https://shopz.example/lights">BrickBling lights 10368</a> <b>€ 14,99</b> <span class="shop">ShopZ</span></div>
+    <div class="card"><a href="https://www.dreamland.be/e/lego-10368">LEGO Icons 10368 Chrysant</a> <b>€ 27,99</b> <span class="shop">Dreamland</span></div>
+    </body></html>"""
+    r = compare.parse("shoparize", mixed, "10368", "https://www.shoparize.com/be/q?q=lego+10368", d)
+    assert [(x["retailer"], x["price"]) for x in r.shops] == [("dreamland_be", 27.99)]
+    # a real set whose description says 'display model' is still the set (only LED counts in the description)
+    real = BW_REAL.replace("<head>", '<head><meta name="description" content="A beautiful display model for adults">')
+    assert compare.parse("brickwatch", real, "43290", "https://www.brickwatch.net/nl-BE/set/43290/", d).kind == "offers"
     # Producthero needs the EAN
     assert compare.first_url("producthero", "60454", "nl-be") is None
     assert compare.first_url("producthero", "60454", "nl-be", "5702016914177") == \

@@ -277,11 +277,16 @@ def lego_product_url(set_number: str) -> str:
 # ------------------------------------------------------------ product matching
 # Accessories and look-alikes that mention a LEGO set number but are not the set itself.
 ACCESSORY_RE = re.compile(
-    r"\b(led|leds|verlichting|beleuchtung|licht(?:set|kit)?|lighting|light kit|lampen|vitrine|display ?case|"
-    r"schaukasten|acryl|acrylic|showcase|stofkap|staubschutz|dust ?cover|wandhalter|wall mount|halterung|"
+    r"\b(leds?|led[- ]?(?:verlichting|licht|light|strip|set|kit)\w*|lmb|verlichting\w*|beleuchtung\w*|"
+    r"licht|lichtjes|licht(?:set|kit|snoer)\w*|lights?|lighting|light ?(?:kit|set)|lampen|"
+    r"vitrines?|displays?|display ?case|schaukasten|acryl\w*|acrylic|plexi\w*|showcase|stofkap|staubschutz|dust ?cover|"
+    r"wandhalter|wall mount|halterung|"
     r"sticker|aufkleber|poster|puzzle|sokken|socks|t-shirt|mok|mug|sleutelhanger|schl[uü]sselanh[aä]nger|keychain|"
     r"magneet|magnet|handleiding|instructions only|anleitung|bauanleitung|ersatzteile|onderdelen los|spare parts|"
-    r"compatibel|compatible|kompatibel|niet van lego|kein lego|not lego|geen lego)\b", re.I)
+    r"compatibel|compatible|kompatibel|niet van lego|kein lego|not lego|geen lego|"
+    # 'geschikt voor LEGO 10368' is an accessory; 'geschikt voor kinderen vanaf 8 jaar' is a normal set title
+    r"geschikt\s+(?:voor|met|bij)\s+(?:(?:de|het|alle|jouw|je)\s+)?(?:lego|\d{4,6})|passend\s+(?:voor|bij)\s+(?:lego|\d{4,6})|"
+    r"suitable\s+for\s+(?:lego|\d{4,6})|for\s+lego|voor\s+lego|für\s+lego|pour\s+lego)\b", re.I)
 KNOCKOFF_RE = re.compile(r"\b(keeppley|mould ?king|cada|lepin|bluebrixx|cobi|sluban|qman|wange|reobrix|pantasy|"
                          r"funwhole|jmbricklayer|lumibricks|briksmax|light my bricks|lightailing|kyglaring|brickbling)\b", re.I)
 
