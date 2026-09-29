@@ -1015,6 +1015,52 @@ async def test_kieskeurig_product_page_403_uses_search_results(hass: HomeAssista
     assert page.await_count == 3                     # product pages skipped for a day: only the search page
 
 
+# structure of a real BrickEconomy set page (2026-09, region Europe)
+BE_PAGE = """<html><head><script type="application/ld+json">{"@context": "https://schema.org/","@type": "Product",
+"name": "LEGO Botanical Collection Chrysanthemum","image": ["https://www.brickeconomy.com/resources/images/sets/lego-10368-1_xlarge.jpg"],
+"sku": "10368-1","gtin13": "5702017719689","offers": {"@type": "AggregateOffer","lowPrice": "23.79","priceCurrency": "USD"}}</script></head>
+<body><div>Theme</div><div>Botanicals</div><div>Year</div><div>2025</div>
+<h4>Set Details</h4><div>Set number</div><div>10368-1</div><div>Name</div><div>Chrysanthemum</div><div>Theme</div><div><a>Icons</a></div>
+<div>Subtheme</div><div>Botanical Collection</div><div>Year</div><div>2024</div><div>Availability</div><div>Retail</div>
+<div>Pieces</div><div>278 <small>(PPP €0.11)</small></div>
+<h4>Set Pricing</h4><div>Retail price</div><div>€29.99</div><div>Market price</div><div>€22.31</div><div>-25.6%</div>
+<h4>Set Predictions</h4><div>Retirement</div><div>Early to mid 2027</div><div>69.6%</div><div>1 year retired</div><div>€35.07</div>
+<div>5 years retired</div><div>€33 - €37</div><div>EAN</div><div>5702017719689</div></body></html>"""
+
+
+async def test_brickeconomy_market_value_and_retirement(hass: HomeAssistant, entry, no_network):
+    from custom_components.lego_tracker import compare
+
+    r = compare.parse("brickeconomy", BE_PAGE, "10368", "https://www.brickeconomy.com/set/10368-1/", {})
+    assert r.kind == "data" and r.data["theme"] == "Icons" and r.data["year"] == 2024 and r.data["pieces"] == 278
+    assert r.data["market_new"] == 22.31 and r.rrp == 29.99 and r.data["forecast_5y"] == [33.0, 37.0] and r.ean == "5702017719689"
+    assert compare.forecast_date("Early to mid 2027") == "2027-05-31" and compare.forecast_date("Retired December 2024") == "2024-12-31"
+    assert compare.parse("brickeconomy", BE_PAGE.replace("10368-1</div>", "10369-1</div>").replace("10368", "x"), "10368", "u", {}).kind == "missing"
+    assert compare._eur("$24.99") is None                                  # only euro values
+
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "brickwatch": True, "compare_sources": ["brickeconomy"]})
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10368"}, blocking=True)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
+    c.store["collection"]["10368"] = {"qty": 1, "paid": 25.0, "condition": "Sealed"}
+    c.store["sets"]["10281"].update(exit_date="2026-12-31", exit_date_source="user")
+    page = AsyncMock(side_effect=lambda src, url, force=False, note_block=True:
+                     (200, BE_PAGE if "10368" in url else BE_PAGE.replace("10368", "10281"), None))
+    with patch.object(c.fetcher, "get_page", page):
+        await c.compare_refresh("10368")
+        await c.compare_refresh("10281")
+    assert page.await_args_list[0].args[1] == "https://www.brickeconomy.com/set/10368-1/"
+    s, e = c.store["sets"]["10368"], c.store["collection"]["10368"]
+    assert s["exit_date"] == "2027-05-31" and s["exit_date_source"] == "BrickEconomy" and s["market"]["market_new"] == 22.31
+    assert e["current_value"] == 22.31 and e["value_source"] == "BrickEconomy" and len(e["value_history"]) == 1
+    assert c.store["sets"]["10281"]["exit_date"] == "2026-12-31"           # your own date wins
+    assert c.compare_prices("10368") == {}                                  # no shop prices from BrickEconomy
+    c.store["compare"]["brickeconomy"]["10368"]["ts"] -= 12 * 3600
+    with patch.object(c.fetcher, "get_page", page):
+        await c.compare_refresh("10368")
+    assert page.await_count == 2                                            # re-used for a day, not 6 h
+
+
 async def test_relay_fetches_comparison_pages(hass: HomeAssistant, entry, no_network, hass_client):
     hass.config_entries.async_update_entry(entry, options={**entry.options, "brickwatch": True, "compare_sources": ["kieskeurig"]})
     c = await _setup(hass, entry)

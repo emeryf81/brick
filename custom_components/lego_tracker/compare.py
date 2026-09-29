@@ -16,6 +16,7 @@ import html as htmllib
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import quote_plus, urljoin, urlparse
@@ -30,8 +31,10 @@ SOURCES: dict[str, tuple[str, str]] = {
     "shoparize": ("Shoparize", "www.shoparize.com"),
     "channable": ("Channable Shopping", "shopping.channable.com"),
     "producthero": ("Producthero", "shopping.producthero.com"),
+    "brickeconomy": ("BrickEconomy", "www.brickeconomy.com"),     # market value + retirement, not shop prices
 }
-HOSTS = {"www.brickwatch.net", "www.kieskeurig.be", "www.kieskeurig.nl", "www.shoparize.com",
+FRESH_HOURS = {"brickeconomy": 24}          # market values move slowly: once a day is enough
+HOSTS = {"www.brickeconomy.com", "www.brickwatch.net", "www.kieskeurig.be", "www.kieskeurig.nl", "www.shoparize.com",
          "shopping.channable.com", "shopping.producthero.com"}
 MAX_STEPS = 3
 
@@ -97,6 +100,8 @@ def first_url(source: str, num: str, lego_locale: str | None = None, ean: str | 
         return f"https://www.shoparize.com/{'uk' if cc == 'GB' else cc.lower()}/q?q={q}"
     if source == "channable":
         return f"https://shopping.channable.com/?country={cc}&search={q}"
+    if source == "brickeconomy":
+        return f"https://www.brickeconomy.com/set/{num}-1/"
     if source == "producthero":
         if not ean or not ean.isdigit():
             return None
@@ -423,6 +428,7 @@ class Result:
     ean: str | None = None
     shops: list[dict[str, Any]] = field(default_factory=list)
     note: str | None = None
+    data: dict[str, Any] | None = None       # set data without shop prices (BrickEconomy)
 
 
 def _page_title(page: str) -> str:
@@ -511,6 +517,8 @@ def _finish(info: dict[str, Any], offers: list[dict[str, Any]], page: str, num: 
 
 def parse(source: str, page: str, num: str, page_url: str, domains: dict[str, str], step: int = 0) -> Result:
     """What one fetched page of a source gives: offers, a URL to follow, or 'not there'."""
+    if source == "brickeconomy":
+        return parse_brickeconomy(page, num)
     root = _dom(page)
     path = urlparse(page_url).path
     if source == "brickwatch":
@@ -566,3 +574,86 @@ def parse(source: str, page: str, num: str, page_url: str, domains: dict[str, st
     res = _finish({}, offers, page, num, domains, True, page_url)
     res.name = res.image = res.rrp = None            # a search page says nothing about the set itself
     return res
+
+
+# ------------------------------------------------------------------ BrickEconomy (value, not shop prices)
+SEASONS = (("early to mid", 5, 31), ("mid to late", 9, 30), ("early", 3, 31), ("mid", 6, 30), ("late", 12, 31))
+MONTHS = {m: i + 1 for i, m in enumerate(("january", "february", "march", "april", "may", "june", "july", "august",
+                                          "september", "october", "november", "december"))}
+
+
+def _eur(text: str | None) -> float | None:
+    """A euro amount; None for other currencies (the site follows the visitor's region)."""
+    if not text or "€" not in text:
+        return None
+    m = re.search(r"€\s*([\d.,]+)", text)
+    return parse_price(m.group(1)) if m else None
+
+
+def forecast_date(text: str | None) -> str | None:
+    """'Early to mid 2027' -> '2027-05-31', 'December 2024' -> '2024-12-31' (end of the period)."""
+    if not text or not (y := re.search(r"(20\d\d)", text)):
+        return None
+    t, year = text.lower(), int(y.group(1))
+    for word, month in MONTHS.items():
+        if word in t:
+            nxt = date(year + (month == 12), month % 12 + 1, 1)
+            return (nxt - timedelta(days=1)).isoformat()
+    for word, month, day in SEASONS:
+        if word in t:
+            return f"{year}-{month:02d}-{day:02d}"
+    return f"{year}-12-31"
+
+
+def parse_brickeconomy(page: str, num: str) -> Result:
+    """Set page: market value (new / used), retail price, retirement (forecast), set data."""
+    info, _ = _jsonld(page)
+    body = re.sub(r"<(script|style|noscript)\b.*?</\1>", " ", page, flags=re.S | re.I)
+    lines = [x for x in (re.sub(r"\s+", " ", htmllib.unescape(l)).strip() for l in re.split(r"<[^>]+>", body)) if x]
+
+    def after(label: str, start: int = 0, want: str | None = None) -> str | None:
+        """The first line after a label line (optionally the first one matching a pattern, within 4 lines)."""
+        for i in range(start, len(lines)):
+            if lines[i].lower() == label.lower():
+                for nxt in lines[i + 1:i + 5]:
+                    if want is None or re.search(want, nxt):
+                        return nxt
+                return None
+        return None
+
+    details = next((i for i, x in enumerate(lines) if x.lower() == "set details"), 0)
+    setno = after("Set number", details) or ""
+    if not re.fullmatch(rf"{re.escape(num)}(?:-\d+)?", setno) and not has_number(info.get("name") or "", num):
+        return Result("missing")                        # search / home page: not this set
+    pricing = next((i for i, x in enumerate(lines) if x.lower() == "set pricing"), 0)
+    predictions = next((i for i, x in enumerate(lines) if x.lower() == "set predictions"), len(lines))
+    used = None
+    for i in range(pricing, predictions):               # retired sets: separate new / used values
+        if lines[i].lower() in ("used", "used value", "value used") and (v := _eur(" ".join(lines[i + 1:i + 3]))):
+            used = v
+            break
+    five = after("5 years retired", want=r"€\s*\d+\s*-\s*€\s*\d+")
+    pieces = re.match(r"\d+", after("Pieces", details) or "")
+    availability = after("Availability", details) or ""
+    retired = after("Retired", details, want=r"20\d\d") if "retired" in availability.lower() else None
+    data = {
+        "market_new": _eur(after("Market price", pricing, want="€")) or _eur(after("Value", pricing, want="€")) or _eur(after("New/Sealed", pricing, want="€")),
+        "market_used": used,
+        "retail": _eur(after("Retail price", pricing, want="€")) or _eur(after("Europe", want="€")),
+        "availability": availability or None,
+        "retired": retired,
+        "retirement": None if retired else after("Retirement", predictions),
+        "forecast_1y": _eur(after("1 year retired", want="€")),
+        "forecast_5y": [parse_price(x) for x in re.findall(r"€\s*([\d.,]+)", five)] if five else None,
+        "theme": after("Theme", details), "subtheme": after("Subtheme", details),
+        "year": int(y) if (y := after("Year", details) or "").isdigit() else None,
+        "pieces": int(pieces.group(0)) if pieces else None,
+        "ean": (e if (e := after("EAN") or "").isdigit() and len(e) == 13 else None) or info.get("ean"),
+    }
+    if "retired" in availability.lower() and not data["retired"]:
+        data["retired"] = availability
+    name = info.get("name") or after("Name", details)
+    image = info.get("image")
+    return Result("data", name=re.sub(r"\s+", " ", str(name or "")).strip()[:160] or None,
+                  image=image if isinstance(image, str) and image.startswith("https://") else None,
+                  rrp=data["retail"], ean=data["ean"], data=data)
