@@ -152,7 +152,7 @@ display:block;background:var(--lt-bg);color:var(--lt-text);min-height:100vh;font
 *{box-sizing:border-box}[hidden]{display:none!important}
 .wrap{max-width:1280px;margin:0 auto;padding:12px 16px 48px}
 header{display:flex;align-items:center;gap:12px;padding:6px 0 14px}
-.logo{width:40px;height:28px;flex:none;filter:drop-shadow(0 2px 3px rgba(208,16,18,.3))}
+.logo{width:40px;height:28px;flex:none;filter:drop-shadow(0 2px 3px rgba(208,16,18,.3))}img.logo{width:44px;height:44px;filter:drop-shadow(0 2px 4px rgba(0,0,0,.18))}
 h1{margin:0;font-size:21px;font-weight:700;letter-spacing:-.01em}
 .meta{font-size:12px;color:var(--lt-muted)}
 .hsp{flex:1}
@@ -311,7 +311,7 @@ fieldset{border:1px solid var(--lt-line);border-radius:14px;padding:12px 14px 4p
 @keyframes ring{from{stroke-dashoffset:var(--c)}}@keyframes arc{from{stroke-dasharray:0 999}}@keyframes shimmer{to{background-position:-200% 0}}
 @keyframes dlg{from{opacity:0;transform:translateY(16px) scale(.97)}}@keyframes dlgout{to{opacity:0;transform:translateY(10px) scale(.98)}}
 @keyframes toast{from{opacity:0;transform:translateY(16px) scale(.95)}}@keyframes toastout{to{opacity:0;transform:translateX(30px)}}
-@media(max-width:640px){.wrap{padding:8px 10px 40px}h1{font-size:17px}header{gap:8px}header .lbl{display:none}.logo{width:32px;height:22px}
+@media(max-width:640px){.wrap{padding:8px 10px 40px}h1{font-size:17px}header{gap:8px}header .lbl{display:none}.logo{width:32px;height:22px}img.logo{width:36px;height:36px}
 .seg{gap:2px;padding:4px}.seg button{font-size:13px;padding:9px 4px}.seg small{display:none}
 .kpis{grid-template-columns:1fr 1fr;gap:8px}.kpi{padding:10px 12px}.kpi b{font-size:19px}
 .grid{grid-template-columns:1fr 1fr;gap:10px}.card .img{height:96px}.card .img img{max-height:88px}.card .p{font-size:17px}.card .ring{width:34px!important;height:34px!important}
@@ -417,7 +417,7 @@ class LegoTrackerPanel extends HTMLElement {
     const status = d ? this.healthDot() : "";
     const keepToasts = root.querySelector(".toasts"), keepDlg = root.getElementById("dlg");
     root.innerHTML = `<style>${STYLE}</style><div class="wrap">
-      <header>${this._narrow ? `<ha-menu-button></ha-menu-button>` : ""}${BRICK}<div><h1>LEGO Price Tracker</h1><div class="meta">${d ? `v${esc(d.version)} · ${t("{n} sets tracked", { n: d.sets.length })}` : t("loading…")}</div></div>
+      <header>${this._narrow ? `<ha-menu-button></ha-menu-button>` : ""}<img class="logo" src="/lego_tracker_static/icon.png${d ? `?v=${encodeURIComponent(d.version)}` : ""}" alt="" onerror="this.outerHTML=this.dataset.fb" data-fb="${esc(BRICK)}"><div><h1>LEGO Price Tracker</h1><div class="meta">${d ? `v${esc(d.version)} · ${t("{n} sets tracked", { n: d.sets.length })}` : t("loading…")}</div></div>
         <div class="hsp"></div>${status}<button class="btn ghost sm" data-act="discover" title="${t("Search shop links for sets that have none yet")}">🔎 <span class="lbl">${t("Find links")}</span></button><button class="btn sm" data-act="refresh" title="${t("Fetch all shop prices now")}">↻ <span class="lbl">${t("Refresh prices")}</span></button></header>
       <div id="jobbar"></div>
       <nav class="seg" role="tablist">${Object.entries(SECTIONS).map(([k, v]) => `<button role="tab" data-sec="${k}" class="${k === s.section ? "on" : ""}">${t(v.label)}<small>${t(v.hint)}</small></button>`).join("")}<span class="ind"></span></nav>
