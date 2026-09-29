@@ -64,6 +64,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.notifier = Notifier(self)
         self._net_errors: dict[str, int] = {}
         self._compare_debug: dict[str, dict[str, Any]] = {}
+        self._compare_fallback: dict[tuple[str, str], Any] = {}   # prices on a search page, used when its product page fails
+        self._no_follow: dict[str, float] = {}                     # site -> until when its product pages are skipped (403)
         self._compare_retry_unsub: Callable[[], None] | None = None
         def _paused(rid: str, hours: float) -> None:
             if rid in compare.SOURCES:
@@ -462,7 +464,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return None                                      # site doesn't cover this country / needs an EAN
         step, kind = 0, "error"
         while url:
-            status, page, error = await self.fetcher.get_page(src, url, force=True)
+            status, page, error = await self.fetcher.get_page(src, url, force=True, note_block=step == 0)
             if steps is not None:
                 steps.append({"url": url, "status": status, "error": error, "size": len(page or "")})
             kind, url = self.compare_page(src, num, url, status, page, error, step)
@@ -480,7 +482,15 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._compare_debug[src] = {"url": url, "status": status, "error": error, "set": num, "ts": now, "via": via,
                                     "html": (page or "")[:1_500_000]}
 
+        fb = self._compare_fallback.pop((src, num), None) if step else None
+
         def fail(msg: str) -> tuple[str, None]:
+            if fb is not None:                               # the product page failed: the search result's prices
+                if status == 403:
+                    self._no_follow[src] = now + 24 * 3600
+                    self.log("info", "fetch", T("{source} blocks its product pages: prices from the search results for a day",
+                                                source=name), set_number=num, url=url, source=name)
+                return self._compare_store(src, num, *fb, via, now)
             old = st.get(num)
             if old and old.get("status") == "ok":            # keep the last good prices
                 old.update(last_error=msg, err_ts=now)
@@ -500,9 +510,14 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         elif status >= 400:
             return fail(T("HTTP error {status}", status=status))
         else:
-            res = compare.parse(src, page, num, url, all_domains(), step)
+            no_follow = self._no_follow.get(src, 0) > now
+            res = compare.parse(src, page, num, url, all_domains(), compare.MAX_STEPS - 1 if no_follow else step)
         if res.kind == "follow" and res.url and compare.is_compare_url(res.url) and step < compare.MAX_STEPS - 1:
+            if res.shops:
+                self._compare_fallback[(src, num)] = (compare.Result("offers", shops=res.shops), url)
             return "follow", res.url
+        if res.kind != "offers" and fb is not None:
+            return self._compare_store(src, num, *fb, via, now)
         if res.kind != "offers" and res.note == "js":
             msg = T("{source} loads its results with JavaScript: this page has no results to read", source=name)
             st[num] = {"status": "unreadable", "ts": now, "url": url, "error": msg}
@@ -512,8 +527,12 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             st[num] = {"status": "missing", "ts": now, "url": url, "note": res.note}
             self.log("info", "fetch", T("not on {source}: next try tomorrow", source=name), set_number=num, url=url, source=name)
             return "missing", None
-        st[num] = {"status": "ok", "ts": now, "url": url, "name": res.name, "image": res.image, "rrp": res.rrp,
-                   "ean": res.ean, "shops": res.shops, "via": via}
+        return self._compare_store(src, num, res, url, via, now)
+
+    def _compare_store(self, src: str, num: str, res: Any, url: str, via: str, now: float) -> tuple[str, None]:
+        name = compare.SOURCES[src][0]
+        self._cstore(src)[num] = {"status": "ok", "ts": now, "url": url, "name": res.name, "image": res.image, "rrp": res.rrp,
+                                  "ean": res.ean, "shops": res.shops, "via": via}
         s = self.store["sets"].get(num)
         if s is not None:
             if res.name and not s.get("name") and not compare.is_accessory(res.name):

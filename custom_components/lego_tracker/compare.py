@@ -39,7 +39,9 @@ BW_LOCALES = {"nl-be": "nl-BE", "fr-be": "fr-BE", "en-be": "en-BE", "nl-nl": "nl
               "en-gb": "en-GB", "de-de": "de-DE", "en-de": "en-DE"}
 PRICE_RE = re.compile(r"(?:€\s*(\d{1,4}(?:[.\s]\d{3})*(?:[.,]\d{1,2})?|\d{1,4}[.,]-)|(\d{1,4}(?:[.\s]\d{3})*(?:[.,]\d{1,2})?)\s*€"
                       r"|EUR\s*(\d{1,4}(?:[.,]\d{1,2})?))")
-OLD_PRICE = re.compile(r"old|strike|was|rrp|advies|retail|list-?price|msrp|original|crossed|uvp|shipping|verzend|delivery", re.I)
+# class words of struck-through / old / advisory / shipping prices (whole words: 'font-bold' is not 'old')
+OLD_PRICE = re.compile(r"(?:^|[\s_:-])(?:old|strike|strikethrough|line-through|was|rrp|advies|adviesprijs|retail|list-?price|msrp|"
+                       r"original|crossed|uvp|shipping|verzend|verzendkosten|delivery)(?:$|[\s_:-])", re.I)
 RRP_RE = re.compile(r"(?:adviesprijs|winkelprijs|verkoopprijs lego|rrp|prix conseillé|prix public|uvp|retail price)[^€\d]{0,60}"
                     r"(?:€\s*([\d.,]+)|([\d.,]+)\s*€)", re.I)
 # not the set itself: LED / lighting kits and other accessories, knock-offs
@@ -193,7 +195,7 @@ def shop_retailer(name: str, href: str | None, domains: dict[str, str]) -> str |
         for rid, dom in domains.items():
             if host == dom or host.endswith("." + dom):
                 return rid
-    n = (name or "").lower().strip()
+    n = re.sub(r"\s+logo$", "", (name or "").lower().strip()).strip(" .")     # 'bol. logo' -> 'bol'
     for rid, dom in domains.items():               # custom shops: their domain in the shop name
         if dom and dom in n:
             return rid
@@ -222,13 +224,25 @@ def _shop_name(row: _Node, link: _Node) -> str:
     return urlparse(link.attrs.get("href", "")).netloc.removeprefix("www.") or "?"
 
 
-def _is_out_link(href: str, host: str) -> bool:
+def _is_out_link(href: str, host: str, rel: str = "") -> bool:
+    """A link to a shop: 'sponsored' links, other domains, and the site's own click-out redirects
+    (e.g. ocean.kieskeurig.be/e/c/..., /go/..., ?url=...)."""
     if not href or href.startswith(("#", "mailto:", "javascript:", "tel:")):
         return False
+    if "sponsored" in rel.lower():
+        return True
     u = urlparse(href)
-    if u.netloc and u.netloc.lower() != host and not u.netloc.lower().endswith(host.removeprefix("www.")):
+    net = u.netloc.lower()
+    base = host.removeprefix("www.")
+    if net and net != host and not net.endswith(base):
         return True                                   # direct outgoing link
-    return bool(re.search(r"/(?:go|out|redirect|click|clickout|buy|visit|link|r|goto|naar|shop)/|[?&](?:url|u|target)=", href, re.I))
+    if net and net != host and re.match(r"(?:ocean|click|clicks|out|go|redirect|track|tracking|r)\.", net):
+        return True                                   # the site's own click-out subdomain
+    return bool(re.search(r"/(?:go|out|redirect|click|clickout|buy|visit|link|r|goto|naar|shop|e/c)/|[?&](?:url|u|target)=", href, re.I))
+
+
+def _out(n: _Node, host: str) -> bool:
+    return n.tag == "a" and _is_out_link(n.attrs.get("href", ""), host, n.attrs.get("rel", ""))
 
 
 # ------------------------------------------------------------------ extraction layers
@@ -366,6 +380,10 @@ def _balanced(s: str, start: int) -> str:
     return ""
 
 
+# button texts, not shop names
+CTA_RE = re.compile(r"^(?:naar|bekijk|ga naar|bezoek|koop|kopen|bestel|buy|view|visit|go to|zum|voir|ver|shop now|meer)\b|goedkoopste|cheapest|günstigsten|moins cher", re.I)
+
+
 def _dom_offers(root: _Node, page_url: str, search: bool) -> list[dict[str, Any]]:
     """HTML heuristic: the smallest block around a (shop) link that holds a euro price."""
     host = urlparse(page_url).netloc.lower()
@@ -373,7 +391,7 @@ def _dom_offers(root: _Node, page_url: str, search: bool) -> list[dict[str, Any]
     seen: set[int] = set()
     for link in (n for n in root.iter() if n.tag == "a" and n.attrs.get("href")):
         href = link.attrs["href"]
-        if not search and not _is_out_link(href, host):
+        if not search and not _out(link, host):
             continue
         row, depth = link, 0
         while row.parent is not None and depth < 6 and not _prices(row):
@@ -382,11 +400,14 @@ def _dom_offers(root: _Node, page_url: str, search: bool) -> list[dict[str, Any]
         if not prices or id(row) in seen:
             continue
         # a block with several offers is a whole list, not one offer
-        if sum(1 for n in row.iter() if n.tag == "a" and _is_out_link(n.attrs.get("href", ""), host)) > 2 or len(set(prices)) > 3:
+        if sum(1 for n in row.iter() if _out(n, host)) > 2 or len(set(prices)) > 3:
             continue
         seen.add(id(row))
         text = row.all_text()
-        out.append({"name": _shop_name(row, link), "price": min(prices), "url": urljoin(page_url, htmllib.unescape(href)),
+        name = _shop_name(row, link)
+        if not search and CTA_RE.search(name):
+            continue                                  # "Naar goedkoopste shop": a button, not a shop
+        out.append({"name": name, "price": min(prices), "url": urljoin(page_url, htmllib.unescape(href)),
                     "title": text[:300] if search else None})
     return out
 
@@ -434,6 +455,25 @@ def _links(root: _Node, page_url: str, pattern: str, num: str) -> list[str]:
         cands.append((-score, href))
     seen: set[str] = set()
     return [h for _, h in sorted(cands) if not (h in seen or seen.add(h))]
+
+
+def _card_offers(root: _Node, page_url: str, product_url: str) -> list[dict[str, Any]]:
+    """Offers inside the search-result card of one product (the block around its link that holds
+    shop links, but no other product)."""
+    host = urlparse(page_url).netloc.lower()
+    pid = re.search(r"/product/(\d+)", product_url)
+    for a in (n for n in root.iter() if n.tag == "a" and pid and f"/product/{pid.group(1)}" in n.attrs.get("href", "")):
+        card = a
+        for _ in range(12):
+            if card.parent is None:
+                break
+            card = card.parent
+            ids = {m.group(1) for n in card.iter() if n.tag == "a" and (m := re.search(r"/product/(\d+)", n.attrs.get("href", "")))}
+            if len(ids) > 1:
+                break                                  # grew into the next product
+            if any(_out(n, host) for n in card.iter()):
+                return _dom_offers(card, page_url, False)
+    return []
 
 
 def _collect(page: str, page_url: str, search: bool, root: _Node | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -497,7 +537,14 @@ def parse(source: str, page: str, num: str, page_url: str, domains: dict[str, st
     if source == "kieskeurig":
         if "/product/" not in path:
             links = _links(root, page_url, r"/product/\d+", num)
-            return Result("follow", url=links[0]) if links and step < MAX_STEPS - 1 else Result("missing")
+            if not links:
+                return Result("missing")
+            # the result card already lists the cheapest shops: kept as a fallback for the product page
+            card = _card_offers(root, page_url, links[0])
+            fallback = _finish({}, card, "", num, domains, False, page_url).shops if card else []
+            if step < MAX_STEPS - 1:
+                return Result("follow", url=links[0], shops=fallback)
+            return Result("offers" if fallback else "missing", shops=fallback)
         head = _h1(page) + " " + _page_title(page)
         if is_accessory(head):
             return Result("missing", note="only accessories")

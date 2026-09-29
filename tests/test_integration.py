@@ -833,7 +833,7 @@ BW_PAGE = '''<html><head><title>LEGO 10281 Bonsai - Brickwatch</title><meta prop
 
 def _pages(**by_host):
     """get_page mock: (status, html) per host fragment, 404 for the rest."""
-    async def get(src, url, force=False):
+    async def get(src, url, force=False, note_block=True):
         for frag, res in by_host.items():
             if frag.replace("_", ".") in url or frag in url:
                 return res(url) if callable(res) else res
@@ -981,6 +981,38 @@ async def test_compare_network_errors_pause_one_hour_and_job_stops(hass: HomeAss
     with patch.object(c.fetcher, "get_page", page):
         await c.compare_refresh("10281")                           # paused: skipped
     assert page.await_count == 5
+
+
+# structure of a real Kieskeurig.be search result (2026-09): click-outs via ocean.kieskeurig.be, prices in 'font-bold'
+KK_CARDS = """<html><body><ul class="productlist_grid">
+<li><article class="productcard"><a href="/bouw_en_constructiespeelgoed/product/51044251-lego-icons-chrysant-botanical-collection-10368">LEGO Icons Chrysant - Botanical Collection - 10368</a>
+<span>v.a. € 15,98</span><a href="https://ocean.kieskeurig.be/e/c/aaa" class="productcard_cta" rel="sponsored nofollow noopener">Naar goedkoopste shop</a>
+<ul class="productcard_pricelist"><li><a href="https://ocean.kieskeurig.be/e/c/bbb" class="productcard_priceitem-link" rel="sponsored nofollow noopener">
+<span class="productcard_priceitem-shop">bol.</span><div><span class="productcard_priceitem-amount font-bold">€ 15,98</span></div></a></li>
+<li><a href="https://ocean.kieskeurig.be/e/c/ccc" class="productcard_priceitem-link" rel="sponsored nofollow noopener">
+<span class="productcard_priceitem-shop">Wehkamp</span><div><span class="productcard_priceitem-amount font-bold">€ 27,89</span></div></a></li></ul></article></li>
+<li><article class="productcard"><a href="/bouw_en_constructiespeelgoed/product/51370743-lego-botanical-collection-10369">LEGO 10369</a>
+<ul><li><a href="https://ocean.kieskeurig.be/e/c/ddd" rel="sponsored"><span class="productcard_priceitem-shop">bol.</span><span class="font-bold">€ 39,99</span></a></li></ul></article></li>
+</ul></body></html>"""
+
+
+async def test_kieskeurig_product_page_403_uses_search_results(hass: HomeAssistant, entry, no_network):
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "brickwatch": True, "compare_sources": ["kieskeurig"]})
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10368"}, blocking=True)
+
+    async def get(src, url, force=False, note_block=True):
+        if "/search" in url:
+            return 200, KK_CARDS, None
+        return 403, "", "blocked (HTTP 403)"
+    page = AsyncMock(side_effect=get)
+    with patch.object(c.fetcher, "get_page", page):
+        got = await c.compare_refresh("10368")
+    assert [(x["retailer"], x["price"]) for x in got["kieskeurig"]["shops"]] == [("bol", 15.98), (None, 27.89)]
+    assert page.await_args_list[1].kwargs["note_block"] is False and c.fetcher.cooldown_left("kieskeurig") == 0   # site not paused
+    with patch.object(c.fetcher, "get_page", page):
+        await c.compare_refresh("10368", refresh=True)
+    assert page.await_count == 3                     # product pages skipped for a day: only the search page
 
 
 async def test_relay_fetches_comparison_pages(hass: HomeAssistant, entry, no_network, hass_client):
