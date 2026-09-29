@@ -2,7 +2,7 @@
 
 <img width="1024" height="559" alt="afbeelding" src="https://github.com/user-attachments/assets/fe8aea1b-0443-4675-8136-d3f0b021fe98" />
 
-buymeacoffee.com/emeryf
+<center><script type="text/javascript" src="https://cdnjs.buymeacoffee.com/1.0.0/button.prod.min.js" data-name="bmc-button" data-slug="emeryf" data-color="#FFDD00" data-emoji="" data-font="Cookie" data-text="Buy me a coffee" data-outline-color="#000000" data-font-color="#000000" data-coffee-color="#ffffff" ></script></center>
 
 LEGO Price Tracker voor Home Assistant
 
