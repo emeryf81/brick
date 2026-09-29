@@ -2,8 +2,8 @@
   "config": {
     "step": {
       "user": {
-        "title": "LEGO Price Tracker",
-        "description": "Sebagian besar pengaturan juga tersedia di panel LEGO Price Tracker pada Kelola → Pengaturan.",
+        "title": "LEGO Organizing Tool",
+        "description": "Sebagian besar pengaturan juga tersedia di panel LEGO Organizing Tool pada Kelola → Pengaturan.",
         "data": {
           "discount_threshold": "Ambang diskon (%) untuk 'diskon besar'",
           "retailers": "Toko yang diperiksa",
@@ -30,8 +30,8 @@
   "options": {
     "step": {
       "init": {
-        "title": "LEGO Price Tracker",
-        "description": "Sebagian besar pengaturan juga tersedia di panel LEGO Price Tracker pada Kelola → Pengaturan.",
+        "title": "LEGO Organizing Tool",
+        "description": "Sebagian besar pengaturan juga tersedia di panel LEGO Organizing Tool pada Kelola → Pengaturan.",
         "data": {
           "discount_threshold": "Ambang diskon (%) untuk 'diskon besar'",
           "retailers": "Toko yang diperiksa",

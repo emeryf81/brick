@@ -2,8 +2,8 @@
   "config": {
     "step": {
       "user": {
-        "title": "LEGO Price Tracker",
-        "description": "大多数设置也可在 LEGO Price Tracker 面板的 管理 → 设置 中找到。",
+        "title": "LEGO Organizing Tool",
+        "description": "大多数设置也可在 LEGO Organizing Tool 面板的 管理 → 设置 中找到。",
         "data": {
           "discount_threshold": "“高折扣”的折扣阈值（%）",
           "retailers": "要检查的商店",
@@ -30,8 +30,8 @@
   "options": {
     "step": {
       "init": {
-        "title": "LEGO Price Tracker",
-        "description": "大多数设置也可在 LEGO Price Tracker 面板的 管理 → 设置 中找到。",
+        "title": "LEGO Organizing Tool",
+        "description": "大多数设置也可在 LEGO Organizing Tool 面板的 管理 → 设置 中找到。",
         "data": {
           "discount_threshold": "“高折扣”的折扣阈值（%）",
           "retailers": "要检查的商店",

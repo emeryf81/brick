@@ -2,8 +2,8 @@
   "config": {
     "step": {
       "user": {
-        "title": "LEGO Price Tracker",
-        "description": "Most settings are also available in the LEGO Price Tracker panel under Manage → Settings.",
+        "title": "LEGO Organizing Tool",
+        "description": "Most settings are also available in the LEGO Organizing Tool panel under Manage → Settings.",
         "data": {
           "discount_threshold": "Discount threshold (%) for 'high discount'",
           "retailers": "Shops to check",
@@ -30,8 +30,8 @@
   "options": {
     "step": {
       "init": {
-        "title": "LEGO Price Tracker",
-        "description": "Most settings are also available in the LEGO Price Tracker panel under Manage → Settings.",
+        "title": "LEGO Organizing Tool",
+        "description": "Most settings are also available in the LEGO Organizing Tool panel under Manage → Settings.",
         "data": {
           "discount_threshold": "Discount threshold (%) for 'high discount'",
           "retailers": "Shops to check",

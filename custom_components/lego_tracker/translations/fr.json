@@ -2,8 +2,8 @@
   "config": {
     "step": {
       "user": {
-        "title": "LEGO Price Tracker",
-        "description": "La plupart des paramètres sont aussi disponibles dans le panneau LEGO Price Tracker sous Gestion → Paramètres.",
+        "title": "LEGO Organizing Tool",
+        "description": "La plupart des paramètres sont aussi disponibles dans le panneau LEGO Organizing Tool sous Gestion → Paramètres.",
         "data": {
           "discount_threshold": "Seuil de remise (%) pour 'forte remise'",
           "retailers": "Boutiques à contrôler",
@@ -30,8 +30,8 @@
   "options": {
     "step": {
       "init": {
-        "title": "LEGO Price Tracker",
-        "description": "La plupart des paramètres sont aussi disponibles dans le panneau LEGO Price Tracker sous Gestion → Paramètres.",
+        "title": "LEGO Organizing Tool",
+        "description": "La plupart des paramètres sont aussi disponibles dans le panneau LEGO Organizing Tool sous Gestion → Paramètres.",
         "data": {
           "discount_threshold": "Seuil de remise (%) pour 'forte remise'",
           "retailers": "Boutiques à contrôler",

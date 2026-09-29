@@ -2,8 +2,8 @@
   "config": {
     "step": {
       "user": {
-        "title": "LEGO Price Tracker",
-        "description": "De meeste instellingen vind je ook in het LEGO Price Tracker-paneel onder Beheer → Instellingen.",
+        "title": "LEGO Organizing Tool",
+        "description": "De meeste instellingen vind je ook in het LEGO Organizing Tool-paneel onder Beheer → Instellingen.",
         "data": {
           "discount_threshold": "Kortingsdrempel (%) voor 'hoge korting'",
           "retailers": "Winkels om te controleren",
@@ -30,8 +30,8 @@
   "options": {
     "step": {
       "init": {
-        "title": "LEGO Price Tracker",
-        "description": "De meeste instellingen vind je ook in het LEGO Price Tracker-paneel onder Beheer → Instellingen.",
+        "title": "LEGO Organizing Tool",
+        "description": "De meeste instellingen vind je ook in het LEGO Organizing Tool-paneel onder Beheer → Instellingen.",
         "data": {
           "discount_threshold": "Kortingsdrempel (%) voor 'hoge korting'",
           "retailers": "Winkels om te controleren",
