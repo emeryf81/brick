@@ -421,6 +421,70 @@ def parse_times(raw: str) -> list[str]:
     return sorted(out)
 
 
+# ------------------------------------------------------------------ activity log
+ACTIVITY_MAX = 3000
+ACTIVITY_KINDS = {
+    "price": "Prijswijziging", "fetch": "Winkelverbinding", "discover": "Links zoeken", "link": "Linkcontrole",
+    "userscript": "Userscript (Tampermonkey)", "import": "Import", "job": "Taak", "notify": "Melding",
+    "meta": "Setgegevens", "user": "Eigen actie", "settings": "Instellingen", "shop": "Winkelstatus",
+}
+
+
+def add_activity(store: dict[str, Any], level: str, kind: str, message: str, *, now: float | None = None,
+                 **fields: Any) -> dict[str, Any]:
+    """Append to the activity log. An identical message for the same set/shop right after the previous
+    one is collapsed (count + time updated) so repeated failures don't flood the log."""
+    log = store.setdefault("activity", [])
+    now = now or time.time()
+    fields = {k: v for k, v in fields.items() if v is not None}
+    for prev in reversed(log[-20:]):
+        if prev.get("set_number") == fields.get("set_number") and prev.get("retailer") == fields.get("retailer") \
+                and prev.get("kind") == kind:
+            if prev["message"] == message and prev["level"] == level:
+                prev["count"] = prev.get("count", 1) + 1
+                prev["ts"] = now
+                return prev
+            break
+    entry = {"id": f"{int(now * 1000):x}{len(log) % 1000:03d}", "ts": now, "level": level, "kind": kind,
+             "message": message[:500], **fields}
+    log.append(entry)
+    if len(log) > ACTIVITY_MAX:
+        del log[: len(log) - ACTIVITY_MAX]
+    return entry
+
+
+def query_activity(store: dict[str, Any], *, level: str = "", kind: str = "", retailer: str = "", source: str = "",
+                   set_number: str = "", q: str = "", before: float | None = None, limit: int = 100) -> dict[str, Any]:
+    """Filter the log (newest first). level: '' | 'problems' (error+warning) | 'events' (info+ok) | exact."""
+    log = store.get("activity", [])
+    q = q.strip().lower()
+    num = normalize_set_number(set_number) if set_number.strip() else ""
+
+    def ok(e: dict[str, Any]) -> bool:
+        if level == "problems" and e["level"] not in ("error", "warning"):
+            return False
+        if level == "events" and e["level"] not in ("info", "ok"):
+            return False
+        if level not in ("", "problems", "events") and e["level"] != level:
+            return False
+        if kind and e["kind"] != kind or retailer and e.get("retailer") != retailer or source and e.get("source") != source:
+            return False
+        if num and e.get("set_number") != num:
+            return False
+        if q and q not in (e["message"] + " " + (e.get("url") or "") + " " + (e.get("set_number") or "")).lower():
+            return False
+        return before is None or e["ts"] < before
+
+    matched = [e for e in reversed(log) if ok(e)]
+    facets: dict[str, dict[str, int]] = {"kind": {}, "retailer": {}, "source": {}, "level": {}}
+    for e in log:
+        for f in facets:
+            if e.get(f):
+                facets[f][e[f]] = facets[f].get(e[f], 0) + 1
+    return {"entries": matched[:limit], "total": len(matched), "more": len(matched) > limit, "facets": facets,
+            "kinds": ACTIVITY_KINDS}
+
+
 def today_iso(now: float | None = None) -> str:
     return date.fromtimestamp(now or time.time()).isoformat()
 

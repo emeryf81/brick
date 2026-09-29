@@ -416,3 +416,163 @@ async def test_settings_search_templates(hass: HomeAssistant, entry, hass_ws_cli
     from custom_components.lego_tracker.parsers import search_url
     assert search_url("bol", "1") == "https://www.bol.com/be/nl/s/?searchtext=LEGO+1"
     assert search_url("lego_com", "1") == "https://www.lego.com/nl-nl/search?q=1"
+
+
+# ---------------------------------------------------------------- 0.8.0: notifications + errors
+from custom_components.lego_tracker.notifications import in_quiet, set_triggers, validate_rules  # noqa: E402
+
+
+def _rule(**kw):
+    base = {"name": "r", "scope": {"type": "all"}, "triggers": ["all_time_low"], "targets": [{"type": "persistent"}]}
+    base.update(kw)
+    return validate_rules([base])[0]
+
+
+def test_validate_rules_messages():
+    with pytest.raises(ValueError, match="gebeurtenis"):
+        validate_rules([{"name": "x", "triggers": [], "targets": [{"type": "persistent"}]}])
+    with pytest.raises(ValueError, match="waarde"):
+        validate_rules([{"name": "x", "triggers": ["price_below"], "targets": [{"type": "persistent"}]}])
+    with pytest.raises(ValueError, match="e-mailadres"):
+        validate_rules([{"name": "x", "triggers": ["digest"], "targets": [{"type": "email", "service": "notify.smtp", "to": "nope"}]}])
+    with pytest.raises(ValueError, match="thema"):
+        validate_rules([{"name": "x", "scope": {"type": "themes"}, "triggers": ["digest"], "targets": [{"type": "persistent"}]}])
+    r = _rule(scope={"type": "sets", "sets": ["10311-1", "abc", "42143"]}, triggers=["price_below", "bogus"],
+              params={"price_below": "35"}, targets=[{"type": "email", "service": "notify.smtp", "to": "a@b.be; c@d.nl"}])
+    assert r["scope"]["sets"] == ["10311", "42143"]
+    assert r["triggers"] == ["price_below"] and r["params"]["price_below"] == 35 and r["targets"][0]["to"] == ["a@b.be", "c@d.nl"]
+
+
+def test_set_triggers_matrix():
+    r = _rule(triggers=["all_time_low", "discount", "target_hit", "price_below", "price_drop", "deal_score", "back_in_stock"],
+              params={"discount_pct": 30, "price_below": 40, "drop_pct": 10, "min_score": 70})
+    before = {"best_price": 50.0, "discount_rrp": 0, "deal_score": 20}
+    after = {"best_price": 35.0, "discount_rrp": 30, "is_all_time_low": True, "target_hit": True, "deal_score": 75}
+    got = {t for t, _ in set_triggers(r, before, after)}
+    assert got == {"all_time_low", "discount", "target_hit", "price_below", "price_drop", "deal_score"}
+    assert {t for t, _ in set_triggers(r, {}, {"best_price": 60.0})} == {"back_in_stock"}
+    assert set_triggers(r, after, after) == []                                        # nothing new
+    shop_only = _rule(triggers=["any_change"], shops=["bol"])
+    assert set_triggers(shop_only, {"best_price": 50}, {"best_price": 45, "best_retailer": "amazon_nl"}) == []
+
+
+def test_quiet_hours():
+    from datetime import datetime
+    q = {"from": "22:00", "to": "07:00"}
+    assert in_quiet(q, datetime(2026, 1, 1, 23, 30)) and in_quiet(q, datetime(2026, 1, 1, 6, 59))
+    assert not in_quiet(q, datetime(2026, 1, 1, 7, 0)) and not in_quiet(None, datetime(2026, 1, 1, 3, 0))
+
+
+async def test_rules_scope_targets_cooldown_and_quiet(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    from pytest_homeassistant_custom_component.common import async_mock_service
+
+    c = await _setup(hass, entry)
+    mobile = async_mock_service(hass, "notify", "mobile_app_pixel")
+    smtp = async_mock_service(hass, "notify", "smtp_gmail")
+    send_msg = async_mock_service(hass, "notify", "send_message")
+    tts = async_mock_service(hass, "tts", "speak")
+    for n, theme in (("10311", "Icons"), ("42143", "Technic")):
+        await hass.services.async_call(DOMAIN, "add_set", {"set_number": n, "theme": theme, "rrp": 50}, blocking=True)
+        await hass.services.async_call(DOMAIN, "set_offer", {"set_number": n, "retailer": "bol", "url": f"https://www.bol.com/nl/nl/p/lego-{n}/1/"}, blocking=True)
+    c.store["sets"]["10311"]["image"] = "https://img/10311.png"
+    ws = await hass_ws_client(hass)
+    rules = [
+        {"name": "Icons onder 35", "scope": {"type": "themes", "themes": ["Icons"]}, "triggers": ["price_below"],
+         "params": {"price_below": 35}, "targets": [{"type": "mobile", "service": "notify.mobile_app_pixel"},
+                                                    {"type": "email", "service": "notify.smtp_gmail", "to": "me@example.com"}]},
+        {"name": "Alles naar speaker", "scope": {"type": "all"}, "triggers": ["any_change", "back_in_stock"],
+         "targets": [{"type": "tts", "tts": "tts.google", "media_player": "media_player.keuken"},
+                     {"type": "entity", "entity_id": "notify.telegram"}], "cooldown_hours": 0},
+        {"name": "Nachtrust", "scope": {"type": "sets", "sets": ["42143"]}, "triggers": ["back_in_stock"],
+         "targets": [{"type": "mobile", "service": "notify.mobile_app_pixel"}], "quiet": {"from": "00:00", "to": "23:59"}},
+    ]
+    await ws.send_json({"id": 1, "type": "lego_tracker/notify/set", "rules": rules})
+    saved = (await ws.receive_json())["result"]["rules"]
+    assert len(saved) == 3
+    await hass.services.async_call(DOMAIN, "refresh", {}, blocking=True)          # both sets get €30 (mock)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    # theme scope: only 10311 (Icons) -> one mobile + one email, with image/link data
+    assert len(mobile) == 1 and "10311" in mobile[0].data["title"]
+    assert mobile[0].data["data"]["image"] == "https://img/10311.png" and "url" in mobile[0].data["data"]
+    assert smtp[0].data["target"] == ["me@example.com"] and "<img" in smtp[0].data["data"]["html"]
+    # all-scope rule: both sets, tts + notify entity
+    assert len(tts) == 2 and tts[0].data["media_player_entity_id"] == "media_player.keuken"
+    assert len(send_msg) == 2 and send_msg[0].data["entity_id"] == "notify.telegram"
+    # quiet hours: 42143 queued, not pushed
+    assert c.store["notify_queue"][saved[2]["id"]]
+    # cooldown: same trigger again for rule 1 does not re-send
+    c.store["offers"]["10311"]["bol"]["history"][-1][1] = 40.0
+    c.store["offers"]["10311"]["bol"]["last_price"] = 40.0
+    await c.notifier.on_set_change("10311", {"best_price": 40.0}, {"best_price": 30.0, "best_retailer": "bol"})
+    assert len(mobile) == 1
+    # test button + options for the dropdowns
+    await ws.send_json({"id": 2, "type": "lego_tracker/notify/test", "rule": rules[0]})
+    res = (await ws.receive_json())["result"]["results"]
+    assert all(r["ok"] for r in res) and len(mobile) == 2
+    await ws.send_json({"id": 3, "type": "lego_tracker/notify/get"})
+    got = (await ws.receive_json())["result"]
+    kinds = {n["service"]: n["kind"] for n in got["options"]["notify"]}
+    assert kinds["notify.mobile_app_pixel"] == "mobile" and kinds["notify.smtp_gmail"] == "email"
+    assert "Icons" in got["options"]["themes"] and got["log"] and got["options"]["triggers"]["price_below"]["param"] == "price_below"
+
+
+async def test_default_rules_and_digest(hass: HomeAssistant, entry, no_network):
+    from pytest_homeassistant_custom_component.common import async_mock_service
+    from custom_components.lego_tracker import _send_digest
+
+    c = await _setup(hass, entry)
+    assert [r["id"] for r in c.store["notify_rules"]] == ["deals", "digest"]
+    pn = async_mock_service(hass, "persistent_notification", "create")
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10311", "rrp": 50}, blocking=True)
+    await hass.services.async_call(DOMAIN, "set_offer", {"set_number": "10311", "retailer": "bol", "url": "https://www.bol.com/nl/nl/p/lego-10311/1/"}, blocking=True)
+    await hass.services.async_call(DOMAIN, "refresh", {}, blocking=True)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    n_before = len(pn)
+    await _send_digest(hass, c)
+    await hass.async_block_till_done()
+    assert len(pn) == n_before + 1 and "10311" in pn[-1].data["message"]
+
+
+async def test_fix_offer(hass: HomeAssistant, entry, no_network):
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "21028", "rrp": 49.99}, blocking=True)
+    c.store["offers"]["21028"]["amazon_nl"] = {"url": "https://www.amazon.nl/dp/B0LEDLEDLE", "history": [[1, 19.99]],
+                                               "link_status": "suspect", "error": "blocked (HTTP 403)"}
+    await hass.services.async_call(DOMAIN, "fix_offer", {"set_number": "21028", "retailer": "amazon_nl",
+                                                         "url": "https://www.amazon.nl/LEGO/dp/B0GOODGOOD", "price": 42.5}, blocking=True)
+    o = c.store["offers"]["21028"]["amazon_nl"]
+    assert o["url"] == "https://www.amazon.nl/dp/B0GOODGOOD" and o["link_status"] == "confirmed"
+    assert o["history"][-1][1] == 42.5 and len(o["history"]) == 1 and o["error"] is None      # old wrong history gone
+    assert c.compute()["statuses"]["21028"]["best_price"] == 42.5
+    # price only, same link
+    await hass.services.async_call(DOMAIN, "fix_offer", {"set_number": "21028", "retailer": "amazon_nl", "price": 41.0}, blocking=True)
+    assert c.compute()["statuses"]["21028"]["best_price"] == 41.0
+    with pytest.raises(ServiceValidationError, match="link"):
+        await hass.services.async_call(DOMAIN, "fix_offer", {"set_number": "21028", "retailer": "bol", "price": 40}, blocking=True)
+
+
+async def test_logbook_records_everything(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10311", "rrp": 50}, blocking=True)
+    await hass.services.async_call(DOMAIN, "set_offer", {"set_number": "10311", "retailer": "bol", "url": "https://www.bol.com/nl/nl/p/lego-10311/1/"}, blocking=True)
+    await hass.services.async_call(DOMAIN, "set_offer", {"set_number": "10311", "retailer": "amazon_nl", "url": "B08XYZ1234"}, blocking=True)
+    no_network.side_effect = lambda rid, url: (Parsed(price=30.0), None) if rid == "bol" else (None, "blocked (HTTP 403)")
+    await hass.services.async_call(DOMAIN, "refresh", {}, blocking=True)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    await hass.services.async_call(DOMAIN, "report_price", {"url": "https://www.amazon.nl/dp/B08XYZ1234", "price": 33.0}, blocking=True)
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(DOMAIN, "report_price", {"url": "https://www.amazon.nl/dp/B0UNKNOWN1", "price": 10.0}, blocking=True)
+    c.fetcher._note_block("amazon_nl")                    # real pause path
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/log"})
+    log = (await ws.receive_json())["result"]
+    kinds = {e["kind"] for e in log["entries"]}
+    assert {"link", "job", "price", "fetch", "userscript", "shop"} <= kinds
+    msgs = " | ".join(e["message"] for e in log["entries"])
+    assert "eerste prijs €30.00" in msgs and "blocked (HTTP 403)" in msgs and "Amazon.nl blokkeerde" in msgs
+    assert "bol.com: 1 gelukt, 0 mislukt" in msgs and "Amazon.nl: 0 gelukt, 1 mislukt" in msgs
+    await ws.send_json({"id": 2, "type": "lego_tracker/log", "source": "userscript"})
+    us = (await ws.receive_json())["result"]["entries"]
+    assert len(us) == 2 and {e["level"] for e in us} == {"ok", "warning"}
+    await ws.send_json({"id": 3, "type": "lego_tracker/log", "level": "problems", "retailer": "amazon_nl"})
+    assert all(e["level"] in ("error", "warning") and e["retailer"] == "amazon_nl" for e in (await ws.receive_json())["result"]["entries"])

@@ -452,3 +452,24 @@ def test_clean_history_drops_impossible_points():
     models.clean_history(offer, 229.99)
     assert offer["last_price"] == 229.99
     assert models.clean_history({"history": [[1, 5.0]]}, None) == 0
+
+
+def test_activity_log_collapse_and_query():
+    store = models.new_store()
+    for i in range(3):   # the same failure three times -> one entry, count 3
+        models.add_activity(store, "error", "fetch", "blocked (HTTP 403)", set_number="10311", retailer="bol", now=100 + i)
+    models.add_activity(store, "ok", "price", "€49.99 → €39.99", set_number="10311", retailer="amazon_nl", source="server", now=200)
+    models.add_activity(store, "ok", "userscript", "prijs €42.00 ontvangen via Tampermonkey", set_number="42143", retailer="amazon_de",
+                        url="https://www.amazon.de/dp/B06W2KC5R5", source="userscript", now=300)
+    assert len(store["activity"]) == 3 and store["activity"][0]["count"] == 3 and store["activity"][0]["ts"] == 102
+    q = models.query_activity
+    assert [e["kind"] for e in q(store)["entries"]] == ["userscript", "price", "fetch"]          # newest first
+    assert q(store, level="problems")["total"] == 1 and q(store, level="events")["total"] == 2
+    assert q(store, retailer="bol")["entries"][0]["message"].startswith("blocked")
+    assert q(store, source="userscript")["total"] == 1 and q(store, set_number="10311-1")["total"] == 2
+    assert q(store, q="B06W2KC5R5")["total"] == 1 and q(store, before=250)["total"] == 2
+    r = q(store, limit=1)
+    assert r["more"] and r["facets"]["retailer"] == {"bol": 1, "amazon_nl": 1, "amazon_de": 1}
+    for i in range(models.ACTIVITY_MAX + 10):
+        models.add_activity(store, "info", "job", f"x{i}")
+    assert len(store["activity"]) == models.ACTIVITY_MAX

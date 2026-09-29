@@ -116,6 +116,13 @@ button{font:inherit;color:inherit}
 .btn.ghost{background:var(--lt-card);color:var(--lt-text);border-color:var(--lt-line)}.btn.danger{background:var(--lt-card);color:var(--lt-red);border-color:color-mix(in srgb,var(--lt-red) 40%,var(--lt-line))}
 a.btn{text-decoration:none}.btn[disabled]{opacity:.5;pointer-events:none}.btn.sm{padding:5px 10px;font-size:13px;border-radius:8px}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite}
+.erow.on{background:var(--lt-soft)}.fixbox{background:var(--lt-soft);border-radius:12px;padding:12px;margin:2px 0 8px;animation:rise .25s both}
+.rule{border:1px solid var(--lt-line);border-radius:14px;padding:12px 14px;margin-bottom:10px;display:flex;gap:12px;align-items:flex-start;transition:border-color .2s}.rule:hover{border-color:var(--lt-accent)}
+.rule.off{opacity:.55}.rule .sum{font-size:13px;color:var(--lt-muted);margin-top:4px;line-height:1.6}.tag{display:inline-block;font-size:12px;padding:2px 8px;border-radius:99px;background:var(--lt-soft);margin:2px 4px 2px 0}
+.switch{position:relative;width:40px;height:22px;flex:none;cursor:pointer}.switch input{display:none}.switch i{position:absolute;inset:0;border-radius:99px;background:var(--lt-line);transition:background .2s}
+.switch i::after{content:"";position:absolute;left:3px;top:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .2s cubic-bezier(.3,1.4,.5,1)}.switch input:checked+i{background:var(--lt-accent)}.switch input:checked+i::after{transform:translateX(18px)}
+.trig{display:grid;grid-template-columns:24px 1fr auto;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid var(--lt-line)}.trig:last-child{border:0}.trig select,.trig input{padding:6px 8px}
+.tgt{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px;border:1px solid var(--lt-line);border-radius:10px;margin-bottom:6px}.tgt select,.tgt input{padding:6px 8px}
 .jobbar{display:flex;gap:12px;align-items:center;background:var(--lt-card);border-radius:14px;padding:10px 14px;margin-bottom:12px;box-shadow:var(--lt-shadow);border-left:4px solid var(--lt-accent)}.jobbar.in{animation:rise .35s both}
 .jobbar .spin{color:var(--lt-accent);flex:none}.jt{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .lk{font-size:12px;font-weight:600;padding:2px 7px;border-radius:6px;white-space:nowrap}.lk.suspect{background:color-mix(in srgb,var(--lt-red) 15%,transparent);color:var(--lt-red)}
@@ -261,7 +268,7 @@ fieldset{border:1px solid var(--lt-line);border-radius:14px;padding:12px 14px 4p
 const SECTIONS = {
   deals: { label: "🏷️ Deals & watchlist", hint: "sets in het oog houden", subs: [["today", "Vandaag"], ["watch", "Watchlist"], ["all", "Alle prijzen"]] },
   collection: { label: "📦 Mijn collectie", hint: "wat je al hebt", subs: [["overview", "Overzicht"], ["sets", "Sets"]] },
-  manage: { label: "⚙️ Beheer", hint: "toevoegen, import, winkels", subs: [["add", "Toevoegen"], ["import", "Importeren"], ["links", "Linkcontrole"], ["shops", "Winkels & taken"], ["settings", "Instellingen"], ["userscript", "Userscript"], ["backup", "Back-up"]] },
+  manage: { label: "⚙️ Beheer", hint: "toevoegen, import, winkels", subs: [["log", "Logboek"], ["notify", "Notificaties"], ["add", "Toevoegen"], ["import", "Importeren"], ["links", "Linkcontrole"], ["shops", "Winkels & taken"], ["settings", "Instellingen"], ["userscript", "Userscript"], ["backup", "Back-up"]] },
 };
 
 class LegoTrackerPanel extends HTMLElement {
@@ -274,6 +281,9 @@ class LegoTrackerPanel extends HTMLElement {
       cview: "grid", csort: { key: "value", dir: -1 }, range: 90, addMode: "watch",
       imp: { text: "", name: "", analysis: null, only: false, replace: false, track: true, update: true },
       links: { status: "suspect", scope: "owned", edit: null },
+      errs: { type: "all", scope: "all", shop: "", open: null, showIgnored: false },
+      logv: { mode: "log", level: "", kind: "", retailer: "", source: "", set: "", q: "", data: null, open: null, extra: [] },
+      notif: { data: null, edit: null, idx: null, err: null },
       data: null, coll: null, err: null, busy: false,
     };
     try {
@@ -434,6 +444,7 @@ class LegoTrackerPanel extends HTMLElement {
     if (sec === "deals" && sub === "today") n = d.sets.filter((s) => s.watched && this.isDeal(s)).length;
     if (sec === "deals" && sub === "watch") n = d.sets.filter((s) => s.watched).length;
     if (sec === "manage" && sub === "shops") n = Object.keys(d.paused || {}).length;
+    if (sec === "manage" && sub === "log") n = this.errorRows().length;
     if (sec === "manage" && sub === "links") n = d.sets.reduce((a, s) => a + (s.offers_suspect || 0), 0);
     return n ? `<span class="count">${n}</span>` : "";
   }
@@ -448,7 +459,7 @@ class LegoTrackerPanel extends HTMLElement {
     const s = this.state, el = this.shadowRoot.getElementById("content"); if (!el) return;
     if (s.err) { el.innerHTML = `<div class="empty"><span class="big">⚠️</span>Kon gegevens niet laden: ${esc(s.err)}<br><br><button class="btn" id="retry">Opnieuw proberen</button></div>`; el.querySelector("#retry").onclick = () => this.load(true); return; }
     if (!s.data) { el.innerHTML = `<div class="kpis">${"<div class='skel' style='height:86px'></div>".repeat(4)}</div><div class="grid">${"<div class='skel' style='height:260px'></div>".repeat(8)}</div>`; return; }
-    const view = { deals: { today: this.vToday, watch: this.vWatch, all: this.vAll }, collection: { overview: this.vCollOverview, sets: this.vCollSets }, manage: { add: this.vAdd, import: this.vImport, links: this.vLinks, shops: this.vShops, settings: this.vSettings, userscript: this.vUserscript, backup: this.vBackup } }[s.section][s.sub[s.section]];
+    const view = { deals: { today: this.vToday, watch: this.vWatch, all: this.vAll }, collection: { overview: this.vCollOverview, sets: this.vCollSets }, manage: { log: this.vLog, notify: this.vNotify, add: this.vAdd, import: this.vImport, links: this.vLinks, shops: this.vShops, settings: this.vSettings, userscript: this.vUserscript, backup: this.vBackup } }[s.section][s.sub[s.section]];
     el.className = animate && !REDUCED ? "enter" : "";
     el.innerHTML = view.call(this);
     this.bindContent(el);
@@ -650,6 +661,327 @@ class LegoTrackerPanel extends HTMLElement {
       <div class="tscroll"><table class="tbl"><tr><th>Regel</th><th></th><th>Set</th><th>Naam</th><th class="num">Aantal</th><th class="num">Betaald</th><th>Datum</th><th>Staat</th><th>Opmerkingen</th></tr>${tbl}</table></div>
       ${a.rows.length > 500 ? `<p class="muted">Eerste 500 regels getoond.</p>` : ""}</div>`;
   }
+  // ---------------------------------------------------------------- errors tab
+  errType(o) {
+    const e = (o.error || "").toLowerCase();
+    if (o.link_status === "suspect") return ["suspect", "Verdachte link"];
+    if (e.startsWith("paused")) return ["paused", "Winkel gepauzeerd"];
+    if (e.includes("blocked")) return ["blocked", "Geblokkeerd door winkel"];
+    if (e.includes("verdachte prijs")) return ["price", "Verdachte prijs"];
+    if (e.includes("404") || e.includes("not found")) return ["gone", "Pagina bestaat niet meer"];
+    if (e.includes("price not found")) return ["noprice", "Prijs niet gevonden"];
+    return ["other", "Andere fout"];
+  }
+  errorRows() {
+    const out = [], E = this.state.errs;
+    for (const s of this.sets) {
+      const offers = Object.entries(s.offers || {});
+      if (!offers.length) out.push({ s, rid: null, o: null, type: "nolinks", label: "Geen enkele winkel-link", msg: "Er is nog geen winkel gekoppeld aan deze set." });
+      for (const [rid, o] of offers) {
+        if (!(o.error || o.link_status === "suspect")) continue;
+        if (o.ignored && !E.showIgnored) continue;
+        const [type, label] = this.errType(o);
+        out.push({ s, rid, o, type, label, msg: o.link_status === "suspect" ? o.link_reason : o.error });
+      }
+    }
+    return out;
+  }
+  vErrors() {
+    const E = this.state.errs, all = this.errorRows(), retailers = this.state.data.retailers;
+    const types = {}; all.forEach((r) => { types[r.type] = types[r.type] || [r.label, 0]; types[r.type][1]++; });
+    let rows = all.filter((r) => (E.type === "all" || r.type === E.type) && (E.scope === "all" || (E.scope === "owned") === !!r.s.owned) && (!E.shop || r.rid === E.shop));
+    rows.sort((a, b) => (b.s.owned - a.s.owned) || a.s.set_number.localeCompare(b.s.set_number));
+    const tr = rows.slice(0, 300).map((r) => {
+      const key = `${r.s.set_number}|${r.rid || ""}`, open = E.open === key;
+      const head = `<tr class="click erow${open ? " on" : ""}" data-ekey="${esc(key)}"><td style="width:28px">${open ? "▾" : "▸"}</td><td><b>${esc(r.s.set_number)}</b> ${esc(r.s.name || "")}<div class="muted" style="font-size:12px">${esc(r.s.theme || "")}${r.s.owned ? " · 📦 in bezit" : ""}</div></td>
+        <td>${r.rid ? esc(retailers[r.rid] || r.rid) : "–"}</td><td><span class="lk ${r.type === "suspect" || r.type === "price" ? "suspect" : "unknown"}">${esc(r.label)}</span>${r.o && r.o.ignored ? ` <span class="muted" style="font-size:11px">(genegeerd)</span>` : ""}<div class="err" style="font-size:12px;margin-top:2px">${esc(r.msg || "")}</div></td>
+        <td class="num">${r.o && r.o.price != null ? EUR(r.o.price) : "–"}</td></tr>`;
+      if (!open) return head;
+      return head + `<tr class="efix"><td></td><td colspan="4">${this.fixBoxHtml(r.s, r.rid, r.o)}</td></tr>`;
+    }).join("");
+    const chip = (k, l, n) => `<span class="chip ${E.type === k ? "on" : ""}" data-etype="${k}">${esc(l)}${n != null ? ` <span class="muted">${n}</span>` : ""}</span>`;
+    return `<div class="panel"><h3>⚠️ Fouten <span class="muted" style="font-weight:400">${all.length}</span><span class="hsp"></span><label class="chk" style="font-size:13px;font-weight:400;display:flex;gap:6px;align-items:center"><input type="checkbox" id="e_ign" ${E.showIgnored ? "checked" : ""}> genegeerde tonen</label></h3>
+      <p>Klik op een fout om ze meteen recht te zetten: vul de juiste productpagina en/of de prijs in. Onderaan bij "Blijft een winkel blokkeren?" op <a data-goto="manage/shops" style="cursor:pointer">Winkels &amp; taken</a> staan de alternatieven.</p>
+      <div class="chips">${chip("all", "Alle", all.length)}${Object.entries(types).map(([k, [l, n]]) => chip(k, l, n)).join("")}</div>
+      <div class="fbar"><select id="e_scope"><option value="all">Alle sets</option><option value="owned" ${E.scope === "owned" ? "selected" : ""}>📦 Mijn collectie</option><option value="watch" ${E.scope === "watch" ? "selected" : ""}>👀 Watchlist</option></select>
+      <select id="e_shop"><option value="">Alle winkels</option>${Object.entries(retailers).map(([k, v]) => `<option value="${k}" ${E.shop === k ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></div></div>
+      ${rows.length ? `<div class="panel tscroll"><table class="tbl"><tr><th></th><th>Set</th><th>Winkel</th><th>Fout</th><th class="num">Laatste prijs</th></tr>${tr}</table>${rows.length > 300 ? `<p class="muted">Eerste 300 van ${rows.length}.</p>` : ""}</div>` : this.emptyState("✅", "Geen fouten in deze selectie.")}`;
+  }
+  // ---------------------------------------------------------------- logbook
+  async loadLog(more = false) {
+    const L = this.state.logv;
+    const q = { type: "lego_tracker/log", level: L.level, kind: L.kind, retailer: L.retailer, source: L.source, set_number: L.set, q: L.q, limit: 100 };
+    if (more && L.data && L.data.entries.length) q.before = L.data.entries[L.data.entries.length - 1].ts;
+    try { const r = await this._hass.callWS(q); if (more) { r.entries = L.data.entries.concat(r.entries); } L.data = r; L.err = null; } catch (e) { L.err = e.message; }
+    if (this.state.section === "manage" && this.state.sub.manage === "log") this.renderLogList();
+  }
+  renderLogList() {
+    const el = this.shadowRoot.getElementById("loglist"); if (!el) return this.renderContent();
+    el.innerHTML = this.logListHtml(); this.bindLogList(el);
+  }
+  vLog() {
+    const L = this.state.logv, open = this.errorRows().length;
+    const tabs = `<div class="chips" style="margin-bottom:12px"><span class="chip ${L.mode === "log" ? "on" : ""}" data-lmode="log">📜 Logboek</span><span class="chip ${L.mode === "open" ? "on" : ""}" data-lmode="open">⚠️ Openstaande fouten <b>${open}</b></span></div>`;
+    if (L.mode === "open") return tabs + this.vErrors();
+    if (!L.data && !L.err) this.loadLog();
+    const d = L.data, f = d ? d.facets : { kind: {}, retailer: {}, source: {} }, kinds = d ? d.kinds : {};
+    const srcLabel = { server: "Server (integratie)", schedule: "Schema (automatisch)", panel: "Paneel (jijzelf)", userscript: "Tampermonkey-userscript", import: "Import", "LEGO.com": "LEGO.com", Brickset: "Brickset", Rebrickable: "Rebrickable" };
+    const opt = (list, cur, all) => `<option value="">${all}</option>` + list.map(([v, l, n]) => `<option value="${esc(v)}" ${cur === v ? "selected" : ""}>${esc(l)}${n != null ? ` (${n})` : ""}</option>`).join("");
+    return `${tabs}<div class="panel"><h3>📜 Logboek<span class="hsp"></span><button class="btn ghost sm" id="lg_reload">↻ Vernieuwen</button></h3>
+      <p>Alles wat de integratie doet: prijswijzigingen, verbindingen met winkels (wat lukt en wat niet), gevonden en afgekeurde links, prijzen via Tampermonkey, imports, taken, meldingen en je eigen acties. Herhaalde identieke fouten worden samengevoegd (×aantal). Klik op een regel voor details; bij een fout kan je ze meteen rechtzetten.</p>
+      <div class="fbar"><select id="lg_level">${opt([["problems", "⚠️ Fouten & waarschuwingen"], ["events", "✅ Gebeurtenissen"], ["error", "Alleen fouten"]], L.level, "Alles")}</select>
+      <select id="lg_kind">${opt(Object.entries(kinds).map(([k, l]) => [k, l, f.kind[k] || 0]), L.kind, "Alle soorten")}</select>
+      <select id="lg_shop">${opt(Object.entries(this.state.data.retailers).map(([k, l]) => [k, l, f.retailer[k] || 0]), L.retailer, "Alle winkels")}</select>
+      <select id="lg_src">${opt(Object.keys(f.source).map((k) => [k, srcLabel[k] || k, f.source[k]]), L.source, "Alle bronnen")}</select>
+      <input id="lg_set" placeholder="setnummer" value="${esc(L.set)}" style="width:120px" inputmode="numeric">
+      <div class="search" style="min-width:180px"><input id="lg_q" placeholder="Zoek in bericht of link…" value="${esc(L.q)}"></div>
+      ${L.level || L.kind || L.retailer || L.source || L.set || L.q ? `<button class="btn ghost sm" id="lg_clear">✕ Filters wissen</button>` : ""}</div></div>
+      <div id="loglist">${this.logListHtml()}</div>`;
+  }
+  logListHtml() {
+    const L = this.state.logv;
+    if (L.err) return this.emptyState("⚠️", esc(L.err));
+    if (!L.data) return `<div class="skel" style="height:200px"></div>`;
+    const d = L.data, retailers = this.state.data.retailers;
+    if (!d.entries.length) return this.emptyState("📭", "Geen logregels met deze filters.");
+    const icon = { error: "⛔", warning: "⚠️", ok: "✅", info: "ℹ️" };
+    const rows = d.entries.map((e) => {
+      const s = e.set_number ? this.sets.find((x) => x.set_number === e.set_number) : null, open = L.open === e.id;
+      const head = `<tr class="click lrow${open ? " on" : ""}" data-lid="${esc(e.id)}"><td style="white-space:nowrap" class="muted">${DATE(e.ts, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
+        <td>${icon[e.level] || ""}</td><td><span class="tag">${esc(d.kinds[e.kind] || e.kind)}</span></td>
+        <td>${e.set_number ? `<b>${esc(e.set_number)}</b> <span class="muted">${esc(s ? (s.name || "") : "")}</span>` : ""}</td><td>${e.retailer ? esc(retailers[e.retailer] || e.retailer) : ""}</td>
+        <td class="${e.level === "error" ? "err" : ""}">${esc(e.message)}${e.count > 1 ? ` <span class="tag">×${e.count}</span>` : ""}</td></tr>`;
+      if (!open) return head;
+      const det = `<div class="kv"><span>Tijdstip</span><b>${DATE(e.ts, { day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</b></div>
+        <div class="kv"><span>Bron</span><b>${esc(e.source || "")}</b></div>${e.url ? `<div class="kv"><span>Link</span><a href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">${esc(e.url.slice(0, 80))} ↗</a></div>` : ""}
+        ${e.price != null ? `<div class="kv"><span>Prijs</span><b>${e.old_price != null ? EUR(e.old_price) + " → " : ""}${EUR(e.price)}</b></div>` : ""}`;
+      const fixable = s && e.retailer && (e.level === "error" || e.level === "warning") && ["fetch", "link", "userscript", "discover", "price"].includes(e.kind);
+      const fix = fixable ? `<h4 style="margin:10px 0 6px">Rechtzetten</h4>${this.fixBoxHtml(s, e.retailer || null, (s.offers || {})[e.retailer])}` : s ? `<button class="btn ghost sm" data-set="${esc(s.set_number)}" style="margin-top:8px">Set openen</button>` : "";
+      return head + `<tr><td colspan="6"><div class="fixbox" style="background:var(--lt-card);border:1px solid var(--lt-line)">${det}${fix}</div></td></tr>`;
+    }).join("");
+    return `<div class="panel tscroll"><div class="muted" style="font-size:12px;margin-bottom:6px">${d.total} regel${d.total === 1 ? "" : "s"}</div><table class="tbl"><tr><th>Tijd</th><th></th><th>Soort</th><th>Set</th><th>Winkel</th><th>Bericht</th></tr>${rows}</table>
+      ${d.more ? `<div style="text-align:center;margin-top:10px"><button class="btn ghost" id="lg_more">Meer laden</button></div>` : ""}</div>`;
+  }
+  bindLogList(el) {
+    const L = this.state.logv;
+    el.querySelectorAll("tr.lrow").forEach((tr) => tr.addEventListener("click", () => { L.open = L.open === tr.dataset.lid ? null : tr.dataset.lid; this.renderLogList(); }));
+    el.querySelectorAll(".fixbox[data-fnum]").forEach((b) => this.bindFixBox(b, () => this.loadLog()));
+    this.bindCards(el);
+    const more = el.querySelector("#lg_more"); if (more) more.onclick = () => this.busy(more, "…", () => this.loadLog(true));
+  }
+  bindLog(root, $) {
+    const L = this.state.logv;
+    root.querySelectorAll("[data-lmode]").forEach((c) => c.addEventListener("click", () => { L.mode = c.dataset.lmode; this.renderContent(true); }));
+    if (L.mode !== "log") return;
+    const refilter = () => { L.open = null; this.loadLog(); };
+    for (const [id, key] of [["lg_level", "level"], ["lg_kind", "kind"], ["lg_shop", "retailer"], ["lg_src", "source"]]) $(id).addEventListener("change", (e) => { L[key] = e.target.value; refilter(); });
+    let t; const typed = (key) => (e) => { L[key] = e.target.value; clearTimeout(t); t = setTimeout(refilter, 350); };
+    $("lg_set").addEventListener("input", typed("set")); $("lg_q").addEventListener("input", typed("q"));
+    $("lg_reload").onclick = () => this.busy($("lg_reload"), "…", () => this.loadLog());
+    if ($("lg_clear")) $("lg_clear").onclick = () => { Object.assign(L, { level: "", kind: "", retailer: "", source: "", set: "", q: "", data: null }); this.renderContent(); };
+    const list = this.shadowRoot.getElementById("loglist"); if (list) this.bindLogList(list);
+  }
+  fixBoxHtml(set, rid, o) {
+    const retailers = this.state.data.retailers;
+    const google = `https://www.google.com/search?q=${encodeURIComponent(`LEGO ${set.set_number} ${set.name || ""}`)}${rid ? `+site:${{ lego_com: "lego.com", amazon_nl: "amazon.nl", amazon_de: "amazon.de", amazon_be: "amazon.com.be", bol: "bol.com", kruidvat_be: "kruidvat.be", dreamland_be: "dreamland.be" }[rid] || ""}` : ""}`;
+    const shopOpts = Object.entries(retailers).map(([k, v]) => `<option value="${k}" ${k === (rid || "lego_com") ? "selected" : ""}>${esc(v)}</option>`).join("");
+    return `<div class="fixbox" data-fnum="${esc(set.set_number)}" data-frid="${esc(rid || "")}">
+        <div class="form"><label>Winkel<select class="f_shop">${shopOpts}</select></label>
+        <label style="grid-column:span 2">Juiste productpagina (URL of ASIN)<input class="f_url" value="${esc(o && o.url || "")}" placeholder="https://…"></label>
+        <label>Prijs nu (€, optioneel)<input class="f_price" type="number" min="0" step="0.01" placeholder="${set.rrp ? "advies " + set.rrp : "bv. 39.99"}"></label></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><button class="btn sm f_go">✓ Rechtzetten</button>
+        ${o && o.url ? `<a class="btn ghost sm" href="${esc(o.url)}" target="_blank" rel="noopener noreferrer">Huidige link ↗</a>` : ""}
+        <a class="btn ghost sm" href="${google}" target="_blank" rel="noopener noreferrer">🔎 Zoek op het web ↗</a>
+        ${rid && o ? `<button class="btn ghost sm f_retry">↻ Opnieuw proberen</button><button class="btn ghost sm f_ign">${o.ignored ? "Niet meer negeren" : "Negeren"}</button><button class="btn danger sm f_rm">🗑 Link verwijderen</button>` : ""}
+        <button class="btn ghost sm" data-set="${esc(set.set_number)}">Set openen</button></div>
+        <p class="muted" style="font-size:12px;margin:8px 0 0">Rechtzetten bewaart de link als goedgekeurd en voegt meteen de prijs toe; een link naar een ander product begint met een lege prijshistoriek.</p></div>`;
+  }
+  bindFixBox(box, after) {
+    const num = box.dataset.fnum, rid0 = box.dataset.frid, q = (c) => box.querySelector("." + c);
+    const done = async (msg) => { await this.load(); if (after) await after(); this.toast(msg, "ok"); };
+    q("f_go").onclick = () => {
+      const retailer = q("f_shop").value, url = q("f_url").value.trim(), price = q("f_price").value ? +q("f_price").value : null;
+      if (!url && price == null) return this.toast("Vul een link en/of een prijs in", "err");
+      if (price != null && !(price > 0 && price <= 10000)) return this.toast("Ongeldige prijs", "err");
+      const data = { set_number: num, retailer };
+      if (url) data.url = url;           // same product page keeps its history, another page starts fresh
+      if (price != null) data.price = price;
+      this.busy(q("f_go"), "Bezig…", async () => { await this.svc("fix_offer", data); this.state.errs.open = null; this.state.logv.open = null; await done(`Set ${num} rechtgezet`); });
+    };
+    if (q("f_retry")) q("f_retry").onclick = () => this.busy(q("f_retry"), "…", async () => { const r = (await this.svc("refresh", { set_number: num, force: true }, true)).response; await done(r.updated ? "Prijs opgehaald" : "Nog steeds geen prijs"); });
+    if (q("f_ign")) q("f_ign").onclick = () => this.busy(q("f_ign"), "…", async () => { const o = (this.sets.find((x) => x.set_number === num).offers || {})[rid0] || {}; await this._hass.callWS({ type: "lego_tracker/ignore_error", set_number: num, retailer: rid0, ignore: !o.ignored }); await done(o.ignored ? "Fout wordt weer getoond" : "Fout genegeerd tot er iets verandert"); });
+    if (q("f_rm")) q("f_rm").onclick = () => { if (!confirm("Deze link verwijderen? Hij wordt niet opnieuw automatisch gekoppeld.")) return; this.busy(q("f_rm"), "…", async () => { await this.svc("remove_offer", { set_number: num, retailer: rid0 }); await done("Link verwijderd"); }); };
+  }
+  bindErrors(root, $) {
+    const E = this.state.errs;
+    root.querySelectorAll("[data-etype]").forEach((c) => c.addEventListener("click", () => { E.type = c.dataset.etype; E.open = null; this.renderContent(); }));
+    $("e_scope").addEventListener("change", (e) => { E.scope = e.target.value === "watch" ? "watch" : e.target.value; this.renderContent(); });
+    $("e_shop").addEventListener("change", (e) => { E.shop = e.target.value; this.renderContent(); });
+    $("e_ign").addEventListener("change", (e) => { E.showIgnored = e.target.checked; this.renderContent(); });
+    root.querySelectorAll("tr.erow").forEach((tr) => tr.addEventListener("click", () => { E.open = E.open === tr.dataset.ekey ? null : tr.dataset.ekey; this.renderContent(); const u = this.shadowRoot.querySelector(".f_url"); if (u) u.focus(); }));
+    const box = root.querySelector(".fixbox"); if (box) this.bindFixBox(box);
+  }
+  // ---------------------------------------------------------------- notifications tab
+  async loadNotify() {
+    const N = this.state.notif;
+    try { N.data = await this._hass.callWS({ type: "lego_tracker/notify/get" }); N.err = null; } catch (e) { N.err = e.message || String(e); }
+    if (this.state.section === "manage" && this.state.sub.manage === "notify") this.renderContent();
+  }
+  ruleTemplate(kind) {
+    const o = this.state.notif.data.options, mob = o.notify.find((n) => n.kind === "mobile");
+    const targets = mob ? [{ type: "mobile", service: mob.service }] : [{ type: "persistent" }];
+    const base = { enabled: true, scope: { type: "all", themes: [], sets: [] }, params: {}, shops: [], targets, cooldown_hours: 24, quiet: null, image: true, link: true };
+    return {
+      deals: { ...base, name: "Alle deals", triggers: ["all_time_low", "discount", "target_hit"], params: { discount_pct: this.state.data.threshold } },
+      watch: { ...base, name: "Watchlist: laagste prijs ooit", scope: { type: "watchlist", themes: [], sets: [] }, triggers: ["all_time_low", "target_hit"] },
+      theme: { ...base, name: "Thema onder een bedrag", scope: { type: "themes", themes: o.themes.slice(0, 1), sets: [] }, triggers: ["price_below"], params: { price_below: 50 } },
+      set: { ...base, name: "Specifieke sets", scope: { type: "sets", themes: [], sets: [] }, triggers: ["price_below", "price_drop"], params: { price_below: 50, drop_pct: 10 } },
+      retire: { ...base, name: "Sets die verdwijnen", scope: { type: "watchlist", themes: [], sets: [] }, triggers: ["retiring_soon"] },
+      digest: { ...base, name: "Dagelijkse samenvatting", triggers: ["digest"], cooldown_hours: 0, image: false, link: false },
+      problems: { ...base, name: "Problemen melden", triggers: ["problems"], targets: [{ type: "persistent" }], image: false, link: false },
+    }[kind];
+  }
+  ruleSummary(r) {
+    const o = this.state.notif.data.options, t = o.triggers, p = r.params || {};
+    const scope = { all: "alle sets", watchlist: "watchlist", collection: "mijn collectie", themes: `thema's: ${(r.scope.themes || []).join(", ")}`, sets: `sets: ${(r.scope.sets || []).slice(0, 8).join(", ")}${(r.scope.sets || []).length > 8 ? "…" : ""}` }[r.scope.type];
+    const trig = r.triggers.map((k) => { const x = t[k] || { label: k }; const v = { discount_pct: `≥ ${p.discount_pct}%`, price_below: `≤ €${p.price_below}`, drop_pct: `≥ ${p.drop_pct}%`, min_score: `≥ ${p.min_score}` }[x.param] || ""; return `${x.label}${v ? " " + v : ""}`; });
+    const tgt = r.targets.map((x) => this.targetLabel(x));
+    return `<span class="tag">🎯 ${esc(scope)}</span>${trig.map((x) => `<span class="tag">⚡ ${esc(x)}</span>`).join("")}${r.shops && r.shops.length ? `<span class="tag">🏪 ${r.shops.map((x) => esc(o.retailers[x] || x)).join(", ")}</span>` : ""}<br>${tgt.map((x) => `<span class="tag">➜ ${esc(x)}</span>`).join("")}${r.quiet ? `<span class="tag">🌙 stil ${r.quiet.from}–${r.quiet.to}</span>` : ""}`;
+  }
+  targetLabel(x) {
+    const o = this.state.notif.data.options, svc = (s) => (o.notify.find((n) => n.service === s) || {}).label || s;
+    return { mobile: `📱 ${svc(x.service)}`, notify: `💬 ${svc(x.service)}`, email: `✉️ ${(x.to || []).join(", ")}`, persistent: "🔔 Melding in Home Assistant",
+      entity: `📣 ${(o.notify_entities.find((e) => e.entity_id === x.entity_id) || {}).label || x.entity_id}`, tts: `🔊 ${(o.media_players.find((e) => e.entity_id === x.media_player) || {}).label || x.media_player}`, event: "⚡ Alleen event (automations)" }[x.type] || x.type;
+  }
+  vNotify() {
+    const N = this.state.notif;
+    if (N.err) return this.emptyState("🔒", `Notificaties niet beschikbaar: ${esc(N.err)}<br>Alleen beheerders kunnen meldingen instellen.`);
+    if (!N.data) { this.loadNotify(); return `<div class="skel" style="height:300px"></div>`; }
+    if (N.edit) return this.vRuleEditor();
+    const d = N.data;
+    const list = d.rules.map((r, i) => `<div class="rule ${r.enabled ? "" : "off"}" data-ri="${i}"><label class="switch" title="Aan/uit"><input type="checkbox" class="r_on" ${r.enabled ? "checked" : ""}><i></i></label>
+      <div style="flex:1;min-width:0"><b>${esc(r.name)}</b>${d.queued[r.id] ? ` <span class="tag">🌙 ${d.queued[r.id]} in wachtrij</span>` : ""}<div class="sum">${this.ruleSummary(r)}</div></div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end"><button class="btn ghost sm r_edit">✎ Bewerken</button><button class="btn ghost sm r_test" title="Testmelding sturen">🔔</button><button class="btn ghost sm r_dup" title="Dupliceren">⧉</button><button class="btn danger sm r_del" title="Verwijderen">🗑</button></div></div>`).join("");
+    const tpl = [["deals", "🏷️ Alle deals"], ["watch", "👀 Watchlist laagste prijs"], ["theme", "🎨 Thema onder bedrag"], ["set", "🧱 Specifieke sets"], ["retire", "⏳ Verdwijnt binnenkort"], ["digest", "🗞️ Dagelijkse samenvatting"], ["problems", "⚠️ Problemen"]];
+    const log = d.log.slice(0, 15).map((l) => `<li><span class="ic">${l.queued ? "🌙" : l.ok ? "✅" : "⚠️"}</span><div><b>${esc(l.title)}</b><div>${esc(l.message.split("\n")[0])}</div><div class="t">${esc(l.rule)} · ${DATE(l.ts, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div></div></li>`).join("");
+    return `<div class="cols" data-nf="1"><div><div class="panel"><h3>🔔 Meldingsregels<span class="hsp"></span></h3><p>Elke regel bepaalt <b>voor welke sets</b>, <b>wanneer</b> en <b>naar wie en hoe</b> je een melding krijgt. Elke melding vuurt ook het event <code>lego_tracker_notification</code> af voor eigen automations, en komt in het Logboek.</p>
+      ${list || this.emptyState("🔕", "Nog geen regels. Kies hieronder een sjabloon.")}</div>
+      <div class="panel"><h3>＋ Nieuwe regel</h3><div class="chips">${tpl.map(([k, l]) => `<span class="chip" data-tpl="${k}">${l}</span>`).join("")}</div></div></div>
+      <aside><div class="panel"><h3>📜 Laatst verstuurd</h3>${log ? `<ul class="tl">${log}</ul>` : "<p>Nog niets verstuurd.</p>"}</div></aside></div>`;
+  }
+  vRuleEditor() {
+    const N = this.state.notif, r = N.edit, o = N.data.options, p = r.params || (r.params = {});
+    const opt = (list, cur, ph) => `${ph ? `<option value="">${ph}</option>` : ""}${list.map(([v, l]) => `<option value="${esc(v)}" ${String(v) === String(cur) ? "selected" : ""}>${esc(l)}</option>`).join("")}`;
+    const setsBy = {}; this.sets.forEach((x) => { const t = x.theme || "Onbekend"; (setsBy[t] = setsBy[t] || []).push(x); });
+    const themes = Object.keys(setsBy).sort();
+    const pickTheme = N.pickTheme && setsBy[N.pickTheme] ? N.pickTheme : themes[0];
+    const scopeBox = r.scope.type === "themes"
+      ? `<div class="fbar"><select id="n_theme_add">${opt(o.themes.filter((t) => !r.scope.themes.includes(t)).map((t) => [t, `${t} (${(setsBy[t] || []).length})`]), "", "Kies een thema…")}</select><button class="btn ghost sm" id="n_theme_btn">＋ Toevoegen</button></div>
+         <div class="chips">${r.scope.themes.map((t) => `<span class="chip on" data-rmtheme="${esc(t)}">${esc(t)} ✕</span>`).join("") || `<span class="muted">Nog geen thema gekozen.</span>`}</div>`
+      : r.scope.type === "sets"
+      ? `<div class="fbar"><select id="n_set_theme" title="Eerst een thema kiezen">${opt(themes.map((t) => [t, `${t} (${setsBy[t].length})`]), pickTheme)}</select>
+         <select id="n_set_pick" style="min-width:240px">${opt(setsBy[pickTheme] ? setsBy[pickTheme].slice().sort((a, b) => a.set_number.localeCompare(b.set_number)).filter((x) => !r.scope.sets.includes(x.set_number)).map((x) => [x.set_number, `${x.set_number} ${x.name || ""}${x.owned ? " 📦" : ""}`]) : [], "", "Kies een set…")}</select>
+         <button class="btn ghost sm" id="n_set_btn">＋</button><span class="muted">of</span><input id="n_set_free" placeholder="setnummer" inputmode="numeric" style="width:120px"><button class="btn ghost sm" id="n_set_free_btn">＋</button></div>
+         <div class="chips">${r.scope.sets.map((n) => { const x = this.sets.find((y) => y.set_number === n); return `<span class="chip on" data-rmset="${esc(n)}">${esc(n)} ${esc(x ? (x.name || "") : "(niet gevolgd)")} ✕</span>`; }).join("") || `<span class="muted">Nog geen set gekozen.</span>`}</div>`
+      : "";
+    const pc = (k, list) => `<select data-param="${k}">${opt(list.map((v) => [v, k !== "min_score" ? `${v}%` : v]), p[k] ?? list[Math.floor(list.length / 2)])}</select>`;
+    const trigRow = (k) => { const t = o.triggers[k]; const on = r.triggers.includes(k);
+      const par = { discount_pct: pc("discount_pct", [10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70]), drop_pct: pc("drop_pct", [5, 10, 15, 20, 25, 30, 40, 50]), min_score: pc("min_score", [45, 50, 60, 70, 80, 90]),
+        price_below: `<span style="display:flex;gap:4px;align-items:center">€ <input data-param="price_below" type="number" min="1" step="1" value="${esc(p.price_below ?? "")}" placeholder="bedrag" style="width:90px"></span>` }[t.param] || "";
+      return `<div class="trig"><input type="checkbox" data-trig="${k}" ${on ? "checked" : ""}><label style="cursor:pointer" data-trigl="${k}">${esc(t.label)}${t.per_set ? "" : ` <span class="muted" style="font-size:12px">(algemeen)</span>`}</label><div>${par}</div></div>`; };
+    const perSet = Object.keys(o.triggers).filter((k) => o.triggers[k].per_set), general = Object.keys(o.triggers).filter((k) => !o.triggers[k].per_set);
+    const mobiles = o.notify.filter((n) => n.kind === "mobile"), mails = o.notify.filter((n) => n.kind === "email");
+    const tgtRow = (x, i) => {
+      let body = "";
+      if (x.type === "mobile") body = mobiles.length ? `<select data-tf="service">${opt(mobiles.map((n) => [n.service, n.label]), x.service, "Kies een toestel…")}</select>` : `<span class="err">Geen Home Assistant-app gevonden. Installeer de Companion-app op je telefoon.</span>`;
+      if (x.type === "notify") body = `<select data-tf="service">${opt(o.notify.map((n) => [n.service, `${n.label} (${n.service})`]), x.service, "Kies een notify-service…")}</select>`;
+      if (x.type === "email") body = `<select data-tf="service" title="Dienst die de mail verstuurt">${opt((mails.length ? mails : o.notify).map((n) => [n.service, `${n.label} (${n.service})`]), x.service, "Verstuur via…")}</select><input data-tf="to" placeholder="naam@voorbeeld.be, …" value="${esc((x.to || []).join(", "))}" style="min-width:220px">${mails.length ? "" : `<span class="muted" style="font-size:12px">Tip: voeg de SMTP-integratie toe om mails te sturen.</span>`}`;
+      if (x.type === "entity") body = o.notify_entities.length ? `<select data-tf="entity_id">${opt(o.notify_entities.map((n) => [n.entity_id, n.label]), x.entity_id, "Kies een notify-entiteit…")}</select>` : `<span class="muted">Geen notify-entiteiten gevonden.</span>`;
+      if (x.type === "tts") body = `<select data-tf="tts">${opt(o.tts.map((n) => [n.entity_id, n.label]), x.tts, "Spraakdienst…")}</select><select data-tf="media_player">${opt(o.media_players.map((n) => [n.entity_id, n.label]), x.media_player, "Speaker…")}</select>`;
+      if (x.type === "persistent") body = `<span class="muted">Verschijnt bij de meldingen in Home Assistant.</span>`;
+      if (x.type === "event") body = `<span class="muted">Alleen het event <code>lego_tracker_notification</code>, voor je eigen automations.</span>`;
+      return `<div class="tgt" data-ti="${i}"><select data-tf="type">${opt([["mobile", "📱 Mobiele app"], ["email", "✉️ E-mail"], ["notify", "💬 Notify-service (Telegram, Signal, …)"], ["entity", "📣 Notify-entiteit"], ["persistent", "🔔 Melding in Home Assistant"], ["tts", "🔊 Spraak op een speaker"], ["event", "⚡ Alleen event"]], x.type)}</select>${body}<span style="flex:1"></span><button class="btn ghost sm" data-rmt="${i}">✕</button></div>`;
+    };
+    const hours = Array.from({ length: 24 }, (_, h) => [`${String(h).padStart(2, "0")}:00`, `${String(h).padStart(2, "0")}:00`]);
+    return `<div data-nf="1"><div class="panel"><h3>${N.idx == null ? "＋ Nieuwe regel" : "✎ Regel bewerken"}<span class="hsp"></span><button class="btn ghost sm" id="n_cancel">← Terug</button></h3>
+      <div class="form"><label style="grid-column:span 2">Naam<input id="n_name" value="${esc(r.name)}" maxlength="60"></label><label class="chk" style="align-self:end"><input type="checkbox" id="n_enabled" ${r.enabled ? "checked" : ""}> regel staat aan</label></div></div>
+      <div class="panel"><h3>1 · Voor welke sets?</h3><div class="fbar"><select id="n_scope">${opt([["all", "Alle gevolgde sets"], ["watchlist", "👀 Mijn watchlist (niet in bezit)"], ["collection", "📦 Mijn collectie"], ["themes", "🎨 Bepaalde thema's"], ["sets", "🧱 Bepaalde sets"]], r.scope.type)}</select></div>${scopeBox}</div>
+      <div class="panel"><h3>2 · Wanneer?</h3><p style="margin-bottom:4px">Per set:</p>${perSet.map(trigRow).join("")}<p style="margin:12px 0 4px">Algemeen:</p>${general.map(trigRow).join("")}
+        <div class="fbar" style="margin-top:10px"><span class="muted">In welke winkels?</span><select id="n_shop_add">${opt(Object.entries(o.retailers).filter(([k]) => !r.shops.includes(k)), "", r.shops.length ? "＋ winkel toevoegen" : "Alle winkels (of kies…)")}</select>
+        ${r.shops.map((k) => `<span class="chip on" data-rmshop="${k}">${esc(o.retailers[k] || k)} ✕</span>`).join("")}</div></div>
+      <div class="panel"><h3>3 · Naar wie en hoe?</h3>${r.targets.map(tgtRow).join("")}<button class="btn ghost sm" id="n_tadd">＋ Ontvanger toevoegen</button>
+        <div class="form" style="margin-top:12px"><label>Niet opnieuw melden binnen<select id="n_cool">${opt([[0, "altijd melden"], [1, "1 uur"], [6, "6 uur"], [12, "12 uur"], [24, "1 dag"], [72, "3 dagen"], [168, "1 week"]], r.cooldown_hours)}</select></label>
+        <label>Stille uren<select id="n_qon">${opt([["", "geen"], ["1", "aan"]], r.quiet ? "1" : "")}</select></label>
+        ${r.quiet ? `<label>van<select id="n_qf">${opt(hours, r.quiet.from)}</select></label><label>tot<select id="n_qt">${opt(hours, r.quiet.to)}</select></label>` : ""}</div>
+        <div class="form"><label class="chk"><input type="checkbox" id="n_img" ${r.image ? "checked" : ""}> afbeelding meesturen</label><label class="chk"><input type="checkbox" id="n_link" ${r.link ? "checked" : ""}> link naar de winkel</label></div>
+        <p style="font-size:12px">Tijdens stille uren worden meldingen verzameld en daarna in één bericht gestuurd (de melding in Home Assistant en het event komen meteen).</p></div>
+      <div class="panel" style="position:sticky;bottom:12px;z-index:2;display:flex;gap:10px;flex-wrap:wrap"><button class="btn" id="n_save">💾 Regel opslaan</button><button class="btn ghost" id="n_test">🔔 Testmelding</button><button class="btn ghost" id="n_cancel2">Annuleren</button></div></div>`;
+  }
+  async saveRules(rules, msg) {
+    const N = this.state.notif;
+    const r = await this._hass.callWS({ type: "lego_tracker/notify/set", rules });
+    N.data.rules = r.rules; if (msg) this.toast(msg, "ok");
+  }
+  bindNotify(root, $) {
+    const N = this.state.notif, d = N.data;
+    root.querySelectorAll("[data-tpl]").forEach((c) => c.addEventListener("click", () => { N.edit = JSON.parse(JSON.stringify(this.ruleTemplate(c.dataset.tpl))); N.idx = null; this.renderContent(true); }));
+    root.querySelectorAll(".rule[data-ri]").forEach((el) => {
+      const i = +el.dataset.ri, q = (c) => el.querySelector("." + c);
+      q("r_on").addEventListener("change", (e) => { const rules = JSON.parse(JSON.stringify(d.rules)); rules[i].enabled = e.target.checked; this.saveRules(rules, e.target.checked ? "Regel aangezet" : "Regel uitgezet").then(() => this.renderContent()).catch((err) => this.toast(err.message, "err")); });
+      q("r_edit").onclick = () => { N.edit = JSON.parse(JSON.stringify(d.rules[i])); N.idx = i; this.renderContent(true); };
+      q("r_dup").onclick = () => { const c = JSON.parse(JSON.stringify(d.rules[i])); delete c.id; c.name += " (kopie)"; N.edit = c; N.idx = null; this.renderContent(true); };
+      q("r_del").onclick = () => { if (!confirm(`Regel "${d.rules[i].name}" verwijderen?`)) return; const rules = d.rules.filter((_, j) => j !== i); this.busy(q("r_del"), "", async () => { await this.saveRules(rules, "Regel verwijderd"); this.renderContent(); }); };
+      q("r_test").onclick = () => this.testRule(d.rules[i], q("r_test"));
+    });
+    if (!N.edit) return;
+    const r = N.edit;
+    const sync = () => {
+      const v = (id) => (root.querySelector("#" + id) || {}).value;
+      if ($("n_name")) r.name = $("n_name").value; if ($("n_enabled")) r.enabled = $("n_enabled").checked;
+      root.querySelectorAll("[data-trig]").forEach((c) => { const k = c.dataset.trig; r.triggers = r.triggers.filter((x) => x !== k); if (c.checked) r.triggers.push(k); });
+      root.querySelectorAll("[data-param]").forEach((c) => { r.params[c.dataset.param] = c.value === "" ? undefined : +c.value; });
+      root.querySelectorAll(".tgt").forEach((el) => { const t = r.targets[+el.dataset.ti]; el.querySelectorAll("[data-tf]").forEach((f) => { if (f.dataset.tf === "type") return; t[f.dataset.tf] = f.dataset.tf === "to" ? f.value.split(/[,;\s]+/).filter(Boolean) : f.value; }); });
+      if ($("n_cool")) r.cooldown_hours = +v("n_cool");
+      if ($("n_qon")) r.quiet = v("n_qon") ? { from: v("n_qf") || "22:00", to: v("n_qt") || "07:00" } : null;
+      if ($("n_img")) r.image = $("n_img").checked; if ($("n_link")) r.link = $("n_link").checked;
+    };
+    const rerender = () => { sync(); this.renderContent(); };
+    root.querySelectorAll("[data-trigl]").forEach((l) => l.addEventListener("click", () => { const c = root.querySelector(`[data-trig="${l.dataset.trigl}"]`); c.checked = !c.checked; }));
+    $("n_scope").addEventListener("change", (e) => { sync(); r.scope.type = e.target.value; this.renderContent(); });
+    if ($("n_theme_btn")) $("n_theme_btn").onclick = () => { const t = $("n_theme_add").value; if (!t) return this.toast("Kies eerst een thema", "err"); sync(); r.scope.themes.push(t); this.renderContent(); };
+    if ($("n_theme_add")) $("n_theme_add").addEventListener("change", () => $("n_theme_btn").click());
+    root.querySelectorAll("[data-rmtheme]").forEach((c) => c.onclick = () => { sync(); r.scope.themes = r.scope.themes.filter((t) => t !== c.dataset.rmtheme); this.renderContent(); });
+    if ($("n_set_theme")) $("n_set_theme").addEventListener("change", (e) => { sync(); N.pickTheme = e.target.value; this.renderContent(); });
+    const addSet = (n) => { n = (String(n).match(/\d{3,7}/) || [""])[0]; if (!n) return this.toast("Geef een setnummer van 3–7 cijfers", "err"); if (r.scope.sets.includes(n)) return this.toast("Staat al in de lijst", "err"); sync(); r.scope.sets.push(n); this.renderContent(); if (!this.sets.some((x) => x.set_number === n)) this.toast(`Set ${n} wordt nog niet gevolgd: voeg ze toe om meldingen te krijgen`); };
+    if ($("n_set_btn")) $("n_set_btn").onclick = () => addSet($("n_set_pick").value);
+    if ($("n_set_pick")) $("n_set_pick").addEventListener("change", (e) => e.target.value && addSet(e.target.value));
+    if ($("n_set_free_btn")) { $("n_set_free_btn").onclick = () => addSet($("n_set_free").value); $("n_set_free").addEventListener("keydown", (e) => { if (e.key === "Enter") addSet(e.target.value); }); }
+    root.querySelectorAll("[data-rmset]").forEach((c) => c.onclick = () => { sync(); r.scope.sets = r.scope.sets.filter((t) => t !== c.dataset.rmset); this.renderContent(); });
+    $("n_shop_add").addEventListener("change", (e) => { if (!e.target.value) return; sync(); r.shops.push(e.target.value); this.renderContent(); });
+    root.querySelectorAll("[data-rmshop]").forEach((c) => c.onclick = () => { sync(); r.shops = r.shops.filter((t) => t !== c.dataset.rmshop); this.renderContent(); });
+    root.querySelectorAll('.tgt [data-tf="type"]').forEach((sel) => sel.addEventListener("change", (e) => { sync(); r.targets[+e.target.closest(".tgt").dataset.ti] = { type: e.target.value }; this.renderContent(); }));
+    root.querySelectorAll("[data-rmt]").forEach((b) => b.onclick = () => { sync(); r.targets.splice(+b.dataset.rmt, 1); this.renderContent(); });
+    $("n_tadd").onclick = () => { sync(); const mob = d.options.notify.find((n) => n.kind === "mobile"); r.targets.push(mob ? { type: "mobile", service: mob.service } : { type: "persistent" }); this.renderContent(); };
+    $("n_qon").addEventListener("change", rerender);
+    const back = () => { N.edit = null; N.idx = null; this.renderContent(true); };
+    $("n_cancel").onclick = back; $("n_cancel2").onclick = back;
+    $("n_save").onclick = () => {
+      sync();
+      Object.keys(r.params).forEach((k) => { if (r.params[k] == null || isNaN(r.params[k])) delete r.params[k]; });
+      const rules = JSON.parse(JSON.stringify(d.rules)); if (N.idx == null) rules.push(r); else rules[N.idx] = r;
+      this.busy($("n_save"), "Opslaan…", async () => { await this.saveRules(rules, "Regel opgeslagen"); back(); });
+    };
+    $("n_test").onclick = () => { sync(); this.testRule(r, $("n_test")); };
+  }
+  testRule(rule, btn) {
+    const r = JSON.parse(JSON.stringify(rule)); Object.keys(r.params || {}).forEach((k) => { if (r.params[k] == null) delete r.params[k]; });
+    return this.busy(btn, "…", async () => {
+      const res = (await this._hass.callWS({ type: "lego_tracker/notify/test", rule: r })).results;
+      const bad = res.filter((x) => !x.ok);
+      if (bad.length) this.toast(`Niet gelukt: ${bad.map((x) => `${this.targetLabel(x.target)} (${x.error})`).join("; ")}`, "err");
+      else this.toast(`Testmelding verstuurd naar ${res.length} ontvanger${res.length > 1 ? "s" : ""}`, "ok");
+    });
+  }
   vLinks() {
     const L = this.state.links, rows = [];
     for (const s of this.sets) {
@@ -697,7 +1029,7 @@ class LegoTrackerPanel extends HTMLElement {
       <td>${x.builtin ? "" : `<button class="btn danger sm s_del" title="Winkel verwijderen">🗑</button>`}</td></tr>`).join("");
     return `<div class="panel"><h3>🏷️ Deals</h3><div class="form"><label>Kortingsdrempel (%)<input id="o_thr" type="number" min="1" max="90" value="${st.discount_threshold}"></label>
         <label>Min. dagen historiek voor "laagste ooit"<input id="o_hist" type="number" min="0" max="90" value="${st.min_history_days}"></label>
-        <label>Melding via notify-service<input id="o_notify" value="${esc(st.notify_service)}" placeholder="notify.mobile_app_telefoon"></label>
+        <label>Meldingen<a class="btn ghost sm" data-goto="manage/notify" style="cursor:pointer;margin-top:4px;align-self:flex-start">🔔 Naar Notificaties</a><input id="o_notify" type="hidden" value="${esc(st.notify_service)}"></label>
         <label>Dagelijkse samenvatting om<input id="o_digest" type="time" value="${esc(st.digest_time)}"></label></div></div>
       <div class="panel"><h3>⏰ Automatisch prijzen ophalen</h3><div class="form"><label class="chk"><input type="checkbox" id="o_auto" ${st.auto_refresh ? "checked" : ""}> aan</label>
         <label style="grid-column:span 2">Tijdstippen (1 tot 6, gescheiden door komma's)<input id="o_times" value="${esc(st.refresh_times)}" placeholder="07:30, 19:30"></label></div></div>
@@ -814,8 +1146,11 @@ class LegoTrackerPanel extends HTMLElement {
       const info = await this._hass.callWS({ type: "lego_tracker/shop_action", action: rid ? "resume" : "resume_all", ...(rid ? { retailer: rid } : {}) });
       Object.assign(this.state.data, { paused: info.paused }); this.state.settings = null; await this.load(); this.toast(rid ? "Winkel hervat" : "Alle pauzes opgeheven", "ok");
     })));
-    // settings
+    // settings, errors, notifications
     if ($("o_save")) this.bindSettings(root, $);
+    if ($("e_scope")) this.bindErrors(root, $);
+    if (root.querySelector("[data-lmode]")) this.bindLog(root, $);
+    if (root.querySelector("[data-nf]")) this.bindNotify(root, $);
     // link check
     const L = s.links;
     on("[data-lstatus]", "click", (e) => { L.status = e.currentTarget.dataset.lstatus; L.edit = null; this.renderContent(); });

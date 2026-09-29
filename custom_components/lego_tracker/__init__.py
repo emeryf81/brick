@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import voluptuous as vol
@@ -15,7 +15,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.event import async_track_time_change
+from homeassistant.helpers.event import async_track_time_change, async_track_time_interval
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -55,6 +55,8 @@ SERVICE_SCHEMAS = {
     "remove_offer": vol.Schema({SET: cv.string, vol.Required("retailer"): cv.string,
                                 vol.Optional("block", default=True): cv.boolean}),
     "cancel_job": vol.Schema({}),
+    "fix_offer": vol.Schema({SET: cv.string, vol.Required("retailer"): cv.string, vol.Optional("url"): cv.string,
+                             vol.Optional("price"): vol.Coerce(float)}),
     "export_collection": vol.Schema({}),
     "export_data": vol.Schema({}),
     "import_data": vol.Schema({
@@ -100,22 +102,10 @@ def digest(coord: LegoCoordinator) -> dict:
 
 
 async def _send_digest(hass: HomeAssistant, coord: LegoCoordinator) -> None:
+    """Daily digest: event for automations + every notification rule with the 'digest' trigger."""
     d = digest(coord)
     hass.bus.async_fire(EVENT_DIGEST, d)
-    from homeassistant.components import persistent_notification
-
-    if d["deals"]:
-        lines = [
-            f"- **{r['set_number']} {r['name'] or ''}** €{r['price']:.2f} @ {RETAILERS[r['retailer']][0]}"
-            + (f" (-{r['discount']:.0f}%)" if r["discount"] else "") + (" 🔻 record low" if r["all_time_low"] else "")
-            for r in d["deals"][:20]
-        ]
-        await coord.async_notify(f"LEGO deals ({len(d['deals'])})", "\n".join(l.replace("**", "") for l in lines[:8]))
-        persistent_notification.async_create(
-            hass, "\n".join(lines), title=f"LEGO deals ({len(d['deals'])})", notification_id=f"{DOMAIN}_digest"
-        )
-    else:
-        persistent_notification.async_dismiss(hass, f"{DOMAIN}_digest")
+    await coord.notifier.on_digest(d)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -149,12 +139,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await _send_digest(hass, coord)
 
     entry.async_on_unload(async_track_time_change(hass, _daily, t.hour, t.minute, t.second))
+    entry.async_on_unload(async_track_time_interval(hass, coord.notifier.flush_queues, timedelta(minutes=5)))
 
     @callback
     def _scheduled_refresh(_now: datetime) -> None:
         if coord.job_running:
             _LOGGER.info("Scheduled price round skipped: %s is still running", coord.job["label"])
             return
+        coord._job_source = "schedule"
         coord.start_refresh()
 
     if coord.auto_refresh:
@@ -279,6 +271,12 @@ def _register_services(hass: HomeAssistant) -> None:
         except ValueError as err:
             raise ServiceValidationError(str(err)) from err
 
+    async def fix_offer(call: ServiceCall) -> None:
+        try:
+            _coordinator(hass).fix_offer(call.data["set_number"], call.data["retailer"], call.data.get("url"), call.data.get("price"))
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+
     async def cancel_job(call: ServiceCall) -> dict:
         return {"cancelled": _coordinator(hass).cancel_job()}
 
@@ -296,6 +294,9 @@ def _register_services(hass: HomeAssistant) -> None:
         if not rows:
             raise ServiceValidationError(analysis["fatal"] or "Geen importeerbare regels (alle regels bevatten fouten).")
         result = apply_import(c.store, rows, replace=call.data["replace"])
+        c.log("ok" if not analysis["summary"]["error"] else "warning", "import",
+              f"CSV geïmporteerd: {result['added']} nieuw, {result['updated']} bijgewerkt, {analysis['summary']['error']} regels overgeslagen"
+              + (" (collectie vervangen)" if call.data["replace"] else ""), source="import")
         warnings = [f"regel {r['line']}: " + "; ".join(x["text"] for x in r["issues"] if x["level"] != "info")
                     for r in analysis["rows"] if r["status"] != "ok"]
         for r in rows:
@@ -323,7 +324,7 @@ def _register_services(hass: HomeAssistant) -> None:
                           ("enrich_sets", enrich_sets), ("verify_links", verify_links), ("cancel_job", cancel_job)):
         hass.services.async_register(DOMAIN, name, handler, SERVICE_SCHEMAS[name], supports_response=SupportsResponse.OPTIONAL)
     for name, handler in (("add_set", add_set), ("remove_set", remove_set), ("set_offer", set_offer),
-                          ("confirm_offer", confirm_offer), ("remove_offer", remove_offer),
+                          ("confirm_offer", confirm_offer), ("remove_offer", remove_offer), ("fix_offer", fix_offer),
                           ("report_price", report_price), ("send_digest", send_digest)):
         hass.services.async_register(DOMAIN, name, handler, SERVICE_SCHEMAS[name])
     hass.services.async_register(DOMAIN, "import_collection", import_collection,

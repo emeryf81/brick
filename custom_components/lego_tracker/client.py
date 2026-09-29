@@ -57,6 +57,7 @@ class Fetcher:
         self.min_delay = 4.0
         self.blocks: dict[str, int] = {}
         self.no_autopause: set[str] = set()
+        self.on_pause = None   # callback(retailer, hours), set by the coordinator
         self.blocked_until: dict[str, float] = {}
 
     @property
@@ -150,7 +151,10 @@ class Fetcher:
         if retailer in self.no_autopause:       # user chose: never pause this shop
             self.blocks[retailer] = n + 1
             return
-        self.blocked_until[retailer] = time.time() + COOLDOWN_HOURS[min(n, len(COOLDOWN_HOURS) - 1)] * 3600
+        hours = COOLDOWN_HOURS[min(n, len(COOLDOWN_HOURS) - 1)]
+        self.blocked_until[retailer] = time.time() + hours * 3600
+        if self.on_pause:
+            self.on_pause(retailer, hours)
         self.blocks[retailer] = n + 1
 
     async def fetch_offer(self, retailer: str, url: str) -> tuple[Parsed | None, str | None]:

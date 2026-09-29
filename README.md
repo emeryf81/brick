@@ -4,7 +4,7 @@ LEGO Price Tracker voor Home Assistant
 
 Custom integration (HACS-compatibel) die LEGO-sets en hun prijzen volgt bij **LEGO.com, Amazon.nl, Amazon.de, Amazon.com.be, bol.com, Kruidvat.be, Dreamland.be en je eigen winkels**, met een dagelijks dashboard, prijsgrafieken en collectiewaarde.
 
-> Status: 0.7.0. 70 unit- en integratietests tegen een echte Home Assistant-core (2026.2.3). Het paneel is in Chromium getest (desktop en mobiel, licht en donker) met door de integratie zelf gegenereerde testdata. **Nog niet gedaan:** een controle van de winkel-parsers tegen de live sites.
+> Status: 0.8.0. 79 unit- en integratietests tegen een echte Home Assistant-core (2026.2.3). Het paneel is in Chromium getest (desktop en mobiel, licht en donker) met door de integratie zelf gegenereerde testdata. **Nog niet gedaan:** een controle van de winkel-parsers tegen de live sites.
 
 ## Opbouw van het paneel
 Het sidebar-paneel **LEGO** heeft drie delen:
@@ -46,9 +46,29 @@ Nog niet tegen de live site gecontroleerd: LEGO.com rendert een deel van de zoek
 
 **Opgeruimde prijzen:** prijspunten die onmogelijk zijn ten opzichte van de adviesprijs (< 20 % of > 4×), bijvoorbeeld een accessoireprijs die verkeerd werd uitgelezen, worden automatisch uit de historiek verwijderd.
 
+## Logboek
+*Beheer → Logboek* bewaart alles wat de integratie doet (laatste 3000 regels):
+- prijswijzigingen (oud → nieuw) per winkel;
+- verbindingen met winkels, met per taak een samenvatting per winkel ("bol.com: 230 gelukt, 6 mislukt");
+- fouten (geblokkeerd, pagina weg, prijs niet gevonden, verdachte prijs), pauzes en hervattingen;
+- gevonden, goedgekeurde, afgekeurde en verwijderde links;
+- prijzen via het userscript (Tampermonkey), ook de geweigerde;
+- imports, taken, setgegevens (LEGO.com/Brickset/Rebrickable), meldingen, instellingen en je eigen acties.
+
+Filteren kan op fouten/gebeurtenissen, soort, winkel, bron (server, schema, paneel, Tampermonkey, import…), setnummer en tekst of link. Identieke fouten na elkaar worden samengevoegd (×aantal). Klik een regel open voor details; bij een winkel- of linkfout vul je meteen de juiste link en/of de prijs in (**Rechtzetten**). *Openstaande fouten* toont alle huidige problemen, met dezelfde herstelknop, en je kunt ook opnieuw proberen, negeren of de link verwijderen.
+
+## Notificaties
+*Beheer → Notificaties* werkt met regels, bijna volledig via dropdowns:
+1. **Voor welke sets**: alle, watchlist, mijn collectie, bepaalde thema's, of bepaalde sets (eerst een thema kiezen, dan de set, of vrij een setnummer typen).
+2. **Wanneer**: laagste prijs ooit, korting ≥ x %, streefprijs bereikt, prijs onder € x, prijsdaling ≥ x %, dealscore ≥ x, verdwijnt binnenkort, weer leverbaar, elke prijswijziging; algemeen: dagelijkse samenvatting, taak klaar, problemen (winkel gepauzeerd, fouten). Optioneel beperkt tot bepaalde winkels.
+3. **Naar wie en hoe**: 📱 Home Assistant-app (toestel kiezen, met afbeelding en klikbare link), ✉️ e-mail (via SMTP of een andere notify-dienst, vrije adressen), 💬 elke notify-service (Telegram, Signal…), 📣 notify-entiteiten, 🔔 melding in Home Assistant, 🔊 spraak op een speaker (TTS + mediaspeler), ⚡ alleen het event `lego_tracker_notification`.
+4. **Extra**: niet opnieuw melden binnen x uur, stille uren (meldingen worden gebundeld en daarna verstuurd), afbeelding en link meesturen.
+
+Elke regel heeft een testknop; verstuurde meldingen staan in het logboek. Bij een update worden twee standaardregels aangemaakt (alle deals en de dagelijkse samenvatting), naar de notify-service uit je oude instellingen als die er was.
+
 ## Instellingen in het paneel
 Alles staat onder *Beheer → Instellingen* (alleen voor beheerders); de integratie-opties in Home Assistant blijven ook werken:
-- kortingsdrempel, historiek, notify-service, tijdstip van de samenvatting;
+- kortingsdrempel, historiek, tijdstip van de samenvatting (meldingen zelf: zie Notificaties);
 - automatisch ophalen aan/uit en tijdstippen;
 - **collectiewaarde**: eerst winkelprijs, of eerst de geïmporteerde waarde (bv. BrickEconomy);
 - **API-sleutels** voor Brickset en Rebrickable, met een testknop. Sleutels worden nooit terug naar de browser gestuurd (alleen `••••1234`). Volgorde: Brickset → Rebrickable → openbare Brickset-pagina; wat de ene bron mist of niet levert, vult de volgende aan;
