@@ -285,6 +285,7 @@ def test_collection_analytics():
     assert list(a["by_theme"]) == ["Icons", "City"] and a["by_theme"]["City"]["count"] == 2
     assert a["by_year"]["2022"]["value"] == 80 and a["by_condition"] == {"Sealed": 1, "Onbekend": 2}
     assert a["top_gainers"][0]["pct"] == 50.0 and a["top_losers"][0]["set_number"] == "2"
+    assert all(m["pct"] >= 0 for m in a["top_gainers"])
     assert a["avg_paid_per_piece"] == 0.1
 
 

@@ -333,7 +333,7 @@ def collection_analytics(store: dict[str, Any], statuses: dict[str, dict[str, An
         "by_theme": rnd(dict(sorted(by_theme.items(), key=lambda x: -x[1]["value"]))),
         "by_year": rnd(dict(sorted(by_year.items()))),
         "by_condition": by_condition,
-        "top_gainers": movers[:5],
+        "top_gainers": [m for m in movers if m["pct"] >= 0][:5],
         "top_losers": [m for m in reversed(movers) if m["pct"] < 0][:5],
         "avg_paid_per_piece": round(paid_total / paid_pieces, 4) if paid_pieces else None,
     }
