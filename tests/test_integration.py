@@ -264,7 +264,7 @@ async def test_link_check_confirm_remove_and_block(hass: HomeAssistant, entry, h
     await hass.services.async_call(DOMAIN, "remove_offer", {"set_number": "21028", "retailer": "amazon_nl"}, blocking=True)
     assert "amazon_nl" not in c.store["offers"]["21028"] and "name" not in c.store["sets"]["21028"]
     with patch("custom_components.lego_tracker.client.Fetcher.discover",
-               AsyncMock(side_effect=lambda r, n: "https://www.amazon.nl/dp/B0LEDLEDLE" if r == "amazon_nl" else None)):
+               AsyncMock(side_effect=lambda r, n, force=False: "https://www.amazon.nl/dp/B0LEDLEDLE" if r == "amazon_nl" else None)):
         found = await hass.services.async_call(DOMAIN, "discover_offers", {"set_number": "21028"}, blocking=True, return_response=True)
     assert found["found"] == 0                                             # rejected page is not re-added
     # manual link is trusted immediately
@@ -383,7 +383,7 @@ async def test_lego_com_is_first_source(hass: HomeAssistant, entry, no_network):
                   image="https://www.lego.com/cdn/10311.png")
     meta = {"name": "Orchid", "rrp": 45.0, "image": "https://other/x.jpg", "year": 2022, "pieces": 608, "theme": "Icons"}
     with patch("custom_components.lego_tracker.client.Fetcher.discover",
-               AsyncMock(side_effect=lambda r, n: "https://www.lego.com/nl-be/product/orchidee-10311" if r == "lego_com" else None)), \
+               AsyncMock(side_effect=lambda r, n, force=False: "https://www.lego.com/nl-be/product/orchidee-10311" if r == "lego_com" else None)), \
          patch("custom_components.lego_tracker.client.Fetcher.fetch_offer", AsyncMock(return_value=(lego, None))), \
          patch("custom_components.lego_tracker.coordinator.lookup_metadata", AsyncMock(return_value=(meta, "Brickset"))), \
          patch("custom_components.lego_tracker.coordinator.asyncio.sleep", AsyncMock()):
@@ -558,7 +558,7 @@ async def test_logbook_records_everything(hass: HomeAssistant, entry, no_network
     await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10311", "rrp": 50}, blocking=True)
     await hass.services.async_call(DOMAIN, "set_offer", {"set_number": "10311", "retailer": "bol", "url": "https://www.bol.com/nl/nl/p/lego-10311/1/"}, blocking=True)
     await hass.services.async_call(DOMAIN, "set_offer", {"set_number": "10311", "retailer": "amazon_nl", "url": "B08XYZ1234"}, blocking=True)
-    no_network.side_effect = lambda rid, url: (Parsed(price=30.0), None) if rid == "bol" else (None, "blocked (HTTP 403)")
+    no_network.side_effect = lambda rid, url, force=False: (Parsed(price=30.0), None) if rid == "bol" else (None, "blocked (HTTP 403)")
     await hass.services.async_call(DOMAIN, "refresh", {}, blocking=True)
     await hass.async_block_till_done(wait_background_tasks=True)
     await hass.services.async_call(DOMAIN, "report_price", {"url": "https://www.amazon.nl/dp/B08XYZ1234", "price": 33.0}, blocking=True)
@@ -669,7 +669,7 @@ async def test_log_status_filter(hass: HomeAssistant, entry, no_network, hass_ws
     for rid in ("bol", "amazon_nl"):
         await hass.services.async_call(DOMAIN, "set_offer", {"set_number": "10281", "retailer": rid,
                                                              "url": "https://www.bol.com/nl/nl/p/x/1/" if rid == "bol" else "https://www.amazon.nl/dp/B0AAAAAAAA"}, blocking=True)
-    no_network.side_effect = lambda rid, url: (Parsed(price=30.0), None) if rid == "bol" else (None, "blocked (HTTP 403)")
+    no_network.side_effect = lambda rid, url, force=False: (Parsed(price=30.0), None) if rid == "bol" else (None, "blocked (HTTP 403)")
     await c.refresh_all()
     ws = await hass_ws_client(hass)
     await ws.send_json({"id": 1, "type": "lego_tracker/log", "kind": "check", "retailer": "amazon_nl", "status": "fail"})
@@ -701,3 +701,48 @@ async def test_language_setting_translates_outbound_texts(hass: HomeAssistant, e
     await ws.send_json({"id": 2, "type": "lego_tracker/settings/set", "fields": {"language": "xx"}})
     assert not (await ws.receive_json())["success"]
     i18n.set_language("en")
+
+
+async def test_fetch_one_shop_now_even_when_paused(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281", "rrp": 49.99}, blocking=True)
+    await hass.services.async_call(DOMAIN, "set_offer", {"set_number": "10281", "retailer": "bol",
+                                                         "url": "https://www.bol.com/nl/nl/p/x/1/"}, blocking=True)
+    c.fetcher._note_block("bol")                                   # shop paused
+    assert c.fetcher.cooldown_left("bol") > 0
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/offer/fetch", "set_number": "10281", "retailer": "bol"})
+    res = (await ws.receive_json())["result"]
+    assert res["result"] == {"ok": True, "found": False, "price": 30.0, "error": None}
+    assert res["set"]["offers"]["bol"]["price"] == 30.0 and "history" in res["set"]
+    check = [e for e in c.store["activity"] if e["kind"] == "check"][-1]
+    assert check["source"] == "panel" and check["results"]["bol"]["ok"]
+    # no link yet: the shop is searched first
+    with patch.object(c.fetcher, "discover", AsyncMock(return_value="https://www.amazon.nl/dp/B0FOUND001")) as disc:
+        await ws.send_json({"id": 2, "type": "lego_tracker/offer/fetch", "set_number": "10281", "retailer": "amazon_nl"})
+        res = (await ws.receive_json())["result"]["result"]
+    assert res["found"] and res["ok"] and disc.await_args.kwargs.get("force") is True
+    # nothing found: a readable reason, no offer created
+    await ws.send_json({"id": 3, "type": "lego_tracker/offer/fetch", "set_number": "10281", "retailer": "kruidvat_be"})
+    res = (await ws.receive_json())["result"]["result"]
+    assert res == {"ok": False, "found": False, "error": "no matching product found"} and "kruidvat_be" not in c.store["offers"]["10281"]
+    await ws.send_json({"id": 4, "type": "lego_tracker/offer/fetch", "set_number": "99999", "retailer": "bol"})
+    assert not (await ws.receive_json())["success"]
+
+
+async def test_lego_com_image_replaces_other_images(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
+    s = c.store["sets"]["10281"]
+    s["image"], s["image_source"] = "https://shop.example/img.jpg", "shop"
+    assert c.needs_enrich("10281")
+    lego = Parsed(price=49.99, title="Bonsai Tree 10281 | LEGO", image="https://www.lego.com/cdn/10281.png", list_price=49.99)
+    no_network.side_effect = lambda rid, url, force=False: (lego, None)
+    with patch.object(c.fetcher, "discover", AsyncMock(return_value="https://www.lego.com/nl-be/product/bonsai-tree-10281")):
+        ws = await hass_ws_client(hass)
+        await ws.send_json({"id": 1, "type": "lego_tracker/set/enrich", "set_number": "10281"})
+        res = (await ws.receive_json())["result"]
+    assert res["set"]["image"] == "https://www.lego.com/cdn/10281.png" and s["image_source"] == "LEGO.com" and s["rrp"] == 49.99
+    c.update_set("10281", {"image": "https://my.example/own.png"})
+    await c.lego_lookup("10281", force=True)
+    assert s["image"] == "https://my.example/own.png"                  # a manual image always wins

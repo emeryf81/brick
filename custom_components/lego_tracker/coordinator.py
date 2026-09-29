@@ -26,7 +26,7 @@ from .const import (
 )
 from .models import (
     add_activity, add_event, clean_history, collection_analytics, link_check, collection_rows, collection_series, is_suspicious_price, collection_summary, COLLECTION_COLUMNS, rows_to_csv, validate_backup, wishlist_summary, compute_set_status, new_store, normalize_set_number,
-    record_price, today_iso,
+    offer_price, record_price, today_iso,
 )
 from .i18n import DEFAULT_LANGUAGE, LANGUAGES, LocalizedError, T, resolve, set_language
 from .notifications import Notifier, default_rules
@@ -338,7 +338,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return self.start_job("refresh", T("Refreshing shop prices"), nums,
                               lambda n: self.refresh_set(n, live), note)
 
-    async def refresh_set(self, num: str, retailers: list[str] | None = None, source: str = "server") -> dict[str, int]:
+    async def refresh_set(self, num: str, retailers: list[str] | None = None, source: str = "server",
+                          force: bool = False) -> dict[str, int]:
         """Fetch all shop pages of one set, shops in parallel (each shop stays sequential and polite).
 
         Writes one 'check' entry to the logbook with a green/red result per shop, plus separate
@@ -348,7 +349,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         before = self.compute()["statuses"].get(num, {})
         offers = [(rid, o) for rid, o in self.store["offers"].get(num, {}).items()
                   if rid in live and o.get("url") and o.get("link_status") != "rejected"]
-        results = await asyncio.gather(*(self.fetcher.fetch_offer(rid, o["url"]) for rid, o in offers))
+        results = await asyncio.gather(*(self.fetcher.fetch_offer(rid, o["url"], force=force) for rid, o in offers))
         counts = {"updated": 0, "errors": 0, "skipped": 0}
         shop_results: dict[str, dict[str, Any]] = {}
         for (rid, offer), (parsed, error) in zip(offers, results):
@@ -391,7 +392,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._apply_lego(num, parsed)
             elif parsed and status in ("ok", "confirmed"):
                 if parsed.image and not s.get("image"):
-                    s["image"] = parsed.image
+                    s["image"], s["image_source"] = parsed.image, "shop"
                 if parsed.title and self._name_replaceable(s):
                     s["name"], s["name_source"] = clean_title(parsed.title, num), "shop"
         s["checked"] = time.time()
@@ -404,6 +405,34 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         after = self.compute()["statuses"].get(num, {})
         self._fire_events(num, before, after)
         return counts
+
+    async def fetch_shop(self, set_number: str, retailer: str) -> dict[str, Any]:
+        """Panel button per shop: fetch this shop for this set now, also when the shop is paused.
+        Without a link the shop is searched first. LEGO.com also fills in image, RRP and name."""
+        num = normalize_set_number(set_number)
+        if num not in self.store["sets"]:
+            raise LocalizedError("Set {number} is not tracked.", number=num)
+        if retailer not in RETAILERS:
+            raise LocalizedError("Unknown shop {shop}.", shop=retailer)
+        offers = self.store["offers"].setdefault(num, {})
+        found = False
+        if not (offers.get(retailer) or {}).get("url"):
+            url = await self.fetcher.discover(retailer, num, force=True)
+            rejected = set(self.store.setdefault("rejected", {}).get(num, []))
+            if not url or url_key(retailer, url) in rejected:
+                reason = T("found a link you rejected earlier; not linked again") if url else T("no matching product found")
+                self.log("warning", "discover", reason, set_number=num, retailer=retailer, url=url, source="panel")
+                self.push_update()
+                return {"ok": False, "found": False, "error": reason}
+            offers[retailer] = {"url": url, "history": [], "found": time.time()}
+            found = True
+            self.log("ok", "discover", T("link found"), set_number=num, retailer=retailer, url=url, source="panel")
+        await self.refresh_set(num, [retailer], source="panel", force=True)
+        o = offers[retailer]
+        self._snapshot()
+        self._save()
+        self.push_update()
+        return {"ok": not o.get("error"), "found": found, "price": offer_price(o), "error": o.get("error")}
 
     async def refresh_all(self) -> None:
         """Synchronous full round (used by tests); the UI uses start_refresh()."""
@@ -472,7 +501,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def needs_enrich(self, num: str) -> bool:
         s = self.store["sets"][num]
-        lego_due = s.get("rrp_source") != "LEGO.com" and time.time() - s.get("lego_checked", 0) > 7 * 86400
+        lego_missing = s.get("rrp_source") not in ("LEGO.com", "user") or s.get("image_source") not in ("LEGO.com", "user")
+        lego_due = lego_missing and time.time() - s.get("lego_checked", 0) > 7 * 86400
         return lego_due or self._name_replaceable(s) or not all(s.get(k) for k in ("theme", "year", "pieces", "image"))
 
     def _apply_lego(self, num: str, parsed: Any) -> bool:
@@ -493,22 +523,22 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         s["lego_checked"] = time.time()
         return before != (s.get("rrp"), s.get("image"), s.get("name"), s.get("retiring"))
 
-    async def lego_lookup(self, num: str) -> bool:
+    async def lego_lookup(self, num: str, force: bool = False) -> bool:
         """Find + read the set's LEGO.com page (also kept as a 'LEGO.com' shop link)."""
-        if self.fetcher.cooldown_left("lego_com") > 0:
+        if not force and self.fetcher.cooldown_left("lego_com") > 0:
             return False
         s = self.store["sets"][num]
         offers = self.store["offers"].setdefault(num, {})
         offer = offers.get("lego_com")
         url = offer.get("url") if offer else None
         if not url:
-            url = await self.fetcher.discover("lego_com", num)
+            url = await self.fetcher.discover("lego_com", num, force=force)
             rejected = set(self.store.setdefault("rejected", {}).get(num, []))
             if not url or url_key("lego_com", url) in rejected:
                 s["lego_checked"] = time.time()
                 return False
             offer = offers["lego_com"] = {"url": url, "history": [], "found": time.time()}
-        parsed, error = await self.fetcher.fetch_offer("lego_com", url)
+        parsed, error = await self.fetcher.fetch_offer("lego_com", url, force=force)
         if error and error.startswith("paused"):
             return False
         offer["link_status"], offer["link_reason"] = link_check(offer, s, num)
@@ -524,12 +554,12 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def start_enrich(self, all_sets: bool = False) -> dict[str, Any]:
         nums = [n for n in self.store["sets"] if all_sets or self.needs_enrich(n)]
         has_key = bool(self.opt(self.entry, CONF_BRICKSET_KEY, "") or self.opt(self.entry, CONF_REBRICKABLE_KEY, ""))
-        return self.start_job("enrich", "Setgegevens aanvullen", nums, self.enrich_set,
+        return self.start_job("enrich", T("Filling in set data"), nums, self.enrich_set,
                               None if has_key else T("no API key set: public Brickset pages are used"))
 
-    async def enrich_set(self, num: str) -> dict[str, int]:
+    async def enrich_set(self, num: str, force: bool = False) -> dict[str, int]:
         s = self.store["sets"][num]
-        lego_changed = await self.lego_lookup(num)       # 1st source: RRP, image, name
+        lego_changed = await self.lego_lookup(num, force=force)       # 1st source: RRP, image, name
         meta, source = await lookup_metadata(async_get_clientsession(self.hass),
                                              self.opt(self.entry, CONF_BRICKSET_KEY, ""),
                                              self.opt(self.entry, CONF_REBRICKABLE_KEY, ""), num)
@@ -543,6 +573,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for key in ("theme", "subtheme", "year", "pieces", "image", "rrp", "exit_date"):
             if meta.get(key) and not s.get(key):
                 s[key] = meta[key]
+                if key in self.SOURCE_KEYS:
+                    s[self.SOURCE_KEYS[key]] = source or "meta"
                 changed = True
         if changed:
             self.log("ok", "meta", T("set data filled in from {source}", source=source or "LEGO.com"), set_number=num,

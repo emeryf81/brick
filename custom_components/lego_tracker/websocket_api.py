@@ -14,6 +14,7 @@ from homeassistant.core import HomeAssistant, callback
 
 from .const import DOMAIN, RETAILERS
 from .csv_import import analyze_csv
+from .i18n import tr
 from .models import combined_history, normalize_set_number, offer_price
 
 
@@ -72,6 +73,8 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_ignore_error)
     websocket_api.async_register_command(hass, ws_log)
     websocket_api.async_register_command(hass, ws_offer_update)
+    websocket_api.async_register_command(hass, ws_offer_fetch)
+    websocket_api.async_register_command(hass, ws_set_enrich)
     websocket_api.async_register_command(hass, ws_notify_set)
     websocket_api.async_register_command(hass, ws_notify_test)
     hass.http.register_view(UserscriptView())
@@ -348,6 +351,38 @@ def ws_offer_update(hass, connection, msg):
         connection.send_error(msg["id"], "invalid_format", str(err))
         return
     connection.send_result(msg["id"], _card(coord, normalize_set_number(msg["set_number"]), with_history=True))
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({
+    vol.Required("type"): f"{DOMAIN}/offer/fetch", vol.Required("set_number"): str, vol.Required("retailer"): str,
+})
+@websocket_api.async_response
+async def ws_offer_fetch(hass, connection, msg):
+    """Fetch one shop for one set now (searching a link first if there is none). Works for paused shops."""
+    coord = _coord(hass)
+    try:
+        result = await coord.fetch_shop(msg["set_number"], msg["retailer"])
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
+    connection.send_result(msg["id"], {"result": result, "set": _card(coord, normalize_set_number(msg["set_number"]), with_history=True)})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/set/enrich", vol.Required("set_number"): str})
+@websocket_api.async_response
+async def ws_set_enrich(hass, connection, msg):
+    """Fill in the set data now: LEGO.com first (image, RRP, name), then Brickset / Rebrickable."""
+    coord = _coord(hass)
+    num = normalize_set_number(msg["set_number"])
+    if num not in coord.store["sets"]:
+        connection.send_error(msg["id"], "not_found", tr("Set {number} is not tracked.", number=num))
+        return
+    res = await coord.enrich_set(num, force=True)
+    coord._save()
+    coord.push_update()
+    connection.send_result(msg["id"], {"result": res, "set": _card(coord, num, with_history=True)})
 
 
 class UserscriptView(HomeAssistantView):

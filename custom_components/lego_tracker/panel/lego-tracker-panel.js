@@ -170,7 +170,13 @@ a.btn{text-decoration:none}.btn[disabled]{opacity:.5;pointer-events:none}.btn.sm
 .tbl.log tr.lrow td:first-child{border-left:3px solid transparent}.tbl.log tr.lv-ok td:first-child{border-left-color:var(--lt-green)}.tbl.log tr.lv-error td:first-child{border-left-color:var(--lt-red)}.tbl.log tr.lv-warning td:first-child{border-left-color:var(--lt-yellow)}
 .tag{white-space:nowrap}.chip.okc.on{background:var(--lt-green)}
 @media(max-width:640px){.tbl.log tr:not(:has(td[colspan])) > :nth-child(3),.tbl.log tr:not(:has(td[colspan])) > :nth-child(5){display:none}.tbl.log td,.tbl.log th{padding:6px 4px}.tbl.log td:first-child{font-size:11px;white-space:normal!important;min-width:54px}.otbl .ou{min-width:150px}}.chip.failc.on{background:var(--lt-red)}
-.mbadge{font-size:10px;font-weight:700;padding:1px 6px;border-radius:6px;background:var(--lt-purple);color:#fff;vertical-align:1px}.abadge{font-size:10px;font-weight:600;padding:1px 6px;border-radius:6px;background:var(--lt-soft);color:var(--lt-muted);vertical-align:1px}
+.item{background:var(--lt-soft);border-radius:12px;padding:12px;margin:4px 0 8px;animation:rise .25s both}.itemhead{display:flex;gap:12px;align-items:flex-start;margin-bottom:8px}
+.itemhead img,.itemhead .ph{width:72px;height:72px;object-fit:contain;background:#fff;border-radius:10px;flex:none;display:flex;align-items:center;justify-content:center;font-size:32px}
+.item .tbl{background:var(--lt-card);border-radius:10px}.oact{white-space:nowrap}.oact .btn{margin:0 2px 2px 0}tr.orow.focus td{background:color-mix(in srgb,var(--lt-accent) 8%,transparent)}
+tr.efix > td{padding:0 4px 8px}
+@media(max-width:640px){.item{max-width:calc(100vw - 44px);position:sticky;left:0;padding:8px}.itemhead img,.itemhead .ph{width:48px;height:48px;font-size:22px}
+.otbl,.otbl tbody{display:block}.otbl tr:first-child{display:none}.otbl tr.orow{display:grid;grid-template-columns:1fr auto;gap:2px 8px;padding:8px 4px;border-bottom:1px solid var(--lt-line)}
+.otbl tr.orow td{border:0;padding:2px}.otbl tr.orow td:nth-child(1),.otbl tr.orow td:nth-child(2){grid-column:1/-1}.otbl td.num{text-align:left}.otbl .ou{min-width:0}.otbl .oact{align-self:end;text-align:right}}.form label .mbadge{align-self:flex-start;margin:2px 0}.mbadge{font-size:10px;font-weight:700;padding:1px 6px;border-radius:6px;background:var(--lt-purple);color:#fff;vertical-align:1px}.abadge{font-size:10px;font-weight:600;padding:1px 6px;border-radius:6px;background:var(--lt-soft);color:var(--lt-muted);vertical-align:1px}
 .otbl input{padding:6px 8px;font-size:13px}.otbl .ou{min-width:220px;width:100%}.otbl .op{width:96px}.orow.dirty td{background:color-mix(in srgb,var(--lt-yellow) 10%,transparent)}.fixbox{background:var(--lt-soft);border-radius:12px;padding:12px;margin:2px 0 8px;animation:rise .25s both}
 .rule{border:1px solid var(--lt-line);border-radius:14px;padding:12px 14px;margin-bottom:10px;display:flex;gap:12px;align-items:flex-start;transition:border-color .2s}.rule:hover{border-color:var(--lt-accent)}
 .rule.off{opacity:.55}.rule .sum{font-size:13px;color:var(--lt-muted);margin-top:4px;line-height:1.6}.tag{display:inline-block;font-size:12px;padding:2px 8px;border-radius:99px;background:var(--lt-soft);margin:2px 4px 2px 0}
@@ -755,7 +761,7 @@ class LegoTrackerPanel extends HTMLElement {
         <td>${r.rid ? esc(retailers[r.rid] || r.rid) : "–"}</td><td><span class="lk ${r.type === "suspect" || r.type === "price" ? "suspect" : "unknown"}">${esc(r.label)}</span>${r.o && r.o.ignored ? ` <span class="muted" style="font-size:11px">(${t("ignored")})</span>` : ""}<div class="err" style="font-size:12px;margin-top:2px">${esc(r.msg || "")}</div></td>
         <td class="num">${r.o && r.o.price != null ? EUR(r.o.price) : "–"}</td></tr>`;
       if (!open) return head;
-      return head + `<tr class="efix"><td></td><td colspan="4">${this.fixBoxHtml(r.s, r.rid, r.o)}</td></tr>`;
+      return head + `<tr class="efix"><td colspan="5">${this.itemEditorHtml(r.s, r.rid)}</td></tr>`;
     }).join("");
     const chip = (k, l, n) => `<span class="chip ${E.type === k ? "on" : ""}" data-etype="${k}">${esc(l)}${n != null ? ` <span class="muted">${n}</span>` : ""}</span>`;
     return `<div class="panel"><h3>⚠️ ${t("Open errors")} <span class="muted" style="font-weight:400">${all.length}</span><span class="hsp"></span><label class="chk" style="font-size:13px;font-weight:400;display:flex;gap:6px;align-items:center"><input type="checkbox" id="e_ign" ${E.showIgnored ? "checked" : ""}> ${t("show ignored")}</label></h3>
@@ -844,7 +850,7 @@ class LegoTrackerPanel extends HTMLElement {
       const failed = e.results ? Object.entries(e.results).find(([, r]) => r.ok === false) : null;
       const rid = e.retailer || (failed ? failed[0] : null);
       const fixable = s && rid && (e.level === "error" || e.level === "warning") && ["fetch", "link", "userscript", "discover", "price", "check"].includes(e.kind);
-      const fix = fixable ? `<h4 style="margin:10px 0 6px">${t("Fix it")}</h4>${this.fixBoxHtml(s, rid, (s.offers || {})[rid])}` : s ? `<button class="btn ghost sm" data-set="${esc(s.set_number)}" style="margin-top:8px">${t("Open set")}</button>` : "";
+      const fix = s ? `<h4 style="margin:10px 0 6px">${fixable ? t("Fix it") : t("Set and shops")}</h4>${this.itemEditorHtml(s, rid)}` : "";
       return head + `<tr><td colspan="6"><div class="fixbox" style="background:var(--lt-card);border:1px solid var(--lt-line)">${det}${fix}</div></td></tr>`;
     }).join("");
     return `<div class="panel tscroll"><div class="muted" style="font-size:12px;margin-bottom:6px">${t(d.total === 1 ? "{n} line" : "{n} lines", { n: d.total })}</div><table class="tbl log"><tr><th>${t("Time")}</th><th></th><th>${t("Kind")}</th><th>Set</th><th>${t("Shop")}</th><th>${t("Message")}</th></tr>${rows}</table>
@@ -853,7 +859,7 @@ class LegoTrackerPanel extends HTMLElement {
   bindLogList(el) {
     const L = this.state.logv;
     el.querySelectorAll("tr.lrow").forEach((tr) => tr.addEventListener("click", (e) => { if (e.target.closest("[data-set],a")) return; L.open = L.open === tr.dataset.lid ? null : tr.dataset.lid; this.renderLogList(); }));
-    el.querySelectorAll(".fixbox[data-fnum]").forEach((b) => this.bindFixBox(b, () => this.loadLog()));
+    el.querySelectorAll(".item[data-inum]").forEach((b) => this.bindItemEditor(b, () => this.loadLog()));
     this.bindCards(el);
     const more = el.querySelector("#lg_more"); if (more) more.onclick = () => this.busy(more, "…", () => this.loadLog(true));
   }
@@ -873,38 +879,6 @@ class LegoTrackerPanel extends HTMLElement {
     Object.assign(this.state.logv, { level: "", kind: "", retailer: "", source: "", status: "", set: num, q: "", data: null, open: null });
     this.state.section = "log"; this.state.sub.log = "all"; this.persist(); this.closeDialog(); this.render(true);
   }
-  fixBoxHtml(set, rid, o) {
-    const retailers = this.state.data.retailers;
-    const google = `https://www.google.com/search?q=${encodeURIComponent(`LEGO ${set.set_number} ${set.name || ""}`)}${rid ? `+site:${{ lego_com: "lego.com", amazon_nl: "amazon.nl", amazon_de: "amazon.de", amazon_be: "amazon.com.be", bol: "bol.com", kruidvat_be: "kruidvat.be", dreamland_be: "dreamland.be" }[rid] || ""}` : ""}`;
-    const shopOpts = Object.entries(retailers).map(([k, v]) => `<option value="${k}" ${k === (rid || "lego_com") ? "selected" : ""}>${esc(v)}</option>`).join("");
-    const mp = o && o.manual_price != null ? o.manual_price : "";
-    return `<div class="fixbox" data-fnum="${esc(set.set_number)}" data-frid="${esc(rid || "")}">
-        <div class="form"><label>${t("Shop")}<select class="f_shop">${shopOpts}</select></label>
-        <label style="grid-column:span 2">${t("Correct product page (URL or ASIN)")}<input class="f_url" value="${esc(o && o.url || "")}" placeholder="https://…"></label>
-        <label>${t("Price now (€, optional)")}<input class="f_price" type="number" min="0" step="0.01" value="${esc(mp)}" placeholder="${set.rrp ? t("RRP {price}", { price: set.rrp }) : t("e.g. {example}", { example: "39.99" })}"></label></div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><button class="btn sm f_go">✓ ${t("Fix")}</button>
-        ${o && o.url ? `<a class="btn ghost sm" href="${esc(o.url)}" target="_blank" rel="noopener noreferrer">${t("Current link")} ↗</a>` : ""}
-        <a class="btn ghost sm" href="${google}" target="_blank" rel="noopener noreferrer">🔎 ${t("Search the web")} ↗</a>
-        ${rid && o ? `<button class="btn ghost sm f_retry">↻ ${t("Try again")}</button><button class="btn ghost sm f_ign">${o.ignored ? t("Stop ignoring") : t("Ignore")}</button><button class="btn danger sm f_rm">🗑 ${t("Remove link")}</button>` : ""}
-        <button class="btn ghost sm" data-set="${esc(set.set_number)}">${t("Open set")}</button></div>
-        <p class="muted" style="font-size:12px;margin:8px 0 0">${t("The link and price are saved as manual values: they always win over automatic ones and are never removed. A link to another product starts with an empty price history.")}</p></div>`;
-  }
-  bindFixBox(box, after) {
-    const num = box.dataset.fnum, rid0 = box.dataset.frid, q = (c) => box.querySelector("." + c);
-    const done = async (msg) => { await this.load(); if (after) await after(); this.toast(msg, "ok"); };
-    q("f_go").onclick = () => {
-      const retailer = q("f_shop").value, url = q("f_url").value.trim(), price = q("f_price").value ? +q("f_price").value : null;
-      if (!url && price == null) return this.toast(t("Enter a link and/or a price"), "err");
-      if (price != null && !(price > 0 && price <= 10000)) return this.toast(t("Invalid price"), "err");
-      const data = { set_number: num, retailer };
-      if (url) data.url = url;           // same product page keeps its history, another page starts fresh
-      if (price != null) data.price = price;
-      this.busy(q("f_go"), t("Working…"), async () => { await this.svc("fix_offer", data); this.state.errs.open = null; this.state.logv.open = null; await done(t("Set {number} fixed", { number: num })); });
-    };
-    if (q("f_retry")) q("f_retry").onclick = () => this.busy(q("f_retry"), "…", async () => { const r = (await this.svc("refresh", { set_number: num, force: true }, true)).response; await done(r.updated ? t("Price fetched") : t("Still no price")); });
-    if (q("f_ign")) q("f_ign").onclick = () => this.busy(q("f_ign"), "…", async () => { const o = (this.sets.find((x) => x.set_number === num).offers || {})[rid0] || {}; await this._hass.callWS({ type: "lego_tracker/ignore_error", set_number: num, retailer: rid0, ignore: !o.ignored }); await done(o.ignored ? t("The error is shown again") : t("Error ignored until something changes")); });
-    if (q("f_rm")) q("f_rm").onclick = () => { if (!confirm(t("Remove this link? It will not be linked automatically again."))) return; this.busy(q("f_rm"), "…", async () => { await this.svc("remove_offer", { set_number: num, retailer: rid0 }); await done(t("Link removed")); }); };
-  }
   bindErrors(root, $) {
     const E = this.state.errs;
     root.querySelectorAll("[data-etype]").forEach((c) => c.addEventListener("click", () => { E.type = c.dataset.etype; E.open = null; this.renderContent(); }));
@@ -912,7 +886,7 @@ class LegoTrackerPanel extends HTMLElement {
     $("e_shop").addEventListener("change", (e) => { E.shop = e.target.value; this.renderContent(); });
     $("e_ign").addEventListener("change", (e) => { E.showIgnored = e.target.checked; this.renderContent(); });
     root.querySelectorAll("tr.erow").forEach((tr) => tr.addEventListener("click", (e) => { if (e.target.closest("[data-set],a")) return; E.open = E.open === tr.dataset.ekey ? null : tr.dataset.ekey; this.renderContent(); const u = this.shadowRoot.querySelector(".f_url"); if (u) u.focus(); }));
-    const box = root.querySelector(".fixbox"); if (box) this.bindFixBox(box);
+    root.querySelectorAll(".item[data-inum]").forEach((box) => this.bindItemEditor(box, () => this.renderContent()));
   }
   // ---------------------------------------------------------------- notifications tab
   async loadNotify() {
@@ -1088,13 +1062,12 @@ class LegoTrackerPanel extends HTMLElement {
     const count = (st) => this.sets.filter((s) => L.scope !== "owned" || s.owned).reduce((a, s) => a + Object.values(s.offers || {}).filter((o) => (o.link_status || "unknown") === st || (st === "ok" && o.link_status === "confirmed")).length, 0);
     const chip = (k, l) => `<span class="chip ${L.status === k ? "on" : ""}" data-lstatus="${k}">${l}${k !== "all" ? ` <span class="muted">${count(k)}</span>` : ""}</span>`;
     const trs = rows.slice(0, 400).map(({ s, rid, o, st }) => {
-      const key = `${s.set_number}|${rid}`, editing = L.edit === key;
-      return `<tr data-key="${esc(key)}"><td style="min-width:150px"><a class="setlink" data-set="${esc(s.set_number)}"><b>${esc(s.set_number)}</b> ${esc(s.name || "")}</a><div class="muted" style="font-size:12px">${esc(s.theme || "")}${s.rrp ? ` · ${t("RRP {price}", { price: EUR(s.rrp) })}` : ""}</div></td>
+      const key = `${s.set_number}|${rid}`, open = L.edit === key;
+      return `<tr class="click lrow2${open ? " on" : ""}" data-key="${esc(key)}"><td style="min-width:150px"><span class="muted">${open ? "▾" : "▸"}</span> <a class="setlink" data-set="${esc(s.set_number)}"><b>${esc(s.set_number)}</b> ${esc(s.name || "")}</a><div class="muted" style="font-size:12px">${esc(s.theme || "")}${s.rrp ? ` · ${t("RRP {price}", { price: EUR(s.rrp) })}` : ""}</div></td>
         <td>${esc(o.label)}</td><td><span class="lk ${st}">${{ ok: "✓ " + t("correct"), confirmed: "✓ " + t("approved"), suspect: "⚠ " + t("suspicious"), unknown: "? " + t("unknown") }[st]}</span><div class="${st === "suspect" ? "err" : "muted"}" style="font-size:12px;margin-top:3px">${esc(tx(o.link_reason || ""))}</div></td>
         <td style="max-width:280px;font-size:13px">${o.title ? esc(o.title.slice(0, 120)) : `<span class="muted">${o.url ? esc(decodeURIComponent(o.url.replace(/^https?:\/\/(www\.)?/, "")).slice(0, 70)) : ""}</span>`}</td>
         <td class="num">${o.price != null ? EUR(o.price) : o.low != null ? `<span class="muted">${EUR(o.low)}</span>` : "–"}</td>
-        <td style="white-space:nowrap">${editing ? `<input class="lnew" placeholder="${t("new URL or ASIN")}" style="width:220px;padding:6px 8px"> <button class="btn sm lsave">${t("Save")}</button> <button class="btn ghost sm lcancel">✕</button>`
-          : `${o.url ? `<a class="btn ghost sm" href="${esc(o.url)}" target="_blank" rel="noopener noreferrer">↗</a> ` : ""}${st !== "confirmed" ? `<button class="btn ghost sm lok" title="${t("Correct")}">✓</button> ` : ""}<button class="btn ghost sm ledit" title="${t("Other link")}">✎</button> <button class="btn ghost sm lrm" title="${t("Remove")}">🗑</button>`}</td></tr>`;
+        <td style="white-space:nowrap">${o.url ? `<a class="btn ghost sm" href="${esc(o.url)}" target="_blank" rel="noopener noreferrer">↗</a> ` : ""}${st !== "confirmed" ? `<button class="btn ghost sm lok" title="${t("Correct")}">✓</button> ` : ""}<button class="btn ghost sm ledit" title="${t("Edit name, links and prices; fetch per shop")}">✎</button> <button class="btn ghost sm lrm" title="${t("Remove")}">🗑</button></td></tr>${open ? `<tr class="efix"><td colspan="6">${this.itemEditorHtml(s, rid)}</td></tr>` : ""}`;
     }).join("");
     return `<div class="panel"><h3>🔗 ${t("Link check")}<span class="hsp"></span><button class="btn ghost sm" id="lverify">↺ ${t("Judge again")}</button></h3>
       <p>${t("Checks whether every shop link points to the right set: the set number must be in the product title, and it must not be an accessory (lighting, display case…) or a knock-off brand. A far too low price is suspicious too. Suspicious links don't count for prices and collection value until you approve them. For Amazon the title is only known after a price check.")}</p>
@@ -1280,11 +1253,11 @@ class LegoTrackerPanel extends HTMLElement {
       const [num, rid] = tr.dataset.key.split("|"), b = (c) => tr.querySelector("." + c);
       if (b("lok")) b("lok").onclick = () => this.busy(b("lok"), "", async () => { await this.svc("confirm_offer", { set_number: num, retailer: rid }); await this.load(); this.toast(t("Link of {number} approved", { number: num }), "ok"); });
       if (b("lrm")) b("lrm").onclick = () => { if (!confirm(t("Remove the link of set {number}? It will not be linked automatically again.", { number: num }))) return; this.busy(b("lrm"), "", async () => { await this.svc("remove_offer", { set_number: num, retailer: rid }); await this.load(); this.toast(t("Link removed"), "ok"); }); };
-      if (b("ledit")) b("ledit").onclick = () => { L.edit = tr.dataset.key; this.renderContent(); const i = this.shadowRoot.querySelector(".lnew"); if (i) i.focus(); };
-      if (b("lcancel")) b("lcancel").onclick = () => { L.edit = null; this.renderContent(); };
-      if (b("lsave")) b("lsave").onclick = () => { const url = b("lnew").value.trim(); if (!url) return this.toast(t("Enter a URL or ASIN"), "err"); this.busy(b("lsave"), "", async () => { await this._hass.callWS({ type: "lego_tracker/offer/update", set_number: num, retailer: rid, url }); L.edit = null; await this.load(); this.toast(t("Link replaced and approved"), "ok"); }); };
-      const inp = b("lnew"); if (inp) inp.addEventListener("keydown", (e) => { if (e.key === "Enter") b("lsave").click(); if (e.key === "Escape") b("lcancel").click(); });
+      const toggle = () => { L.edit = L.edit === tr.dataset.key ? null : tr.dataset.key; this.renderContent(); };
+      if (b("ledit")) b("ledit").onclick = (e) => { e.stopPropagation(); toggle(); };
+      tr.addEventListener("click", (e) => { if (e.target.closest("button,a,[data-set],input")) return; toggle(); });
     });
+    if ($("lverify")) root.querySelectorAll(".efix .item[data-inum]").forEach((box) => this.bindItemEditor(box, () => this.renderContent()));
     // import wizard
     const imp = s.imp;
     const readFile = async (f) => { if (!f) return; if (f.size > 2_000_000) return this.toast(t("File too large (max {mb} MB).", { mb: 2 }), "err"); imp.text = await f.text(); imp.name = f.name; await analyze(); };
@@ -1404,6 +1377,102 @@ class LegoTrackerPanel extends HTMLElement {
     });
   }
 
+  // ---------------------------------------------------------------- shop table (dialog + item editor)
+  /** Every shop with a link plus the enabled shops without one: link, price, and per-shop actions. */
+  shopTableHtml(s, focus = null) {
+    const stats = this.state.data.retailer_stats || {}, retailers = this.state.data.retailers;
+    const rids = Object.keys(retailers).filter((rid) => (s.offers || {})[rid] || (stats[rid] && stats[rid].enabled));
+    if (!rids.length) return `<div class="empty small">${t("No shops enabled.")} <a data-goto="manage/settings" style="cursor:pointer">${t("Settings")}</a></div>`;
+    const cheapest = Math.min(...Object.values(s.offers || {}).map((o) => o.price ?? Infinity));
+    const lk = (o) => { const st = o.link_status || "unknown"; return `<span class="lk ${st}" title="${esc(tx(o.link_reason || ""))}">${{ ok: "✓ " + t("correct"), confirmed: "✓ " + t("approved"), suspect: "⚠ " + t("suspicious"), unknown: "? " + t("not checked") }[st] || st}</span>`; };
+    const man = `<span class="mbadge" title="${t("Entered by hand: always wins over automatic values")}">✎ ${t("manual")}</span>`, auto = `<span class="abadge">${t("auto")}</span>`;
+    const paused = stats;
+    const fetchBtn = (rid, has) => `<button class="btn ghost sm fetchb" data-rid="${rid}" title="${esc(has ? t("Fetch this shop now (also when it is paused)") : t("Search this shop for the set and fetch the price now"))}">${has ? "↻" : "🔎"} ${esc(has ? t("Fetch") : t("Find"))}</button>`;
+    const rows = rids.map((rid) => {
+      const o = (s.offers || {})[rid], p = (paused[rid] || {}).paused_hours > 0 ? ` <span class="lk suspect" title="${t("paused after a block: {shops}", { shops: retailers[rid] })}">⏸</span>` : "";
+      if (!o) return `<tr class="orow${focus === rid ? " focus" : ""}" data-rid="${rid}"><td><b>${esc(retailers[rid])}</b>${p}<div class="muted" style="font-size:12px">${t("no link yet")}</div></td>
+        <td><input class="ou" data-orig="" placeholder="${t("paste the product URL or ASIN")}"></td><td class="num"><input class="op" type="number" min="0" step="0.01" data-orig="" placeholder="€" disabled title="${t("Add a link first")}"></td><td class="oact">${fetchBtn(rid, false)}</td></tr>`;
+      const autoP = o.manual_price != null ? o.auto_price : o.price;
+      return `<tr class="orow${focus === rid ? " focus" : ""}" data-rid="${rid}"><td><b>${esc(o.label)}</b>${p} ${lk(o)}${o.title ? `<div class="muted" style="font-size:12px;max-width:240px">${esc(o.title.slice(0, 90))}</div>` : ""}${o.link_status === "suspect" ? `<div class="err">${esc(tx(o.link_reason || ""))}</div>` : ""}${o.error ? `<div class="err">${esc(tx(o.error))}${o.ignored ? ` <span class="muted">(${t("ignored")})</span>` : ""}</div>` : ""}</td>
+        <td><div style="display:flex;gap:6px;align-items:center">${o.manual_url ? man : auto}${o.url ? `<a href="${esc(o.url)}" target="_blank" rel="noopener noreferrer" data-stop style="font-size:12px;white-space:nowrap">${t("open")} ↗</a>` : ""}</div><input class="ou" value="${esc(o.url || "")}" data-orig="${esc(o.url || "")}" placeholder="${t("empty = search automatically")}" style="margin-top:4px"></td>
+        <td class="num"><div>${o.manual_price != null ? man : auto} ${o.price != null ? `<b class="${o.price === cheapest ? "ok" : ""}">${EUR(o.price)}</b>` : "–"}</div>
+          <input class="op" type="number" min="0" step="0.01" value="${o.manual_price ?? ""}" data-orig="${o.manual_price ?? ""}" placeholder="${autoP != null ? EUR(autoP) : t("auto")}" title="${t("empty = automatic price")}" style="margin-top:4px">
+          <div class="muted" style="font-size:11px;margin-top:2px">${o.manual_price != null ? t("shop: {price}", { price: EUR(autoP) }) + " · " : ""}${t("low {price}", { price: EUR(o.low) })} · ${ago(o.checked)}</div></td>
+        <td class="oact">${fetchBtn(rid, true)}${o.link_status !== "confirmed" ? `<button class="btn ghost sm okb" data-rid="${rid}" title="${t("This link is the right set")}">✓</button>` : ""}${o.error ? `<button class="btn ghost sm ignb" data-rid="${rid}" title="${esc(o.ignored ? t("Stop ignoring") : t("Ignore"))}">${o.ignored ? "👁" : "🙈"}</button>` : ""}<button class="btn ghost sm rmb" data-rid="${rid}" title="${t("Remove wrong link and never link it again")}">🗑</button></td></tr>`;
+    }).join("");
+    return `<div class="tscroll"><table class="tbl otbl"><tr><th>${t("Shop")}</th><th>${t("Link")}</th><th class="num">${t("Price")}</th><th></th></tr>${rows}</table></div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap"><button class="btn osave" type="button" disabled>💾 ${t("Save shop changes")}</button><span class="muted odirty" style="font-size:12px"></span><span class="hsp" style="flex:1"></span><button class="btn ghost sm fetchall" type="button" title="${t("Fetch every shop of this set now, one after another (also paused shops)")}">↻ ${t("Fetch all shops")}</button></div>`;
+  }
+  /** Binds a shop table inside root. reopen() re-renders after a change. Returns { changes } for combined saves. */
+  bindShopTable(root, s, reopen) {
+    const num = s.set_number, retailers = this.state.data.retailers, q = (c) => root.querySelector("." + c);
+    const rows = [...root.querySelectorAll("tr.orow")];
+    const changes = () => rows.map((tr) => {
+      const u = tr.querySelector(".ou"), p = tr.querySelector(".op"), ch = {};
+      if (u.value.trim() !== u.dataset.orig) ch.url = u.value.trim();
+      if (p.value.trim() !== p.dataset.orig) ch.manual_price = p.value.trim() === "" ? null : p.value.trim();
+      return [tr, ch];
+    }).filter(([, ch]) => Object.keys(ch).length);
+    const mark = () => {
+      const list = changes(), dirty = new Set(list.map(([tr]) => tr));
+      rows.forEach((tr) => { tr.classList.toggle("dirty", dirty.has(tr)); const p = tr.querySelector(".op"); if (p.disabled && tr.querySelector(".ou").value.trim()) { p.disabled = false; p.title = ""; } });
+      if (q("osave")) { q("osave").disabled = !list.length; q("odirty").textContent = list.length ? t(list.length === 1 ? "{n} shop changed" : "{n} shops changed", { n: list.length }) : ""; }
+    };
+    const send = async (list) => {
+      for (const [tr, ch] of list) {
+        const msg = { type: "lego_tracker/offer/update", set_number: num, retailer: tr.dataset.rid };
+        if ("url" in ch) msg.url = ch.url;
+        if ("manual_price" in ch && ch.url !== "") msg.manual_price = ch.manual_price === null ? null : +ch.manual_price;
+        await this._hass.callWS(msg);
+      }
+    };
+    const check = (list) => {
+      for (const [, ch] of list) if (ch.manual_price != null && !(+ch.manual_price > 0 && +ch.manual_price <= 10000)) { this.toast(t("Invalid price"), "err"); return false; }
+      const odd = list.find(([, ch]) => ch.manual_price != null && s.rrp && (+ch.manual_price < s.rrp * 0.2 || +ch.manual_price > s.rrp * 4));
+      if (odd && !confirm(t("{price} is very different from the RRP {rrp}. Save anyway?", { price: EUR(+odd[1].manual_price), rrp: EUR(s.rrp) }))) return false;
+      const cleared = list.filter(([tr, ch]) => ch.url === "" && tr.querySelector(".ou").dataset.orig);
+      return !(cleared.length && !confirm(t("Remove the link of {shops}? The shop may be searched automatically again.", { shops: cleared.map(([tr]) => retailers[tr.dataset.rid]).join(", ") })));
+    };
+    const save = () => { const list = changes(); if (!list.length || !check(list)) return; this.busy(q("osave"), t("Saving…"), async () => { await send(list); await this.load(); this.toast(t("Shop links and prices saved"), "ok"); reopen(); }); };
+    rows.forEach((tr) => tr.querySelectorAll("input").forEach((i) => { i.addEventListener("input", mark); i.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); save(); } }); }));
+    if (q("osave")) q("osave").onclick = save;
+    const fetchOne = async (rid) => {
+      const r = await this._hass.callWS({ type: "lego_tracker/offer/fetch", set_number: num, retailer: rid });
+      const res = r.result, shop = retailers[rid] || rid;
+      this.toast(res.ok ? `${shop}: ${res.price != null ? EUR(res.price) : t("no price")}${res.found ? " · " + t("link found") : ""}` : `${shop}: ${tx(res.error || "")}`, res.ok ? "ok" : "err");
+      return res;
+    };
+    root.querySelectorAll(".fetchb").forEach((b) => b.onclick = () => this.busy(b, "", async () => { await fetchOne(b.dataset.rid); await this.load(); reopen(); }));
+    const all = q("fetchall"); if (all) all.onclick = () => this.busy(all, t("Fetching…"), async () => {
+      let ok = 0; const ids = rows.map((tr) => tr.dataset.rid);
+      for (const rid of ids) { try { if ((await fetchOne(rid)).ok) ok++; } catch (e) { this.toast(tx(e.message), "err"); } }
+      this.toast(t("{ok} of {n} shops OK", { ok, n: ids.length }), ok ? "ok" : "err"); await this.load(); reopen();
+    });
+    root.querySelectorAll(".okb").forEach((b) => b.onclick = () => this.busy(b, "", async () => { await this.svc("confirm_offer", { set_number: num, retailer: b.dataset.rid }); await this.load(); reopen(); }));
+    root.querySelectorAll(".ignb").forEach((b) => b.onclick = () => this.busy(b, "", async () => { const o = (s.offers || {})[b.dataset.rid] || {}; await this._hass.callWS({ type: "lego_tracker/ignore_error", set_number: num, retailer: b.dataset.rid, ignore: !o.ignored }); await this.load(); reopen(); }));
+    root.querySelectorAll(".rmb").forEach((b) => b.onclick = () => { if (!confirm(t("Remove this link? It will not be linked automatically again."))) return; this.busy(b, "", async () => { await this.svc("remove_offer", { set_number: num, retailer: b.dataset.rid }); await this.load(); this.toast(t("Link removed"), "ok"); reopen(); }); });
+    return { changes, send, check };
+  }
+  // ---------------------------------------------------------------- item editor (errors, link check, logbook)
+  /** Inline editor for one set: name, set data (LEGO.com first) and every shop with its own buttons. */
+  itemEditorHtml(s, focus = null) {
+    return `<div class="item" data-inum="${esc(s.set_number)}"><div class="itemhead">${s.image ? `<img src="${esc(s.image)}" alt="" loading="lazy">` : `<span class="ph">🧱</span>`}
+        <div style="flex:1;min-width:0"><div class="form" style="margin:0"><label style="grid-column:span 2">${t("Name")}${s.name_source === "user" ? ` <span class="mbadge">✎ ${t("manual")}</span>` : ""}<input class="i_name" value="${esc(s.name || "")}" data-orig="${esc(s.name || "")}" placeholder="${t("empty = filled in automatically")}"></label></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button class="btn sm i_save" disabled>💾 ${t("Save name")}</button><button class="btn ghost sm i_enrich" title="${t("Get the image, RRP and name from LEGO.com, then theme, year and pieces from Brickset / Rebrickable")}">🖼 ${t("Set data from LEGO.com")}</button><button class="btn ghost sm" data-set="${esc(s.set_number)}">${t("Open set")}</button><button class="btn ghost sm i_log">📜 ${t("Logbook")}</button></div>
+        <div class="muted" style="font-size:12px;margin-top:4px">${esc(s.set_number)} · ${esc(s.theme || "?")}${s.rrp ? " · " + t("RRP {price}", { price: EUR(s.rrp) }) : ""}${s.image_source ? " · 🖼 " + esc(s.image_source === "shop" ? t("image from a shop") : s.image_source === "user" ? t("manual") : s.image_source) : ""}</div></div></div>
+      ${this.shopTableHtml(s, focus)}</div>`;
+  }
+  bindItemEditor(box, after) {
+    const num = box.dataset.inum, s = this.sets.find((x) => x.set_number === num); if (!s) return;
+    const q = (c) => box.querySelector("." + c), name = q("i_name");
+    name.addEventListener("input", () => { q("i_save").disabled = name.value.trim() === name.dataset.orig; });
+    const saveName = () => this.busy(q("i_save"), t("Saving…"), async () => { await this._hass.callWS({ type: "lego_tracker/update_set", set_number: num, fields: { name: name.value.trim() } }); await this.load(); this.toast(name.value.trim() ? t("Saved") : t("The name is filled in automatically again"), "ok"); after(); });
+    q("i_save").onclick = saveName;
+    name.addEventListener("keydown", (e) => { if (e.key === "Enter" && !q("i_save").disabled) saveName(); });
+    q("i_enrich").onclick = () => this.busy(q("i_enrich"), t("Fetching…"), async () => { const r = await this._hass.callWS({ type: "lego_tracker/set/enrich", set_number: num }); await this.load(); this.toast(r.result.updated ? t("Set data updated") : t("No new set data found"), r.result.updated ? "ok" : ""); after(); });
+    q("i_log").onclick = () => this.showLogFor(num);
+    this.bindShopTable(box, s, after);
+  }
   // ---------------------------------------------------------------- set dialog
   closeDialog(instant = false) { const d = this.shadowRoot.getElementById("dlg"); if (!d || !d.open) return; if (instant || REDUCED) { d.close(); return; } d.classList.add("closing"); setTimeout(() => { d.classList.remove("closing"); d.close(); }, 170); }
   async openSet(num, focusShop = null) {
@@ -1417,24 +1486,8 @@ class LegoTrackerPanel extends HTMLElement {
     const allT = series.flatMap((x) => x.points.map((p) => p[0]));
     if (s.rrp && allT.length) series.push({ name: t("RRP"), color: "#9aa0a6", dashed: true, points: [[Math.min(...allT), s.rrp], [Math.max(...allT), s.rrp]] });
     if (s.target_price && allT.length) series.push({ name: t("Target price"), color: "#7a3c9e", dashed: true, points: [[Math.min(...allT), s.target_price], [Math.max(...allT), s.target_price]] });
-    // every shop with a link, plus the enabled shops without one (so a link can be added by hand)
-    const stats = this.state.data.retailer_stats || {}, retailers = this.state.data.retailers;
-    const rids = Object.keys(retailers).filter((rid) => s.offers[rid] || (stats[rid] && stats[rid].enabled));
-    const cheapest = Math.min(...Object.values(s.offers).map((o) => o.price ?? Infinity));
-    const lk = (o) => { const st = o.link_status || "unknown"; return `<span class="lk ${st}" title="${esc(tx(o.link_reason || ""))}">${{ ok: "✓ " + t("correct"), confirmed: "✓ " + t("approved"), suspect: "⚠ " + t("suspicious"), unknown: "? " + t("not checked") }[st] || st}</span>`; };
-    const man = `<span class="mbadge" title="${t("Entered by hand: always wins over automatic values")}">✎ ${t("manual")}</span>`, auto = `<span class="abadge">${t("auto")}</span>`;
-    const orows = rids.map((rid) => {
-      const o = s.offers[rid];
-      if (!o) return `<tr class="orow" data-rid="${rid}"><td><b>${esc(retailers[rid])}</b><div class="muted" style="font-size:12px">${t("no link yet")}</div></td>
-        <td><input class="ou" data-orig="" placeholder="${t("paste the product URL or ASIN")}"></td><td class="num"><input class="op" type="number" min="0" step="0.01" data-orig="" placeholder="€" disabled title="${t("Add a link first")}"></td><td></td></tr>`;
-      const autoP = o.manual_price != null ? o.auto_price : o.price;
-      return `<tr class="orow" data-rid="${rid}"><td><b>${esc(o.label)}</b> ${lk(o)}${o.title ? `<div class="muted" style="font-size:12px;max-width:240px">${esc(o.title.slice(0, 90))}</div>` : ""}${o.link_status === "suspect" ? `<div class="err">${esc(tx(o.link_reason || ""))}</div>` : ""}${o.error ? `<div class="err">${esc(tx(o.error))}</div>` : ""}</td>
-        <td><div style="display:flex;gap:6px;align-items:center">${o.manual_url ? man : auto}${o.url ? `<a href="${esc(o.url)}" target="_blank" rel="noopener noreferrer" data-stop style="font-size:12px;white-space:nowrap">${t("open")} ↗</a>` : ""}</div><input class="ou" value="${esc(o.url || "")}" data-orig="${esc(o.url || "")}" placeholder="${t("empty = search automatically")}" style="margin-top:4px"></td>
-        <td class="num"><div>${o.manual_price != null ? man : auto} ${o.price != null ? `<b class="${o.price === cheapest ? "ok" : ""}">${EUR(o.price)}</b>` : "–"}</div>
-          <input class="op" type="number" min="0" step="0.01" value="${o.manual_price ?? ""}" data-orig="${o.manual_price ?? ""}" placeholder="${autoP != null ? EUR(autoP) : t("auto")}" title="${t("empty = automatic price")}" style="margin-top:4px">
-          <div class="muted" style="font-size:11px;margin-top:2px">${o.manual_price != null ? t("shop: {price}", { price: EUR(autoP) }) + " · " : ""}${t("low {price}", { price: EUR(o.low) })} · ${ago(o.checked)}</div></td>
-        <td style="white-space:nowrap">${o.link_status !== "confirmed" ? `<button class="btn ghost sm okb" data-rid="${rid}" title="${t("This link is the right set")}">✓</button> ` : ""}<button class="btn ghost sm rmb" data-rid="${rid}" title="${t("Remove wrong link and never link it again")}">🗑</button></td></tr>`;
-    }).join("");
+    const retailers = this.state.data.retailers;
+    const man = `<span class="mbadge" title="${t("Entered by hand: always wins over automatic values")}">✎ ${t("manual")}</span>`;
     const c = s.collection || {};
     const stat = (l, v) => `<div class="stat"><small>${l}</small><b>${v}</b></div>`;
     const src = (k) => (s[`${k}_source`] === "user" ? ` ${man}` : "");
@@ -1447,8 +1500,7 @@ class LegoTrackerPanel extends HTMLElement {
         <div class="stats">${stat(t("Lowest ever"), EUR(s.all_time_low))}${stat(t("RRP"), EUR(s.rrp))}${s.owned && c.current_value != null ? stat(t("Value (import)"), EUR(c.current_value)) : ""}${stat(t("Discount"), s.discount_rrp != null ? `${s.discount_rrp > 0 ? "−" : "+"}${Math.abs(s.discount_rrp)}%` : "–")}${stat(t("Per piece"), s.price_per_piece ? t("{n} ct", { n: (s.price_per_piece * 100).toFixed(1) }) : "–")}${stat(t("7 days"), signPct(s.change_7d))}${stat(t("30 days"), signPct(s.change_30d))}${s.retires_in_days != null ? stat(s.retired ? t("Retired since") : t("Retires in"), s.retired ? esc(s.exit_date) : t("{n} d", { n: s.retires_in_days })) : ""}${stat(t("Last check"), ago(s.checked))}</div>
         <h3 style="margin:16px 0 4px;display:flex;align-items:center;gap:8px">🏪 ${t("Shops: links & prices")}<span class="hsp" style="flex:1"></span><button class="btn ghost sm" id="lg" type="button">📜 ${t("Logbook")}</button></h3>
         <p class="muted" style="font-size:12px;margin:0 0 6px">${t("Edit a link or price and press Save. What you enter by hand always wins and is never overwritten; empty a field to hand it back to the automatic search / price.")}</p>
-        ${rids.length ? `<div class="tscroll"><table class="tbl otbl"><tr><th>${t("Shop")}</th><th>${t("Link")}</th><th class="num">${t("Price")}</th><th></th></tr>${orows}</table></div>
-        <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap"><button class="btn" id="osave" type="button" disabled>💾 ${t("Save shop changes")}</button><span class="muted" id="odirty" style="font-size:12px"></span></div>` : `<div class="empty small">${t("No shops enabled.")} <a data-goto="manage/settings" style="cursor:pointer">${t("Settings")}</a></div>`}
+        ${this.shopTableHtml(s, focusShop)}
         <form id="ef" style="margin-top:16px" autocomplete="off">
         <fieldset><legend>👀 ${t("Tracking")}</legend><div class="form"><label>${t("Target price")} (€)<input name="target_price" type="number" min="0" step="0.01" value="${s.target_price ?? ""}"></label>
           <label>${t("Priority")}<select name="priority">${[0, 1, 2, 3].map((p) => `<option value="${p}" ${(s.priority || 0) === p ? "selected" : ""}>${p ? "★".repeat(p) : "–"}</option>`).join("")}</select></label>
@@ -1462,47 +1514,16 @@ class LegoTrackerPanel extends HTMLElement {
           <div class="form" id="collf" style="${s.owned ? "" : "opacity:.45;pointer-events:none"}"><label>${t("Quantity")}<input name="qty" type="number" min="1" value="${c.qty ?? 1}"></label><label>${t("Paid (€ each)")}<input name="paid" type="number" min="0" step="0.01" value="${c.paid ?? ""}"></label>
           <label>${t("Purchase date")}<input name="added" type="date" max="${new Date().toISOString().slice(0, 10)}" value="${esc(c.added || "")}"></label><label>${t("Condition")}<select name="condition"><option value="">–</option>${CONDITIONS.map((x) => `<option value="${x}" ${c.condition === x ? "selected" : ""}>${t(x)}</option>`).join("")}</select></label><label>${t("Current value (€, import)")}<input name="current_value" type="number" min="0" step="0.01" value="${c.current_value ?? ""}"></label><label>${t("Location")}<input name="location" value="${esc(c.location || "")}"></label></div></fieldset>
         <datalist id="dthemes">${this.state.data.themes.map((th) => `<option value="${esc(th)}">`).join("")}</datalist>
-        <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="save" type="submit">${t("Save")}</button><button class="btn ghost" id="find" type="button">🔎 ${t("Find shops")}</button><button class="btn ghost" id="rf" type="button">↻ ${t("Fetch prices")}</button><span class="hsp" style="flex:1"></span><button class="btn danger" id="rm" type="button">${t("Delete")}</button></div></form></div>`;
+        <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="save" type="submit">${t("Save")}</button><button class="btn ghost" id="find" type="button">🔎 ${t("Find shops")}</button><button class="btn ghost" id="rf" type="button">↻ ${t("Fetch prices")}</button><button class="btn ghost" id="enr" type="button" title="${t("Get the image, RRP and name from LEGO.com, then theme, year and pieces from Brickset / Rebrickable")}">🖼 ${t("Set data from LEGO.com")}</button><span class="hsp" style="flex:1"></span><button class="btn danger" id="rm" type="button">${t("Delete")}</button></div></form></div>`;
     const q = (id) => dlg.querySelector("#" + id);
     dlg.scrollTop = scroll;
     q("x").onclick = () => this.closeDialog();
     q("lg").onclick = () => this.showLogFor(num);
     dlg.querySelectorAll("[data-goto]").forEach((el) => { el.onclick = () => { const [a, b] = el.dataset.goto.split("/"); this.state.section = a; this.state.sub[a] = b; this.closeDialog(true); this.persist(); this.render(true); }; });
     dlg.querySelectorAll("[data-range]").forEach((ch) => ch.onclick = () => { this.state.range = +ch.dataset.range; this.persist(); this.openSet(num); });
-    // ---- shop table: manual links and prices
-    const rows = [...dlg.querySelectorAll("tr.orow")];
-    const changes = () => rows.map((tr) => {
-      const u = tr.querySelector(".ou"), p = tr.querySelector(".op"), ch = {};
-      if (u.value.trim() !== u.dataset.orig) ch.url = u.value.trim();
-      if (p.value.trim() !== p.dataset.orig) ch.manual_price = p.value.trim() === "" ? null : p.value.trim();
-      return [tr, ch];
-    }).filter(([, ch]) => Object.keys(ch).length);
-    const mark = () => {
-      const list = changes(), dirty = new Set(list.map(([tr]) => tr));
-      rows.forEach((tr) => { tr.classList.toggle("dirty", dirty.has(tr)); const p = tr.querySelector(".op"); if (p.disabled && tr.querySelector(".ou").value.trim()) { p.disabled = false; p.title = ""; } });
-      if (q("osave")) { q("osave").disabled = !list.length; q("odirty").textContent = list.length ? t(list.length === 1 ? "{n} shop changed" : "{n} shops changed", { n: list.length }) : ""; }
-    };
-    const saveShops = () => {
-      const list = changes(); if (!list.length) return;
-      for (const [, ch] of list) {
-        if (ch.manual_price != null && !(+ch.manual_price > 0 && +ch.manual_price <= 10000)) return this.toast(t("Invalid price"), "err");
-      }
-      const odd = list.find(([, ch]) => ch.manual_price != null && s.rrp && (+ch.manual_price < s.rrp * 0.2 || +ch.manual_price > s.rrp * 4));
-      if (odd && !confirm(t("{price} is very different from the RRP {rrp}. Save anyway?", { price: EUR(+odd[1].manual_price), rrp: EUR(s.rrp) }))) return;
-      const cleared = list.filter(([tr, ch]) => ch.url === "" && tr.querySelector(".ou").dataset.orig);
-      if (cleared.length && !confirm(t("Remove the link of {shops}? The shop may be searched automatically again.", { shops: cleared.map(([tr]) => retailers[tr.dataset.rid]).join(", ") }))) return;
-      this.busy(q("osave"), t("Saving…"), async () => {
-        for (const [tr, ch] of list) {
-          const msg = { type: "lego_tracker/offer/update", set_number: num, retailer: tr.dataset.rid };
-          if ("url" in ch) msg.url = ch.url;
-          if ("manual_price" in ch && !(ch.url === "")) msg.manual_price = ch.manual_price === null ? null : +ch.manual_price;
-          await this._hass.callWS(msg);
-        }
-        await this.load(); this.toast(t("Shop links and prices saved"), "ok"); this.openSet(num);
-      });
-    };
-    rows.forEach((tr) => tr.querySelectorAll("input").forEach((i) => { i.addEventListener("input", mark); i.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); saveShops(); } }); }));
-    if (q("osave")) q("osave").onclick = saveShops;
+    // ---- shop table: manual links and prices, per-shop fetch
+    const shop = this.bindShopTable(dlg, s, () => this.openSet(num));
+    const changes = shop.changes;
     if (focusShop) { const i = dlg.querySelector(`tr.orow[data-rid="${focusShop}"] .ou`); if (i) { i.focus(); i.select(); } }
     // ---- details form: only changed fields are sent, so untouched automatic values stay automatic
     const ef = q("ef");
@@ -1519,16 +1540,15 @@ class LegoTrackerPanel extends HTMLElement {
       if (s.owned && !now.owned && !confirm(t("Remove this set from your collection? (it stays on your watchlist)"))) return;
       if (changes().length && !confirm(t("You also changed shop links or prices. Save those too?"))) return;
       this.busy(q("save"), t("Saving…"), async () => {
-        for (const [tr, ch] of changes()) { const msg = { type: "lego_tracker/offer/update", set_number: num, retailer: tr.dataset.rid, ...ch }; if (ch.url === "") delete msg.manual_price; if (msg.manual_price != null) msg.manual_price = +msg.manual_price; await this._hass.callWS(msg); }
+        const list = changes(); if (list.length) { if (!shop.check(list)) return; await shop.send(list); }
         if (Object.keys(f).length) await this._hass.callWS({ type: "lego_tracker/update_set", set_number: num, fields: f });
         await this.load(); this.toast(t("Saved"), "ok"); this.closeDialog();
       });
     });
     const find = async (btn) => this.busy(btn, t("Searching…"), async () => { const r = await this.svc("discover_offers", { set_number: num }, true); await this.load(); this.toast(t("{n} shop links found", { n: r.response.found }), r.response.found ? "ok" : ""); this.openSet(num); });
     q("find").onclick = (e) => find(e.currentTarget);
+    q("enr").onclick = (e) => this.busy(e.currentTarget, t("Fetching…"), async () => { const r = await this._hass.callWS({ type: "lego_tracker/set/enrich", set_number: num }); await this.load(); this.toast(r.result.updated ? t("Set data updated") : t("No new set data found"), r.result.updated ? "ok" : ""); this.openSet(num); });
     q("rf").onclick = (e) => this.busy(e.currentTarget, t("Fetching…"), async () => { await this.svc("refresh", { set_number: num }); await this.load(); this.openSet(num); });
-    dlg.querySelectorAll(".okb").forEach((btn) => btn.onclick = () => this.busy(btn, "", async () => { await this.svc("confirm_offer", { set_number: num, retailer: btn.dataset.rid }); await this.load(); this.openSet(num); }));
-    dlg.querySelectorAll(".rmb").forEach((btn) => btn.onclick = () => { if (!confirm(t("Remove this link? It will not be linked automatically again."))) return; this.busy(btn, "", async () => { await this.svc("remove_offer", { set_number: num, retailer: btn.dataset.rid }); await this.load(); this.toast(t("Link removed"), "ok"); this.openSet(num); }); });
     q("rm").onclick = () => { if (!confirm(t(s.owned ? "Delete set {number} with its whole price history, and remove it from your collection?" : "Delete set {number} with its whole price history?", { number: num }))) return; this.busy(q("rm"), "", async () => { await this.svc("remove_set", { set_number: num }); this.closeDialog(); await this.load(); this.toast(t("Set {number} deleted", { number: num }), "ok"); }); };
     this.hookCharts(dlg);
   }
