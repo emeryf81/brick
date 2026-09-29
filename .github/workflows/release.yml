@@ -12,8 +12,16 @@ jobs:
       - name: Check tag matches manifest version
         run: |
           v=$(python3 -c "import json;print(json.load(open('custom_components/lego_tracker/manifest.json'))['version'])")
-          [ "v$v" = "${GITHUB_REF_NAME}" ] || { echo "tag ${GITHUB_REF_NAME} != manifest v$v"; exit 1; }
-      - name: Create release
+          if [ "v$v" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} staat op commit ${GITHUB_SHA::7}, maar daar zegt manifest.json v$v. Verwijder de tag en maak hem opnieuw aan op de laatste commit van main."
+            exit 1
+          fi
+      - name: Create release (skipped when it was already made on github.com)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "${GITHUB_REF_NAME}" --generate-notes --title "${GITHUB_REF_NAME}"
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "Release ${GITHUB_REF_NAME} bestaat al, niets te doen."
+          else
+            gh release create "${GITHUB_REF_NAME}" --generate-notes --title "${GITHUB_REF_NAME}"
+          fi
