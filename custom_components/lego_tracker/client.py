@@ -158,9 +158,9 @@ class Fetcher:
             self.on_pause(retailer, hours)
         self.blocks[retailer] = n + 1
 
-    async def fetch_offer(self, retailer: str, url: str) -> tuple[Parsed | None, str | None]:
-        """Returns (parsed, error)."""
-        if (left := self.cooldown_left(retailer)) > 0:
+    async def fetch_offer(self, retailer: str, url: str, force: bool = False) -> tuple[Parsed | None, str | None]:
+        """Returns (parsed, error). force: also try a paused shop (manual action from the panel)."""
+        if not force and (left := self.cooldown_left(retailer)) > 0:
             return None, T("paused {hours} h after being blocked", hours=f"{left / 3600:.1f}")
         try:
             status, page = await self._get(retailer, url)
@@ -182,9 +182,9 @@ class Fetcher:
         self.blocks[retailer] = 0
         return parsed, None
 
-    async def discover(self, retailer: str, set_number: str) -> str | None:
+    async def discover(self, retailer: str, set_number: str, force: bool = False) -> str | None:
         url = search_url(retailer, set_number)
-        if not url or self.cooldown_left(retailer) > 0:
+        if not url or (not force and self.cooldown_left(retailer) > 0):
             return None
         try:
             status, page = await self._get(retailer, url)
