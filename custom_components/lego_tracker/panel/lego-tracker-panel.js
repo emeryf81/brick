@@ -116,6 +116,12 @@ button{font:inherit;color:inherit}
 .btn.ghost{background:var(--lt-card);color:var(--lt-text);border-color:var(--lt-line)}.btn.danger{background:var(--lt-card);color:var(--lt-red);border-color:color-mix(in srgb,var(--lt-red) 40%,var(--lt-line))}
 a.btn{text-decoration:none}.btn[disabled]{opacity:.5;pointer-events:none}.btn.sm{padding:5px 10px;font-size:13px;border-radius:8px}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite}
+.jobbar{display:flex;gap:12px;align-items:center;background:var(--lt-card);border-radius:14px;padding:10px 14px;margin-bottom:12px;box-shadow:var(--lt-shadow);border-left:4px solid var(--lt-accent)}.jobbar.in{animation:rise .35s both}
+.jobbar .spin{color:var(--lt-accent);flex:none}.jt{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lk{font-size:12px;font-weight:600;padding:2px 7px;border-radius:6px;white-space:nowrap}.lk.suspect{background:color-mix(in srgb,var(--lt-red) 15%,transparent);color:var(--lt-red)}
+.lk.ok,.lk.confirmed{background:color-mix(in srgb,var(--lt-green) 15%,transparent);color:var(--lt-green)}.lk.unknown{background:var(--lt-soft);color:var(--lt-muted)}
+.actions{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}.action{border:1px solid var(--lt-line);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:8px}
+.action b{font-size:15px}.action p{margin:0;font-size:13px}.action .btn{align-self:flex-start;margin-top:auto}
 /* section switch */
 .seg{display:flex;gap:6px;background:var(--lt-card);padding:5px;border-radius:14px;box-shadow:var(--lt-shadow);position:relative;margin-bottom:12px}
 .seg button{flex:1;border:0;background:none;padding:11px 12px;border-radius:10px;cursor:pointer;font-weight:600;font-size:15px;color:var(--lt-muted);position:relative;z-index:1;transition:color .25s}
@@ -255,7 +261,7 @@ fieldset{border:1px solid var(--lt-line);border-radius:14px;padding:12px 14px 4p
 const SECTIONS = {
   deals: { label: "🏷️ Deals & watchlist", hint: "sets in het oog houden", subs: [["today", "Vandaag"], ["watch", "Watchlist"], ["all", "Alle prijzen"]] },
   collection: { label: "📦 Mijn collectie", hint: "wat je al hebt", subs: [["overview", "Overzicht"], ["sets", "Sets"]] },
-  manage: { label: "⚙️ Beheer", hint: "toevoegen, import, winkels", subs: [["add", "Toevoegen"], ["import", "Importeren"], ["shops", "Winkels"], ["backup", "Back-up"]] },
+  manage: { label: "⚙️ Beheer", hint: "toevoegen, import, winkels", subs: [["add", "Toevoegen"], ["import", "Importeren"], ["links", "Linkcontrole"], ["shops", "Winkels & schema"], ["backup", "Back-up"]] },
 };
 
 class LegoTrackerPanel extends HTMLElement {
@@ -267,6 +273,7 @@ class LegoTrackerPanel extends HTMLElement {
       f: { q: "", theme: null, subtheme: null, sort: "score", cond: null }, threshold: null,
       cview: "grid", csort: { key: "value", dir: -1 }, range: 90, addMode: "watch",
       imp: { text: "", name: "", analysis: null, only: false, replace: false, track: true },
+      links: { status: "suspect", scope: "owned", edit: null },
       data: null, coll: null, err: null, busy: false,
     };
     try {
@@ -289,6 +296,7 @@ class LegoTrackerPanel extends HTMLElement {
       const [d, c] = await Promise.all([this._hass.callWS({ type: "lego_tracker/overview" }), this._hass.callWS({ type: "lego_tracker/collection" })]);
       this.state.data = d; this.state.coll = c; this.state.err = null;
       if (this.state.threshold == null) this.state.threshold = d.threshold;
+      this.state.job = d.job; if (d.job && d.job.running) this.pollJob();
     } catch (e) { this.state.err = e.message || String(e); }
     this.render(animate || !this._rendered);
   }
@@ -334,23 +342,78 @@ class LegoTrackerPanel extends HTMLElement {
     const sec = SECTIONS[s.section], sub = s.sub[s.section];
     const d = s.data;
     const status = d ? this.healthDot() : "";
+    const keepToasts = root.querySelector(".toasts"), keepDlg = root.getElementById("dlg");
     root.innerHTML = `<style>${STYLE}</style><div class="wrap">
       <header>${this._narrow ? `<ha-menu-button></ha-menu-button>` : ""}${BRICK}<div><h1>LEGO Price Tracker</h1><div class="meta">${d ? `v${esc(d.version)} · ${d.sets.length} sets gevolgd` : "laden…"}</div></div>
-        <div class="hsp"></div>${status}<button class="btn ghost sm" id="refresh" title="Alle prijzen nu ophalen">↻ <span class="lbl">Verversen</span></button></header>
+        <div class="hsp"></div>${status}<button class="btn ghost sm" data-act="discover" title="Winkellinks zoeken voor sets waar er nog geen zijn">🔎 <span class="lbl">Links zoeken</span></button><button class="btn sm" data-act="refresh" title="Alle winkelprijzen nu ophalen">↻ <span class="lbl">Prijzen verversen</span></button></header>
+      <div id="jobbar"></div>
       <nav class="seg" role="tablist">${Object.entries(SECTIONS).map(([k, v]) => `<button role="tab" data-sec="${k}" class="${k === s.section ? "on" : ""}">${v.label}<small>${v.hint}</small></button>`).join("")}<span class="ind"></span></nav>
       <div class="sub">${sec.subs.map(([k, l]) => `<button data-sub="${k}" class="${k === sub ? "on" : ""}">${l}${this.subCount(s.section, k)}</button>`).join("")}</div>
       <div id="content"></div></div><div class="toasts"></div><dialog id="dlg"></dialog>`;
+    // keep notifications and an open set dialog alive across re-renders (e.g. when a job finishes)
+    if (keepToasts) root.querySelector(".toasts").replaceWith(keepToasts);
+    if (keepDlg) { root.getElementById("dlg").replaceWith(keepDlg); keepDlg._bound = true; }
     const menu = root.querySelector("ha-menu-button"); if (menu) { menu.hass = this._hass; menu.narrow = this._narrow; }
     this.placeIndicator(false);
     root.querySelectorAll("[data-sec]").forEach((b) => b.addEventListener("click", () => { if (s.section === b.dataset.sec) return; s.section = b.dataset.sec; this.resetFilters(); this.persist(); this.render(true); }));
     root.querySelectorAll(".sub [data-sub]").forEach((b) => b.addEventListener("click", () => { s.sub[s.section] = b.dataset.sub; this.resetFilters(); this.persist(); this.render(true); }));
-    root.getElementById("refresh").addEventListener("click", (e) => this.busy(e.currentTarget, "Bezig…", async () => { await this.svc("refresh"); await this.load(); this.toast("Prijzen ververst", "ok"); }));
+    this.renderJob();
     const dlg = root.getElementById("dlg");
-    dlg.addEventListener("cancel", (e) => { e.preventDefault(); this.closeDialog(); });
-    dlg.addEventListener("click", (e) => { if (e.target === dlg) this.closeDialog(); });
+    if (!dlg._bound) dlg.addEventListener("cancel", (e) => { e.preventDefault(); this.closeDialog(); });
+    if (!dlg._bound) dlg.addEventListener("click", (e) => { if (e.target === dlg) this.closeDialog(); });
+    dlg._bound = true;
     if (!this._keys) { this._keys = true; this.addEventListener("keydown", (e) => { if (e.key === "/" && !/INPUT|TEXTAREA|SELECT/.test((e.composedPath()[0] || {}).tagName || "")) { const q = this.shadowRoot.getElementById("q"); if (q) { e.preventDefault(); q.focus(); } } }); }
+    root.querySelectorAll("header [data-act]").forEach((b) => b.addEventListener("click", () => this.startJob(b.dataset.act, b)));
     this.renderContent(animate);
+    this.renderJob();
     if (animate) requestAnimationFrame(() => this.placeIndicator(true));
+  }
+  // ---------------------------------------------------------------- background jobs
+  async startJob(kind, btn) {
+    const d = this.state.data || {}, paused = Object.entries(d.paused || {});
+    const svc = { refresh: "refresh", discover: "discover_offers", enrich: "enrich_sets" }[kind];
+    const data = {};
+    if (paused.length && kind !== "enrich") {
+      const list = paused.map(([k, h]) => `• ${k} (nog ${h < 1 ? Math.round(h * 60) + " min" : h.toFixed(1) + " u"})`).join("\n");
+      data.force = confirm(`Deze winkels zijn gepauzeerd na een blokkade:\n${list}\n\nOK = toch proberen (kans op nieuwe blokkade)\nAnnuleren = gepauzeerde winkels overslaan`);
+    }
+    if (kind === "enrich" && btn && btn.dataset.all) data.all = true;
+    await this.busy(btn, "Starten…", async () => {
+      const r = (await this.svc(svc, data, true)).response;
+      if (!r.total) { this.toast(kind === "refresh" ? "Niets te verversen: geen sets met een link bij een actieve winkel" + (r.note ? ` (${r.note})` : "") : kind === "discover" ? "Alle sets hebben al een link bij elke actieve winkel" : "Alle sets hebben al volledige gegevens", ""); }
+      else this.toast(`${r.label} gestart voor ${r.total} sets${r.note ? ` · ${r.note}` : ""}`, "ok");
+      this.state.job = r; this.pollJob();
+    });
+    this.renderJob();
+  }
+  pollJob() {
+    if (this._poll) return;
+    const tick = async () => {
+      let info; try { info = await this._hass.callWS({ type: "lego_tracker/job" }); } catch (e) { this._poll = null; return; }
+      const was = this.state.job && this.state.job.running;
+      this.state.job = info.job; this.state.data && Object.assign(this.state.data, { paused: info.paused, schedule: info.schedule, last: info.last });
+      this.renderJob();
+      if (info.job && info.job.running) { if (info.job.done && info.job.done % 10 === 0 && info.job.done !== this._lastReload) { this._lastReload = info.job.done; this.load(); } this._poll = setTimeout(tick, 2000); return; }
+      this._poll = null;
+      if (was && info.last) {
+        const l = info.last, parts = [l.updated && `${l.updated} bijgewerkt`, l.found && `${l.found} links gevonden`, l.skipped && `${l.skipped} overgeslagen (pauze)`, l.errors && `${l.errors} fouten`].filter(Boolean).join(", ");
+        this.toast(`${l.label || "Taak"} ${l.cancelled ? "gestopt" : "klaar"}${parts ? ": " + parts : ""}`, l.errors && !l.updated && !l.found ? "err" : "ok");
+        this.load();
+      }
+    };
+    this._poll = setTimeout(tick, 1200);
+  }
+  renderJob() {
+    const box = this.shadowRoot.getElementById("jobbar"); if (!box) return;
+    const j = this.state.job;
+    this.shadowRoot.querySelectorAll("[data-act]").forEach((b) => { b.disabled = !!(j && j.running); });
+    if (!j || !j.running) { box.innerHTML = ""; return; }
+    const pct = j.total ? Math.round((j.done / j.total) * 100) : 0;
+    const el = (j.started && j.done) ? (Date.now() / 1000 - j.started) / j.done * (j.total - j.done) : null;
+    const fresh = !box.querySelector(".jobbar");
+    box.innerHTML = `<div class="jobbar${fresh ? " in" : ""}"><span class="spin"></span><div style="flex:1;min-width:0"><div class="jt"><b>${esc(j.label)}</b> · ${j.done}/${j.total}${el ? ` · nog ± ${el > 90 ? Math.round(el / 60) + " min" : Math.round(el) + " s"}` : ""}${j.found ? ` · ${j.found} gevonden` : ""}${j.updated ? ` · ${j.updated} bijgewerkt` : ""}${j.errors ? ` · ${j.errors} fouten` : ""}</div>
+      <div class="meter" style="margin:6px 0 3px"><i style="width:${pct}%;animation:none;transition:width .6s"></i></div><div class="muted jt">${esc(j.current || "")}${j.note ? ` · ${esc(j.note)}` : ""}</div></div><button class="btn ghost sm" id="jobstop">Stoppen</button></div>`;
+    box.querySelector("#jobstop").onclick = async () => { await this.svc("cancel_job", {}, true); this.toast("Taak wordt gestopt na de huidige set"); };
   }
   placeIndicator(anim) {
     const seg = this.shadowRoot.querySelector(".seg"); if (!seg) return;
@@ -365,7 +428,8 @@ class LegoTrackerPanel extends HTMLElement {
     let n = 0;
     if (sec === "deals" && sub === "today") n = d.sets.filter((s) => s.watched && this.isDeal(s)).length;
     if (sec === "deals" && sub === "watch") n = d.sets.filter((s) => s.watched).length;
-    if (sec === "manage" && sub === "shops") n = d.health ? d.health.errors : 0;
+    if (sec === "manage" && sub === "shops") n = Object.keys(d.paused || {}).length;
+    if (sec === "manage" && sub === "links") n = d.sets.reduce((a, s) => a + (s.offers_suspect || 0), 0);
     return n ? `<span class="count">${n}</span>` : "";
   }
   healthDot() {
@@ -379,7 +443,7 @@ class LegoTrackerPanel extends HTMLElement {
     const s = this.state, el = this.shadowRoot.getElementById("content"); if (!el) return;
     if (s.err) { el.innerHTML = `<div class="empty"><span class="big">⚠️</span>Kon gegevens niet laden: ${esc(s.err)}<br><br><button class="btn" id="retry">Opnieuw proberen</button></div>`; el.querySelector("#retry").onclick = () => this.load(true); return; }
     if (!s.data) { el.innerHTML = `<div class="kpis">${"<div class='skel' style='height:86px'></div>".repeat(4)}</div><div class="grid">${"<div class='skel' style='height:260px'></div>".repeat(8)}</div>`; return; }
-    const view = { deals: { today: this.vToday, watch: this.vWatch, all: this.vAll }, collection: { overview: this.vCollOverview, sets: this.vCollSets }, manage: { add: this.vAdd, import: this.vImport, shops: this.vShops, backup: this.vBackup } }[s.section][s.sub[s.section]];
+    const view = { deals: { today: this.vToday, watch: this.vWatch, all: this.vAll }, collection: { overview: this.vCollOverview, sets: this.vCollSets }, manage: { add: this.vAdd, import: this.vImport, links: this.vLinks, shops: this.vShops, backup: this.vBackup } }[s.section][s.sub[s.section]];
     el.className = animate && !REDUCED ? "enter" : "";
     el.innerHTML = view.call(this);
     this.bindContent(el);
@@ -447,6 +511,7 @@ class LegoTrackerPanel extends HTMLElement {
       <div class="img">${this.img(s)}</div><div class="n">${esc(s.name || "Set " + s.set_number)}</div>
       <div class="m">${esc(s.set_number)} · ${esc(s.theme || "?")}${s.subtheme ? ` / ${esc(s.subtheme)}` : ""} ${stars}</div>
       <div class="row"><span class="p">${EUR(s.best_price)}</span>${s.rrp && s.best_price != null && s.best_price < s.rrp ? `<s>${EUR(s.rrp)}</s>` : ""}${tr}</div>
+      ${s.offers_suspect ? `<div class="m" style="color:var(--lt-red)">⚠ ${s.offers_suspect} verdachte link${s.offers_suspect > 1 ? "s" : ""}</div>` : ""}
       <div class="m">${store ? `bij ${esc(store)}` : s.offers_live === 0 && Object.keys(s.offers || {}).length ? "⚠ geen prijs gevonden" : Object.keys(s.offers || {}).length ? "geen prijs" : "nog geen winkel-links"}${s.price_per_piece ? ` · ${(s.price_per_piece * 100).toFixed(1)} ct/steen` : ""}${s.target_price ? ` · 🎯 ${EUR0(s.target_price)}` : ""}</div>
       ${spark(s.spark)}</div>`;
   }
@@ -579,6 +644,32 @@ class LegoTrackerPanel extends HTMLElement {
       <div class="tscroll"><table class="tbl"><tr><th>Regel</th><th></th><th>Set</th><th>Naam</th><th class="num">Aantal</th><th class="num">Betaald</th><th>Datum</th><th>Staat</th><th>Opmerkingen</th></tr>${tbl}</table></div>
       ${a.rows.length > 500 ? `<p class="muted">Eerste 500 regels getoond.</p>` : ""}</div>`;
   }
+  vLinks() {
+    const L = this.state.links, rows = [];
+    for (const s of this.sets) {
+      if (L.scope === "owned" && !s.owned) continue;
+      for (const [rid, o] of Object.entries(s.offers || {})) {
+        const st = o.link_status || "unknown";
+        if (L.status !== "all" && !(L.status === st || (L.status === "ok" && st === "confirmed"))) continue;
+        rows.push({ s, rid, o, st });
+      }
+    }
+    const count = (st) => this.sets.filter((s) => L.scope !== "owned" || s.owned).reduce((a, s) => a + Object.values(s.offers || {}).filter((o) => (o.link_status || "unknown") === st || (st === "ok" && o.link_status === "confirmed")).length, 0);
+    const chip = (k, l) => `<span class="chip ${L.status === k ? "on" : ""}" data-lstatus="${k}">${l}${k !== "all" ? ` <span class="muted">${count(k)}</span>` : ""}</span>`;
+    const tr = rows.slice(0, 400).map(({ s, rid, o, st }) => {
+      const key = `${s.set_number}|${rid}`, editing = L.edit === key;
+      return `<tr data-key="${esc(key)}"><td style="min-width:150px"><b class="click" data-set="${esc(s.set_number)}" style="cursor:pointer">${esc(s.set_number)}</b> ${esc(s.name || "")}<div class="muted" style="font-size:12px">${esc(s.theme || "")}${s.rrp ? ` · advies ${EUR(s.rrp)}` : ""}</div></td>
+        <td>${esc(o.label)}</td><td><span class="lk ${st}">${{ ok: "✓ klopt", confirmed: "✓ goedgekeurd", suspect: "⚠ verdacht", unknown: "? onbekend" }[st]}</span><div class="${st === "suspect" ? "err" : "muted"}" style="font-size:12px;margin-top:3px">${esc(o.link_reason || "")}</div></td>
+        <td style="max-width:280px;font-size:13px">${o.title ? esc(o.title.slice(0, 120)) : `<span class="muted">${o.url ? esc(decodeURIComponent(o.url.replace(/^https?:\/\/(www\.)?/, "")).slice(0, 70)) : ""}</span>`}</td>
+        <td class="num">${o.price != null ? EUR(o.price) : o.low != null ? `<span class="muted">${EUR(o.low)}</span>` : "–"}</td>
+        <td style="white-space:nowrap">${editing ? `<input class="lnew" placeholder="nieuwe URL of ASIN" style="width:220px;padding:6px 8px"> <button class="btn sm lsave">Opslaan</button> <button class="btn ghost sm lcancel">✕</button>`
+          : `${o.url ? `<a class="btn ghost sm" href="${esc(o.url)}" target="_blank" rel="noopener noreferrer">↗</a> ` : ""}${st !== "confirmed" ? `<button class="btn ghost sm lok" title="Klopt">✓</button> ` : ""}<button class="btn ghost sm ledit" title="Andere link">✎</button> <button class="btn ghost sm lrm" title="Verwijderen">🗑</button>`}</td></tr>`;
+    }).join("");
+    return `<div class="panel"><h3>🔗 Linkcontrole<span class="hsp"></span><button class="btn ghost sm" id="lverify">↺ Opnieuw beoordelen</button></h3>
+      <p>Controleert of elke winkellink naar de juiste set gaat: het setnummer moet in de producttitel staan, en het mag geen accessoire (verlichting, vitrine…) of namaakmerk zijn. Een veel te lage prijs is ook verdacht. <b>Verdachte links tellen niet mee</b> voor prijzen en collectiewaarde tot je ze goedkeurt. Voor Amazon is de titel pas bekend na een prijsronde.</p>
+      <div class="chips">${chip("suspect", "⚠ Verdacht")}${chip("unknown", "? Niet gecontroleerd")}${chip("ok", "✓ In orde")}${chip("all", "Alle")}<span style="flex:1"></span><span class="chip ${L.scope === "owned" ? "on" : ""}" data-lscope="owned">📦 Mijn collectie</span><span class="chip ${L.scope === "all" ? "on" : ""}" data-lscope="all">Alle sets</span></div></div>
+      ${rows.length ? `<div class="panel tscroll"><table class="tbl"><tr><th>Set</th><th>Winkel</th><th>Beoordeling</th><th>Producttitel / URL</th><th class="num">Prijs</th><th></th></tr>${tr}</table>${rows.length > 400 ? `<p class="muted">Eerste 400 van ${rows.length} getoond.</p>` : ""}</div>` : this.emptyState("✅", L.status === "suspect" ? "Geen verdachte links. Mooi zo!" : "Geen links in deze selectie.")}`;
+  }
   vShops() {
     const st = this.state.data.retailer_stats || {};
     const cards = Object.entries(st).map(([rid, r], i) => {
@@ -589,7 +680,17 @@ class LegoTrackerPanel extends HTMLElement {
         <div class="kv"><span>Links</span><b>${r.offers}</b></div><div class="kv"><span>Met prijs</span><b>${r.ok}</b></div><div class="kv"><span>Goedkoopste voor</span><b>${r.cheapest} sets</b></div><div class="kv"><span>Laatst gelukt</span><b>${ago(r.last_ok)}</b></div></div>`;
     }).join("");
     const failing = Object.values(st).flatMap((r) => r.failing.map((f) => ({ ...f, shop: r.label })));
-    return `<div class="panel"><h3>🏪 Winkelstatus<span class="hsp"></span><span class="pill">${esc(this.state.data.transport)}</span></h3><p>Na een blokkade wordt een winkel automatisch een tijd gepauzeerd (1 → 3 → 6 → 12 → 24 u) om de bescherming niet strenger te maken.</p></div>
+    const d = this.state.data, sch = d.schedule || {}, last = d.last;
+    const lastTxt = last ? `${esc(last.label)}: ${last.cancelled ? "gestopt" : "klaar"} ${ago(last.finished)} · ${last.done}/${last.total}${last.updated ? ` · ${last.updated} bijgewerkt` : ""}${last.found ? ` · ${last.found} gevonden` : ""}${last.errors ? ` · ${last.errors} fouten` : ""}` : "nog geen taak uitgevoerd sinds de laatste herstart";
+    const pausedTxt = Object.entries(d.paused || {}).map(([k, h]) => `${esc(k)} (${h < 1 ? Math.round(h * 60) + " min" : h.toFixed(1) + " u"})`).join(", ");
+    const actions = `<div class="panel"><h3>⚡ Acties</h3><div class="actions">
+      <div class="action"><b>🔎 Ontbrekende winkellinks zoeken</b><p>Zoekt per winkel een productpagina voor elke set zonder link. Elke gevonden titel wordt gecontroleerd op setnummer, accessoires en namaakmerken.</p><button class="btn" data-act="discover">Links zoeken</button></div>
+      <div class="action"><b>↻ Winkelprijzen verversen</b><p>Haalt de prijs op voor elke gekoppelde link. Winkels worden parallel bevraagd, elke winkel rustig na elkaar.</p><button class="btn" data-act="refresh">Prijzen verversen</button></div>
+      <div class="action"><b>ℹ️ Setgegevens aanvullen</b><p>Vult naam, thema, jaar, stenen en afbeelding aan en vervangt namen die van een verkeerd product kwamen. Bron: Brickset of Rebrickable (API-sleutel in de opties), anders de openbare Brickset-pagina.</p><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:auto"><button class="btn" data-act="enrich">Aanvullen</button><button class="btn ghost" data-act="enrich" data-all="1" title="Ook sets die al volledig lijken">Alles opnieuw</button></div></div>
+      <div class="action"><b>🔗 Links controleren</b><p>Beoordeelt alle links opnieuw en toont verdachte of nog niet gecontroleerde links, zodat je ze kan goedkeuren of vervangen.</p><button class="btn" data-goto="manage/links">Naar linkcontrole</button></div></div></div>
+      <div class="panel"><h3>⏰ Automatisch ophalen</h3><p>${sch.auto ? `Prijzen worden automatisch opgehaald om <b>${(sch.times || []).join("</b> en <b>")}</b>. Volgende ronde: <b>${sch.next ? DATE(sch.next, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "–"}</b>.` : "Automatisch ophalen staat <b>uit</b>."} Aanpassen via <i>Instellingen → Apparaten & diensten → LEGO Price Tracker → Configureren</i> (tijdstippen zoals <code>07:30, 19:30</code>).</p>
+      <p><b>Laatste taak:</b> ${lastTxt}</p>${pausedTxt ? `<p><b>Gepauzeerd na blokkade:</b> ${pausedTxt}. Bij de knoppen kan je kiezen om het toch te proberen.</p>` : ""}</div>`;
+    return `${actions}<div class="panel"><h3>🏪 Winkelstatus<span class="hsp"></span><span class="pill">${esc(this.state.data.transport)}</span></h3><p>Na een blokkade wordt een winkel automatisch een tijd gepauzeerd (1 → 3 → 6 → 12 → 24 u) om de bescherming niet strenger te maken.</p></div>
       <div class="shops">${cards}</div>
       <div class="panel" style="margin-top:16px"><h3>⚠️ Aanbiedingen zonder prijs <span class="muted" style="font-weight:400">${failing.length}</span></h3>${failing.length ? `<div class="tscroll"><table class="tbl"><tr><th>Set</th><th>Winkel</th><th>Melding</th></tr>${failing.map((f) => `<tr class="click" data-set="${esc(f.set_number)}"><td><b>${esc(f.set_number)}</b> ${esc(f.name || "")}</td><td>${esc(f.shop)}</td><td class="err">${esc(f.error)}</td></tr>`).join("")}</table></div>` : `<p class="ok">Alles in orde.</p>`}</div>
       <div class="panel"><h3>🧩 Blijft een winkel blokkeren?</h3><p>1. Vul de prijs handmatig in (klik op een set → Winkels → Handmatig).<br>2. Installeer het userscript <code>tools/lego-tracker.user.js</code> in Tampermonkey: jouw eigen browser stuurt de prijs door wanneer je een productpagina bezoekt.<br>3. Gebruik de actie <code>lego_tracker.report_price</code> vanuit een automation of n8n.</p></div>`;
@@ -643,6 +744,22 @@ class LegoTrackerPanel extends HTMLElement {
     const ba = $("bulkadd"); if (ba) ba.addEventListener("click", () => { if (!bulk.value.trim()) return; this.busy(ba, "Bezig… (winkels zoeken duurt even)", async () => { const r = await this.svc("add_sets", { set_numbers: bulk.value, owned: $("bulk_owned").checked }, true); await this.load(); this.toast(`${r.response.added} sets toegevoegd`, "ok"); }); });
     const dc = $("discover"); if (dc) dc.addEventListener("click", () => this.busy(dc, "Zoeken…", async () => { const r = await this.svc("discover_offers", {}, true); await this.load(); this.toast(`${r.response.found} nieuwe winkel-links gevonden`, "ok"); }));
     const of = $("offer"); if (of) of.addEventListener("click", () => this.busy(of, "Koppelen…", async () => { await this.svc("set_offer", { set_number: $("o_num").value.trim(), retailer: $("o_ret").value, url: $("o_url").value.trim() }); await this.load(); this.toast("Link gekoppeld. Ververs om de prijs op te halen.", "ok"); }));
+    // header-style action buttons inside content (Winkels & schema)
+    root.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => this.startJob(b.dataset.act, b)));
+    // link check
+    const L = s.links;
+    on("[data-lstatus]", "click", (e) => { L.status = e.currentTarget.dataset.lstatus; L.edit = null; this.renderContent(); });
+    on("[data-lscope]", "click", (e) => { L.scope = e.currentTarget.dataset.lscope; L.edit = null; this.renderContent(); });
+    const lv = $("lverify"); if (lv) lv.addEventListener("click", () => this.busy(lv, "…", async () => { const r = (await this.svc("verify_links", {}, true)).response; await this.load(); this.toast(`${r.suspect} verdacht, ${r.ok + r.confirmed} in orde, ${r.unknown} nog niet te beoordelen`, "ok"); }));
+    root.querySelectorAll("tr[data-key]").forEach((tr) => {
+      const [num, rid] = tr.dataset.key.split("|"), b = (c) => tr.querySelector("." + c);
+      if (b("lok")) b("lok").onclick = () => this.busy(b("lok"), "", async () => { await this.svc("confirm_offer", { set_number: num, retailer: rid }); await this.load(); this.toast(`Link ${num} goedgekeurd`, "ok"); });
+      if (b("lrm")) b("lrm").onclick = () => { if (!confirm(`Link van set ${num} verwijderen? Hij wordt niet opnieuw automatisch gekoppeld.`)) return; this.busy(b("lrm"), "", async () => { await this.svc("remove_offer", { set_number: num, retailer: rid }); await this.load(); this.toast("Link verwijderd", "ok"); }); };
+      if (b("ledit")) b("ledit").onclick = () => { L.edit = tr.dataset.key; this.renderContent(); const i = this.shadowRoot.querySelector(".lnew"); if (i) i.focus(); };
+      if (b("lcancel")) b("lcancel").onclick = () => { L.edit = null; this.renderContent(); };
+      if (b("lsave")) b("lsave").onclick = () => { const url = b("lnew").value.trim(); if (!url) return this.toast("Vul een URL of ASIN in", "err"); this.busy(b("lsave"), "", async () => { await this.svc("set_offer", { set_number: num, retailer: rid, url }); L.edit = null; await this.load(); this.toast("Link vervangen en goedgekeurd", "ok"); }); };
+      const inp = b("lnew"); if (inp) inp.addEventListener("keydown", (e) => { if (e.key === "Enter") b("lsave").click(); if (e.key === "Escape") b("lcancel").click(); });
+    });
     // import wizard
     const imp = s.imp;
     const readFile = async (f) => { if (!f) return; if (f.size > 2_000_000) return this.toast("Bestand te groot (max 2 MB)", "err"); imp.text = await f.text(); imp.name = f.name; await analyze(); };
@@ -716,7 +833,9 @@ class LegoTrackerPanel extends HTMLElement {
     if (s.target_price && allT.length) series.push({ name: "Streefprijs", color: "#7a3c9e", dashed: true, points: [[Math.min(...allT), s.target_price], [Math.max(...allT), s.target_price]] });
     const offers = Object.entries(s.offers);
     const cheapest = Math.min(...offers.map(([, o]) => o.price ?? Infinity));
-    const orows = offers.map(([rid, o]) => `<tr><td><b>${esc(o.label)}</b>${o.error ? `<div class="err">${esc(o.error)}</div>` : ""}</td><td class="num">${o.price != null ? `<b class="${o.price === cheapest ? "ok" : ""}">${EUR(o.price)}</b>` : "–"}</td><td class="num">${EUR(o.low)}</td><td class="muted">${ago(o.checked)}</td><td>${o.url ? `<a href="${esc(o.url)}" target="_blank" rel="noopener noreferrer">open ↗</a>` : ""}</td><td style="white-space:nowrap"><input class="mp" data-rid="${rid}" type="number" min="0" step="0.01" placeholder="prijs" style="width:88px;padding:6px 8px"> <button class="btn ghost sm mpb" data-rid="${rid}" title="Handmatige prijs opslaan">✓</button></td></tr>`).join("");
+    const lk = (o) => { const st = o.link_status || "unknown"; return `<span class="lk ${st}" title="${esc(o.link_reason || "")}">${{ ok: "✓ klopt", confirmed: "✓ goedgekeurd", suspect: "⚠ verdacht", unknown: "? niet gecontroleerd" }[st]}</span>`; };
+    const orows = offers.map(([rid, o]) => `<tr><td><b>${esc(o.label)}</b> ${lk(o)}${o.title ? `<div class="muted" style="font-size:12px;max-width:260px">${esc(o.title.slice(0, 90))}</div>` : ""}${o.link_status === "suspect" ? `<div class="err">${esc(o.link_reason || "")}</div>` : ""}${o.error ? `<div class="err">${esc(o.error)}</div>` : ""}
+      <div style="margin-top:4px">${o.link_status !== "confirmed" ? `<button class="btn ghost sm okb" data-rid="${rid}" title="Deze link is de juiste set">✓ Klopt</button> ` : ""}<button class="btn ghost sm rmb" data-rid="${rid}" title="Verkeerde link verwijderen">🗑</button></div></td><td class="num">${o.price != null ? `<b class="${o.price === cheapest ? "ok" : ""}">${EUR(o.price)}</b>` : "–"}</td><td class="num">${EUR(o.low)}</td><td class="muted">${ago(o.checked)}</td><td>${o.url ? `<a href="${esc(o.url)}" target="_blank" rel="noopener noreferrer">open ↗</a>` : ""}</td><td style="white-space:nowrap"><input class="mp" data-rid="${rid}" type="number" min="0" step="0.01" placeholder="prijs" style="width:88px;padding:6px 8px"> <button class="btn ghost sm mpb" data-rid="${rid}" title="Handmatige prijs opslaan">✓</button></td></tr>`).join("");
     const c = s.collection || {};
     const stat = (l, v) => `<div class="stat"><small>${l}</small><b>${v}</b></div>`;
     dlg.innerHTML = `<div class="dhead"><div class="img">${this.img(s, true)}</div><div><h2>${esc(s.name || "Set " + s.set_number)}</h2><div class="muted">${esc(s.set_number)} · ${esc(s.theme || "?")}${s.subtheme ? " / " + esc(s.subtheme) : ""}${s.year ? " · " + s.year : ""}${s.pieces ? " · " + INT(s.pieces) + " stenen" : ""}</div>
@@ -756,6 +875,8 @@ class LegoTrackerPanel extends HTMLElement {
     const find = async (btn) => this.busy(btn, "Zoeken…", async () => { const r = await this.svc("discover_offers", { set_number: num }, true); await this.load(); this.toast(`${r.response.found} winkel-links gevonden`, r.response.found ? "ok" : ""); this.openSet(num); });
     q("find").onclick = (e) => find(e.currentTarget); if (q("find2")) q("find2").onclick = () => find(q("find"));
     q("rf").onclick = (e) => this.busy(e.currentTarget, "Ophalen…", async () => { await this.svc("refresh", { set_number: num }); await this.load(); this.openSet(num); });
+    dlg.querySelectorAll(".okb").forEach((btn) => btn.onclick = () => this.busy(btn, "", async () => { await this.svc("confirm_offer", { set_number: num, retailer: btn.dataset.rid }); await this.load(); this.openSet(num); }));
+    dlg.querySelectorAll(".rmb").forEach((btn) => btn.onclick = () => { if (!confirm("Deze link verwijderen? Hij wordt niet opnieuw automatisch gekoppeld.")) return; this.busy(btn, "", async () => { await this.svc("remove_offer", { set_number: num, retailer: btn.dataset.rid }); await this.load(); this.toast("Link verwijderd", "ok"); this.openSet(num); }); });
     dlg.querySelectorAll(".mpb").forEach((btn) => btn.onclick = () => {
       const rid = btn.dataset.rid, val = parseFloat(dlg.querySelector(`.mp[data-rid="${rid}"]`).value);
       if (!(val > 0) || val > 10000) return this.toast("Geef een geldige prijs in", "err");

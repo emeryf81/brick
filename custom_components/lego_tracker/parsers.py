@@ -206,22 +206,107 @@ def search_url(retailer: str, set_number: str) -> str | None:
     return None
 
 
+# ------------------------------------------------------------ product matching
+# Accessories and look-alikes that mention a LEGO set number but are not the set itself.
+ACCESSORY_RE = re.compile(
+    r"\b(led|leds|verlichting|beleuchtung|licht(?:set|kit)?|lighting|light kit|lampen|vitrine|display ?case|"
+    r"schaukasten|acryl|acrylic|showcase|stofkap|staubschutz|dust ?cover|wandhalter|wall mount|halterung|"
+    r"sticker|aufkleber|poster|puzzle|sokken|socks|t-shirt|mok|mug|sleutelhanger|schl[uü]sselanh[aä]nger|keychain|"
+    r"magneet|magnet|handleiding|instructions only|anleitung|bauanleitung|ersatzteile|onderdelen los|spare parts|"
+    r"compatibel|compatible|kompatibel|niet van lego|kein lego|not lego|geen lego)\b", re.I)
+KNOCKOFF_RE = re.compile(r"\b(keeppley|mould ?king|cada|lepin|bluebrixx|cobi|sluban|qman|wange|reobrix|pantasy|"
+                         r"funwhole|jmbricklayer|lumibricks|briksmax|light my bricks|lightailing|kyglaring|brickbling)\b", re.I)
+
+
+def title_check(title: str | None, set_number: str) -> tuple[str | None, str]:
+    """('ok' | 'suspect' | None, reason). None = nothing to judge."""
+    if not title:
+        return None, "nog geen producttitel bekend"
+    t = htmllib.unescape(title)
+    if KNOCKOFF_RE.search(t):
+        return "suspect", f"ander merk: {KNOCKOFF_RE.search(t).group(0)}"
+    if ACCESSORY_RE.search(t):
+        return "suspect", f"lijkt een accessoire ({ACCESSORY_RE.search(t).group(0)})"
+    if not re.search(rf"(?<!\d){re.escape(set_number)}(?!\d)", t):
+        return "suspect", f"setnummer {set_number} staat niet in de titel"
+    if not re.search(r"lego", t, re.I):
+        return "suspect", "geen LEGO in de titel"
+    return "ok", "titel bevat setnummer"
+
+
+def slug_title(url: str) -> str | None:
+    """bol/kruidvat URLs carry the product name in the path; Amazon /dp/ URLs do not."""
+    path = urlparse(url).path
+    m = re.search(r"/p/([^/]+)/", path) or re.search(r"/nl/([^/]+)/p/", path)
+    return m.group(1).replace("-", " ") if m else None
+
+
+def clean_title(title: str, set_number: str) -> str:
+    """'LEGO Icons 10311 Orchidee, Kunstplanten ... | bol.com' -> 'Orchidee'-ish short name."""
+    t = htmllib.unescape(title)
+    t = re.split(r"\s[|:]\s|: Amazon|\s-\s(?:Amazon|bol\.com|Kruidvat)", t)[0]
+    t = re.sub(rf"(?<!\d){re.escape(set_number)}(?!\d)", "", t)
+    t = re.sub(r"\bLEGO\b\s*®?", "", t, flags=re.I)
+    t = re.split(r",|\s\(|\s–\s", t)[0]
+    t = re.sub(r"\s{2,}", " ", t).strip(" -–:")
+    return t[:80] or title[:80]
+
+
+def _amazon_results(page: str) -> list[tuple[str, str]]:
+    out = []
+    for asin, chunk in re.findall(r'data-asin="(B[0-9A-Z]{9})"(.*?)(?=data-asin="B|$)', page, re.S):
+        m = (re.search(r"<h2[^>]*>(.*?)</h2>", chunk, re.S) or re.search(r'aria-label="([^"]+)"', chunk)
+             or re.search(r'class="[^"]*a-text-normal[^"]*"[^>]*>(.*?)<', chunk, re.S))
+        if m:
+            out.append((asin, re.sub(r"\s+", " ", htmllib.unescape(re.sub(r"<[^>]+>", " ", m.group(1)))).strip()))
+    return out
+
+
 def find_search_result(retailer: str, page: str, set_number: str) -> str | None:
-    """Best-effort: first search hit whose text mentions the set number."""
+    """First search hit whose *title* passes title_check (set number, LEGO, no accessory/knock-off)."""
     if retailer in AMAZON_DOMAINS:
-        for asin, chunk in re.findall(r'data-asin="(B[0-9A-Z]{9})"(.*?)(?=data-asin=|$)', page, re.S):
-            text = htmllib.unescape(re.sub(r"<[^>]+>", " ", chunk))
-            if set_number in text and re.search(r"lego", text, re.I):
+        for asin, title in _amazon_results(page):
+            if title_check(title, set_number)[0] == "ok":
                 return amazon_url(retailer, asin)
     elif retailer == "bol":
-        for href in re.findall(r'href="(/nl/nl/p/[^"]+)"', page):
-            if set_number in href:
-                return "https://www.bol.com" + href.split("?")[0]
+        for href in dict.fromkeys(re.findall(r'href="(/nl/nl/p/[^"]+)"', page)):
+            url = "https://www.bol.com" + href.split("?")[0]
+            if title_check(f"lego {slug_title(url) or ''}", set_number)[0] == "ok":
+                return url
     elif retailer == "kruidvat_be":
-        for href in re.findall(r'href="(/nl/[^"]*?/p/\d+[^"]*)"', page):
-            if set_number in href or "lego" in href.lower():
-                return "https://www.kruidvat.be" + href.split("?")[0]
+        for href in dict.fromkeys(re.findall(r'href="(/nl/[^"]*?/p/\d+[^"]*)"', page)):
+            url = "https://www.kruidvat.be" + href.split("?")[0]
+            if title_check(slug_title(url), set_number)[0] == "ok":
+                return url
     return None
+
+
+def parse_brickset_page(page: str) -> dict:
+    """Best effort metadata from a public brickset.com/sets/<n>-1 page (fallback when no API key)."""
+    out: dict = {}
+    t = _meta(page, "og:title") or _title(page) or ""
+    m = re.match(r"\s*\d+-\d+:\s*(.*?)\s*(?:\|.*)?$", t)
+    if m:
+        out["name"] = m.group(1)
+    img = _meta(page, "og:image")
+    if img and img.startswith("https://"):
+        out["image"] = img
+    for dt, dd in re.findall(r"<dt>\s*(.*?)\s*</dt>\s*<dd[^>]*>(.*?)</dd>", page, re.S):
+        key = re.sub(r"<[^>]+>", "", dt).strip().lower()
+        val = re.sub(r"\s+", " ", htmllib.unescape(re.sub(r"<[^>]+>", " ", dd))).strip()
+        if key == "theme":
+            out["theme"] = val
+        elif key == "subtheme":
+            out["subtheme"] = val
+        elif key == "year released" and val[:4].isdigit():
+            out["year"] = int(val[:4])
+        elif key == "pieces" and re.match(r"\d", val):
+            out["pieces"] = int(re.match(r"[\d,]+", val).group(0).replace(",", ""))
+        elif key == "rrp":
+            eur = re.search(r"([\d.,]+)\s*€|€\s*([\d.,]+)", val)
+            if eur:
+                out["rrp"] = parse_price(eur.group(1) or eur.group(2))
+    return out
 
 
 def retailer_from_url(url: str) -> str | None:

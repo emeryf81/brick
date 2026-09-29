@@ -21,7 +21,7 @@ def normalize_set_number(value: str | int) -> str:
 
 
 def new_store() -> dict[str, Any]:
-    return {"sets": {}, "offers": {}, "collection": {}, "snapshots": [], "events": []}
+    return {"sets": {}, "offers": {}, "collection": {}, "snapshots": [], "events": [], "rejected": {}}
 
 
 def parse_price(text: str | float | int | None) -> float | None:
@@ -87,14 +87,20 @@ def price_at(history: list[list[float]], ts: float) -> float | None:
     return result
 
 
+def trusted(offers: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Offers whose link is not flagged as pointing to the wrong product."""
+    return {rid: o for rid, o in offers.items() if o.get("link_status") != "suspect"}
+
+
 def best_offer(offers: dict[str, dict[str, Any]]) -> tuple[str, dict[str, Any]] | None:
-    """Cheapest currently available offer."""
-    live = [(rid, o) for rid, o in offers.items() if o.get("available") and o.get("last_price")]
+    """Cheapest currently available offer (suspect links excluded)."""
+    live = [(rid, o) for rid, o in trusted(offers).items() if o.get("available") and o.get("last_price")]
     return min(live, key=lambda x: x[1]["last_price"]) if live else None
 
 
 def combined_history(offers: dict[str, dict[str, Any]]) -> list[list[float]]:
-    """Cheapest-of-all-retailers series (forward filled) across all timestamps."""
+    """Cheapest-of-all-retailers series (forward filled) across all timestamps; suspect links excluded."""
+    offers = trusted(offers)
     stamps = sorted({t for o in offers.values() for t, _ in o.get("history", [])})
     out: list[list[float]] = []
     for ts in stamps:
@@ -124,6 +130,7 @@ def compute_set_status(
         "price_per_piece": None, "change_7d": None, "change_30d": None,
         "target_price": lego_set.get("target_price"), "target_hit": False,
         "offers_error": sum(1 for o in offers.values() if o.get("error")),
+        "offers_suspect": sum(1 for o in offers.values() if o.get("link_status") == "suspect"),
         "deal_score": 0, "deal_label": None, **retirement_status(lego_set, now),
     }
     status["offers_live"] = sum(1 for o in offers.values() if o.get("available"))
@@ -199,6 +206,33 @@ def retirement_status(lego_set: dict[str, Any], now: float | None = None) -> dic
         "retired": days is not None and days < 0,
         "retires_in_days": days,
     }
+
+
+def link_check(offer: dict[str, Any], lego_set: dict[str, Any], set_number: str) -> tuple[str | None, str]:
+    """Is this shop link the right product? Uses the page title (or URL slug) and the price.
+
+    Returns (status, reason) with status 'ok', 'suspect' or None (cannot judge yet).
+    A manual 'confirmed' is never overridden."""
+    from .parsers import slug_title, title_check  # local import: parsers imports this module
+
+    if offer.get("link_status") == "confirmed":
+        return "confirmed", "handmatig goedgekeurd"
+    title = offer.get("title")
+    status, reason = title_check(title, set_number) if title else (None, "")
+    if status is None and offer.get("url"):
+        slug = slug_title(offer["url"])
+        if slug:
+            status, reason = title_check(f"lego {slug}", set_number)
+            reason = f"URL: {reason}"
+    if status == "suspect":
+        return status, reason
+    rrp = lego_set.get("rrp")
+    low = min((p for _, p in offer.get("history", [])), default=None)
+    if rrp and low is not None and low < rrp * 0.3:
+        return "suspect", f"prijs €{low:.2f} is veel te laag voor deze set (adviesprijs €{rrp:.2f})"
+    if status is None:
+        return None, "nog geen producttitel bekend (wordt ingevuld bij de volgende prijsronde)"
+    return status, reason
 
 
 def is_suspicious_price(price: float, lego_set: dict[str, Any], offer: dict[str, Any]) -> str | None:

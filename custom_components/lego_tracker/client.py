@@ -11,7 +11,7 @@ from typing import Any
 import aiohttp
 
 from .models import normalize_set_number
-from .parsers import Parsed, find_search_result, parse_page, search_url
+from .parsers import Parsed, find_search_result, parse_brickset_page, parse_page, search_url
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -129,6 +129,13 @@ class Fetcher:
             await asyncio.sleep(self.min_delay + random.random() * 3)
             return await self._request(retailer, url, referer=origin)
 
+    def reset_cooldowns(self) -> None:
+        self.blocked_until.clear()
+        self.blocks.clear()
+
+    def paused(self) -> dict[str, float]:
+        return {r: round(self.cooldown_left(r) / 3600, 2) for r in self.blocked_until if self.cooldown_left(r) > 0}
+
     def cooldown_left(self, retailer: str) -> float:
         return max(0.0, self.blocked_until.get(retailer, 0) - time.time())
 
@@ -203,3 +210,63 @@ async def brickset_lookup(session: aiohttp.ClientSession, api_key: str, set_numb
         "themeGroup": s.get("themeGroup"),
         "exit_date": (s.get("exitDate") or "")[:10] or None,
     }
+
+
+_RB_THEMES: dict[int, dict[str, Any]] = {}
+
+
+async def rebrickable_lookup(session: aiohttp.ClientSession, api_key: str, set_number: str) -> dict[str, Any] | None:
+    """Metadata from the Rebrickable API v3 (free key at rebrickable.com/api). No RRP there."""
+    if not api_key:
+        return None
+    headers = {"Authorization": f"key {api_key}", "Accept": "application/json"}
+    base = "https://rebrickable.com/api/v3/lego"
+    try:
+        async with session.get(f"{base}/sets/{normalize_set_number(set_number)}-1/", headers=headers,
+                               timeout=aiohttp.ClientTimeout(total=20)) as resp:
+            if resp.status != 200:
+                return None
+            s = await resp.json(content_type=None)
+        out = {"name": s.get("name"), "year": s.get("year"), "pieces": s.get("num_parts") or None,
+               "image": s.get("set_img_url")}
+        tid = s.get("theme_id")
+        chain: list[str] = []
+        while tid and len(chain) < 4:
+            if tid not in _RB_THEMES:
+                async with session.get(f"{base}/themes/{tid}/", headers=headers,
+                                       timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                    if resp.status != 200:
+                        break
+                    _RB_THEMES[tid] = await resp.json(content_type=None)
+            chain.insert(0, _RB_THEMES[tid].get("name"))
+            tid = _RB_THEMES[tid].get("parent_id")
+        if chain:
+            out["theme"] = chain[0]
+            if len(chain) > 1:
+                out["subtheme"] = chain[-1]
+        return {k: v for k, v in out.items() if v}
+    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+        return None
+
+
+async def brickset_page_lookup(session: aiohttp.ClientSession, set_number: str) -> dict[str, Any] | None:
+    """Fallback without any key: the public brickset.com set page."""
+    url = f"https://brickset.com/sets/{normalize_set_number(set_number)}-1"
+    try:
+        async with session.get(url, headers=BROWSER_HEADERS, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+            if resp.status != 200:
+                return None
+            return parse_brickset_page(await resp.text(errors="replace")) or None
+    except (aiohttp.ClientError, asyncio.TimeoutError):
+        return None
+
+
+async def lookup_metadata(session: aiohttp.ClientSession, brickset_key: str, rebrickable_key: str,
+                          set_number: str) -> tuple[dict[str, Any], str | None]:
+    """Try Brickset API, then Rebrickable API, then the Brickset web page. Returns (data, source)."""
+    for source, coro in (("Brickset", brickset_lookup(session, brickset_key, set_number) if brickset_key else None),
+                         ("Rebrickable", rebrickable_lookup(session, rebrickable_key, set_number) if rebrickable_key else None)):
+        if coro is not None and (data := await coro):
+            return {k: v for k, v in data.items() if v}, source
+    data = await brickset_page_lookup(session, set_number)
+    return (data or {}), ("brickset.com" if data else None)

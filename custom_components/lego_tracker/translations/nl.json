@@ -6,17 +6,22 @@
         "data": {
           "discount_threshold": "Kortingsdrempel (%) voor 'hoge korting'",
           "retailers": "Winkels om te controleren",
-          "update_hours": "Ververs-interval (uren)",
           "digest_time": "Tijdstip dagelijkse samenvatting",
           "min_history_days": "Minimaal aantal dagen historiek voor een 'laagste prijs ooit'",
           "brickset_api_key": "Brickset API-sleutel (optioneel, vult naam/thema/adviesprijs/afbeelding aan)",
           "use_impersonation": "Chrome-browser nabootsen (installeert curl_cffi; veel minder blokkades)",
-          "notify_service": "Notify-service voor deals (bv. notify.mobile_app_telefoon, optioneel)"
+          "notify_service": "Notify-service voor deals (bv. notify.mobile_app_telefoon, optioneel)",
+          "auto_refresh": "Prijzen automatisch ophalen",
+          "refresh_times": "Tijdstippen (bv. 07:30, 19:30)",
+          "rebrickable_api_key": "Rebrickable API-sleutel (optioneel, gratis; vult naam/thema/jaar/stenen/afbeelding aan)"
         }
       }
     },
     "abort": {
       "single_instance_allowed": "Reeds geconfigureerd"
+    },
+    "error": {
+      "invalid_times": "Geef 1 tot 6 tijdstippen als UU:MM, gescheiden door komma's"
     }
   },
   "options": {
@@ -26,14 +31,19 @@
         "data": {
           "discount_threshold": "Kortingsdrempel (%) voor 'hoge korting'",
           "retailers": "Winkels om te controleren",
-          "update_hours": "Ververs-interval (uren)",
           "digest_time": "Tijdstip dagelijkse samenvatting",
           "min_history_days": "Minimaal aantal dagen historiek voor een 'laagste prijs ooit'",
           "brickset_api_key": "Brickset API-sleutel (optioneel, vult naam/thema/adviesprijs/afbeelding aan)",
           "use_impersonation": "Chrome-browser nabootsen (installeert curl_cffi; veel minder blokkades)",
-          "notify_service": "Notify-service voor deals (bv. notify.mobile_app_telefoon, optioneel)"
+          "notify_service": "Notify-service voor deals (bv. notify.mobile_app_telefoon, optioneel)",
+          "auto_refresh": "Prijzen automatisch ophalen",
+          "refresh_times": "Tijdstippen (bv. 07:30, 19:30)",
+          "rebrickable_api_key": "Rebrickable API-sleutel (optioneel, gratis; vult naam/thema/jaar/stenen/afbeelding aan)"
         }
       }
+    },
+    "error": {
+      "invalid_times": "Geef 1 tot 6 tijdstippen als UU:MM, gescheiden door komma's"
     }
   },
   "entity": {

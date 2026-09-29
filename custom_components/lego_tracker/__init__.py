@@ -24,6 +24,7 @@ from .const import (
 )
 from .coordinator import LegoCoordinator
 from .csv_import import analyze_csv, apply_import, importable_rows
+from .models import normalize_set_number
 from .websocket_api import async_register_websocket
 
 _LOGGER = logging.getLogger(__name__)
@@ -46,7 +47,13 @@ SERVICE_SCHEMAS = {
         vol.Optional("owned", default=False): cv.boolean,
     }),
     "remove_set": vol.Schema({SET: cv.string}),
-    "discover_offers": vol.Schema({vol.Optional("set_number"): cv.string}),
+    "discover_offers": vol.Schema({vol.Optional("set_number"): cv.string, vol.Optional("force", default=False): cv.boolean}),
+    "enrich_sets": vol.Schema({vol.Optional("set_number"): cv.string, vol.Optional("all", default=False): cv.boolean}),
+    "verify_links": vol.Schema({}),
+    "confirm_offer": vol.Schema({SET: cv.string, vol.Required("retailer"): vol.In(list(RETAILERS))}),
+    "remove_offer": vol.Schema({SET: cv.string, vol.Required("retailer"): vol.In(list(RETAILERS)),
+                                vol.Optional("block", default=True): cv.boolean}),
+    "cancel_job": vol.Schema({}),
     "export_collection": vol.Schema({}),
     "export_data": vol.Schema({}),
     "import_data": vol.Schema({
@@ -54,7 +61,7 @@ SERVICE_SCHEMAS = {
     }),
     "set_offer": vol.Schema({SET: cv.string, vol.Required("retailer"): vol.In(list(RETAILERS)),
                              vol.Required("url"): cv.string}),
-    "refresh": vol.Schema({vol.Optional("set_number"): cv.string}),
+    "refresh": vol.Schema({vol.Optional("set_number"): cv.string, vol.Optional("force", default=False): cv.boolean}),
     "import_collection": vol.Schema({
         vol.Optional("csv_text"): cv.string, vol.Optional("file_path"): cv.string,
         vol.Optional("replace", default=False): cv.boolean, vol.Optional("track_prices", default=True): cv.boolean,
@@ -114,8 +121,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coord.async_load()
     _LOGGER.info("LEGO Price Tracker %s starting (request transport: %s)", VERSION, coord.fetcher.transport)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coord
-    coord.async_set_updated_data(coord.compute())  # entities are usable before the first (slow) poll
-    entry.async_create_background_task(hass, coord.async_refresh(), f"{DOMAIN}_first_refresh")
+    coord.async_set_updated_data(coord.compute())
+    # No shop round at start-up: hammering 5 shops on every HA restart gets us blocked.
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_reload))
@@ -129,10 +136,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     t = dt_util.parse_time(coord.opt(entry, CONF_DIGEST_TIME, DEFAULT_DIGEST_TIME)) or dt_util.parse_time(DEFAULT_DIGEST_TIME)
 
     async def _daily(_now: datetime) -> None:
-        await coord.async_request_refresh()
         await _send_digest(hass, coord)
 
     entry.async_on_unload(async_track_time_change(hass, _daily, t.hour, t.minute, t.second))
+
+    @callback
+    def _scheduled_refresh(_now: datetime) -> None:
+        if coord.job_running:
+            _LOGGER.info("Scheduled price round skipped: %s is still running", coord.job["label"])
+            return
+        coord.start_refresh()
+
+    if coord.auto_refresh:
+        for hour, minute in coord.refresh_times:
+            entry.async_on_unload(async_track_time_change(hass, _scheduled_refresh, hour, minute, 0))
     return True
 
 
@@ -174,7 +191,12 @@ def _register_services(hass: HomeAssistant) -> None:
         return {"added": len(nums)}
 
     async def discover_offers(call: ServiceCall) -> dict:
-        return {"found": await _coordinator(hass).discover_offers(call.data.get("set_number"))}
+        c = _coordinator(hass)
+        if num := call.data.get("set_number"):
+            res = await c.discover_set(normalize_set_number(num), c._live_retailers(call.data["force"]))
+            c.push_update()
+            return {"started": False, **res}
+        return _job(c.start_discover, call.data["force"])
 
     async def export_collection(call: ServiceCall) -> dict:
         return {"csv": _coordinator(hass).export_csv()}
@@ -204,13 +226,51 @@ def _register_services(hass: HomeAssistant) -> None:
         except ValueError as err:
             raise ServiceValidationError(str(err)) from err
 
-    async def refresh(call: ServiceCall) -> None:
+    def _job(fn, *args) -> dict:
+        try:
+            return {"started": True, **fn(*args)}
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+
+    async def refresh(call: ServiceCall) -> dict:
         c = _coordinator(hass)
         if num := call.data.get("set_number"):
-            await c.refresh_set(num)
+            num = normalize_set_number(num)
+            if num not in c.store["sets"]:
+                raise ServiceValidationError(f"Set {num} wordt niet gevolgd")
+            res = await c.refresh_set(num, c._live_retailers(call.data["force"]))
             c.push_update()
-        else:
-            await c.async_refresh()
+            return {"started": False, **res}
+        return _job(c.start_refresh, call.data["force"])
+
+    async def enrich_sets(call: ServiceCall) -> dict:
+        c = _coordinator(hass)
+        if num := call.data.get("set_number"):
+            res = await c.enrich_set(normalize_set_number(num))
+            c.push_update()
+            return {"started": False, **res}
+        return _job(c.start_enrich, call.data["all"])
+
+    async def verify_links(call: ServiceCall) -> dict:
+        c = _coordinator(hass)
+        res = c.verify_links()
+        c.push_update()
+        return res
+
+    async def confirm_offer(call: ServiceCall) -> None:
+        try:
+            _coordinator(hass).confirm_offer(call.data["set_number"], call.data["retailer"])
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+
+    async def remove_offer(call: ServiceCall) -> None:
+        try:
+            _coordinator(hass).remove_offer(call.data["set_number"], call.data["retailer"], call.data["block"])
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+
+    async def cancel_job(call: ServiceCall) -> dict:
+        return {"cancelled": _coordinator(hass).cancel_job()}
 
     async def import_collection(call: ServiceCall) -> dict:
         c = _coordinator(hass)
@@ -231,8 +291,8 @@ def _register_services(hass: HomeAssistant) -> None:
         for r in rows:
             c.store["offers"].setdefault(r["set_number"], {})
         c.push_update()
-        if call.data["track_prices"]:
-            hass.async_create_task(_discover_offers(c, [r["set_number"] for r in rows]))
+        if call.data["track_prices"] and not c.job_running:
+            c.start_discover()
         return {**result, "skipped": analysis["summary"]["error"], "warnings": warnings[:50]}
 
     async def report_price(call: ServiceCall) -> None:
@@ -246,28 +306,15 @@ def _register_services(hass: HomeAssistant) -> None:
         await _send_digest(hass, _coordinator(hass))
 
     for name, handler in (("add_sets", add_sets), ("discover_offers", discover_offers), ("export_collection", export_collection),
-                          ("export_data", export_data), ("import_data", import_data)):
+                          ("export_data", export_data), ("import_data", import_data), ("refresh", refresh),
+                          ("enrich_sets", enrich_sets), ("verify_links", verify_links), ("cancel_job", cancel_job)):
         hass.services.async_register(DOMAIN, name, handler, SERVICE_SCHEMAS[name], supports_response=SupportsResponse.OPTIONAL)
     for name, handler in (("add_set", add_set), ("remove_set", remove_set), ("set_offer", set_offer),
-                          ("refresh", refresh), ("report_price", report_price), ("send_digest", send_digest)):
+                          ("confirm_offer", confirm_offer), ("remove_offer", remove_offer),
+                          ("report_price", report_price), ("send_digest", send_digest)):
         hass.services.async_register(DOMAIN, name, handler, SERVICE_SCHEMAS[name])
     hass.services.async_register(DOMAIN, "import_collection", import_collection,
                                  SERVICE_SCHEMAS["import_collection"], supports_response=SupportsResponse.OPTIONAL)
-
-
-async def _discover_offers(c: LegoCoordinator, numbers: list[str]) -> None:
-    """Background: find retailer URLs for freshly imported sets (slow on purpose)."""
-    for num in numbers:
-        offers = c.store["offers"].setdefault(num, {})
-        for rid in c.retailers:
-            if rid in offers:
-                continue
-            try:
-                if url := await c.fetcher.discover(rid, num):
-                    offers[rid] = {"url": url, "history": []}
-            except Exception:  # noqa: BLE001 - never let discovery kill the task
-                _LOGGER.debug("discovery failed for %s/%s", num, rid, exc_info=True)
-        c.push_update()
 
 
 async def _reload(hass: HomeAssistant, entry: ConfigEntry) -> None:

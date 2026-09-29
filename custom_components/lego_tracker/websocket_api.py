@@ -32,7 +32,8 @@ def _card(coord, num: str, with_history: bool = False) -> dict[str, Any]:
         "offers": {
             rid: {"label": RETAILERS[rid][0], "url": o.get("url"), "price": o.get("last_price") if o.get("available") else None,
                   "available": o.get("available"), "error": o.get("error"), "checked": o.get("last_checked"),
-                  "low": min((p for _, p in o.get("history", [])), default=None)}
+                  "low": min((p for _, p in o.get("history", [])), default=None),
+                  "title": o.get("title"), "link_status": o.get("link_status"), "link_reason": o.get("link_reason")}
             for rid, o in offers.items() if rid in RETAILERS
         },
     }
@@ -49,6 +50,7 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_collection)
     websocket_api.async_register_command(hass, ws_update_set)
     websocket_api.async_register_command(hass, ws_import_preview)
+    websocket_api.async_register_command(hass, ws_job)
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/overview"})
@@ -71,6 +73,7 @@ def ws_overview(hass, connection, msg):
         "analytics": (coord.data or coord.compute())["analytics"],
         "events": list(reversed(coord.store.get("events", [])[-40:])),
         "retailer_stats": coord.retailer_stats(),
+        **coord.job_info(),
         "health": {
             "errors": sum(s["offers_error"] for s in (coord.data or coord.compute())["statuses"].values()),
             "paused_hours": {RETAILERS[r][0]: round(coord.fetcher.cooldown_left(r) / 3600, 1)
@@ -137,3 +140,14 @@ def ws_import_preview(hass, connection, msg):
         connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
         return
     connection.send_result(msg["id"], analyze_csv(msg["csv_text"], coord.store, replace=msg["replace"]))
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/job"})
+@callback
+def ws_job(hass, connection, msg):
+    """Progress of the running background job (polled by the panel)."""
+    coord = _coord(hass)
+    if coord is None:
+        connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
+        return
+    connection.send_result(msg["id"], coord.job_info())

@@ -17,6 +17,10 @@ CONF_BRICKSET_KEY = "brickset_api_key"
 CONF_MIN_HISTORY_DAYS = "min_history_days"
 CONF_IMPERSONATE = "use_impersonation"
 CONF_NOTIFY = "notify_service"
+CONF_REBRICKABLE_KEY = "rebrickable_api_key"
+CONF_AUTO_REFRESH = "auto_refresh"
+CONF_REFRESH_TIMES = "refresh_times"
+DEFAULT_REFRESH_TIMES = "07:30, 19:30"
 
 DEFAULT_DISCOUNT_THRESHOLD = 25
 DEFAULT_UPDATE_HOURS = 6
@@ -37,6 +41,7 @@ EVENT_DIGEST = f"{DOMAIN}_daily_digest"
 EVENT_NEW_LOW = f"{DOMAIN}_new_all_time_low"
 EVENT_HIGH_DISCOUNT = f"{DOMAIN}_high_discount"
 EVENT_TARGET_HIT = f"{DOMAIN}_target_price_reached"
+EVENT_JOB_DONE = f"{DOMAIN}_job_finished"
 
 # Max price observations kept per offer (one per day is ~10 years).
 MAX_HISTORY = 4000
