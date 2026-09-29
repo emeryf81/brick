@@ -12,7 +12,7 @@ from homeassistant.components.http import KEY_HASS, HomeAssistantView
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
-from .const import DOMAIN, RETAILERS
+from .const import DOMAIN, PANEL_URL, RETAILERS
 from .csv_import import analyze_csv
 from .i18n import tr
 from .models import combined_history, normalize_set_number, offer_price
@@ -78,6 +78,7 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_notify_set)
     websocket_api.async_register_command(hass, ws_notify_test)
     hass.http.register_view(UserscriptView())
+    hass.http.register_view(RelayView())
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/overview"})
@@ -102,7 +103,9 @@ def ws_overview(hass, connection, msg):
         "retailer_stats": coord.retailer_stats(),
         **coord.job_info(),
         "language": coord.language, "languages": _languages(),
-        "userscript_last": coord.store.get("userscript_last"),
+        "userscript_last": coord.store.get("userscript_last"), "relay_last": coord.store.get("relay_last"),
+        "relay": {"enabled": coord.relay_enabled, "pending": coord.relay_items(100)["total"] if coord.relay_enabled else 0},
+        "bol_api": bool(coord.bol_api),
         "value_source": coord.store.get("value_source", "shop_first"),
         "health": {
             "errors": sum(s["offers_error"] for s in (coord.data or coord.compute())["statuses"].values()),
@@ -216,8 +219,8 @@ async def ws_settings_set(hass, connection, msg):
 
 @websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/settings/test_key",
-                                  vol.Required("source"): vol.In(["brickset", "rebrickable"]),
-                                  vol.Optional("key"): str})
+                                  vol.Required("source"): vol.In(["brickset", "rebrickable", "bol"]),
+                                  vol.Optional("key"): str, vol.Optional("secret"): str})
 @websocket_api.async_response
 async def ws_test_key(hass, connection, msg):
     from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -225,6 +228,10 @@ async def ws_test_key(hass, connection, msg):
     from .client import test_metadata_source
 
     coord = _coord(hass)
+    if msg["source"] == "bol":
+        ok, text = await coord.test_bol(msg.get("key"), msg.get("secret"))
+        connection.send_result(msg["id"], {"ok": ok, "message": text})
+        return
     key = msg.get("key") or (coord.opt(coord.entry, f"{msg['source']}_api_key", "") if coord else "")
     ok, text = await test_metadata_source(async_get_clientsession(hass), msg["source"], key)
     connection.send_result(msg["id"], {"ok": ok, "message": text})
@@ -385,6 +392,48 @@ async def ws_set_enrich(hass, connection, msg):
     connection.send_result(msg["id"], {"result": res, "set": _card(coord, num, with_history=True)})
 
 
+class RelayView(HomeAssistantView):
+    """Browser relay for the userscript (needs the user's long-lived token).
+
+    GET  -> shop pages the browser should fetch (failed or stale on the server)
+    POST -> {"results": [{"set_number", "retailer", "url", "price"?, "title"?, "error"?}]}"""
+
+    url = "/api/lego_tracker/relay"
+    name = "api:lego_tracker:relay"
+    requires_auth = True
+
+    async def get(self, request: web.Request) -> web.Response:
+        coord = _coord(request.app[KEY_HASS])
+        if coord is None:
+            return self.json_message("not loaded", 503)
+        try:
+            limit = max(1, min(100, int(request.query.get("limit", "40"))))
+        except ValueError:
+            limit = 40
+        return self.json(coord.relay_items(limit))
+
+    async def post(self, request: web.Request) -> web.Response:
+        coord = _coord(request.app[KEY_HASS])
+        if coord is None:
+            return self.json_message("not loaded", 503)
+        try:
+            body = await request.json()
+            results = body.get("results") or []
+            assert isinstance(results, list) and len(results) <= 100
+        except Exception:  # noqa: BLE001 - any malformed body
+            return self.json_message("invalid body", 400)
+        out = {"ok": 0, "fail": 0, "rejected": []}
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            try:
+                out[coord.relay_result(item)] += 1
+            except ValueError as err:           # not tracked / suspicious price
+                out["rejected"].append(str(err))
+        coord.push_update()
+        return self.json(out)
+
+
 class UserscriptView(HomeAssistantView):
     """Serves a Tampermonkey userscript generated for this HA instance and the configured shops.
 
@@ -408,6 +457,8 @@ class UserscriptView(HomeAssistantView):
             base = f"{request.headers['X-Forwarded-Proto']}://{request.host}"
         matches = "\n".join(f"// @match        https://www.{d}/*\n// @match        https://{d}/*"
                             for d in sorted(set(all_domains().values())))
+        # Home Assistant itself (browser relay): this address and the panel on any address
+        matches += f"\n// @include      {base}/*\n// @include      *://*/{PANEL_URL}*"
         body = (template.replace("{{VERSION}}", VERSION).replace("{{MATCHES}}", matches)
                 .replace("{{HA_URL}}", base).replace("{{SELF_URL}}", base + self.url))
         # {{t:English}} -> translated text, {{tj:English}} -> translated JS string literal

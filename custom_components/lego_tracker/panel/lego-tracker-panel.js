@@ -357,7 +357,28 @@ class LegoTrackerPanel extends HTMLElement {
       for (const [k, v] of Object.entries(saved.sub || {})) if (SECTIONS[k] && SECTIONS[k].subs.some(([x]) => x === v)) this.state.sub[k] = v;
     } catch (e) { /* storage unavailable */ }
     this.resetFilters();
+    // browser relay: progress messages from the userscript running in this browser
+    window.addEventListener("message", (e) => {
+      const m = e.data;
+      if (!m || m.source !== "lego-tracker-userscript") return;
+      if (m.type === "relay-pong") { this.state.relayHere = m; }
+      if (m.type === "relay-status") {
+        this.state.relayRun = m;
+        if (m.finished) { this.toast(t("Browser relay done: {ok} prices, {fail} failed", { ok: m.ok, fail: m.fail }), m.ok ? "ok" : "err"); this.load(); }
+        if (m.error === "no-token") this.toast(t("The userscript has no token yet: Tampermonkey menu → LEGO Price Tracker settings"), "err");
+      }
+      const box = this.shadowRoot && this.shadowRoot.getElementById("relaybox"); if (box) { box.innerHTML = this.relayBoxInner(); this.bindRelay(box); }
+    });
   }
+  relayPing() { try { window.postMessage({ source: "lego-tracker-panel", type: "relay-ping" }, "*"); } catch (e) { /* ignore */ } }
+  relayBoxInner() {
+    const d = this.state.data || {}, here = this.state.relayHere, run = this.state.relayRun, last = d.relay_last, rel = d.relay || {};
+    const status = here ? `<span class="lk ok">✓ ${t("active in this browser")} (v${esc(here.version)})</span>${here.token ? "" : ` <span class="lk suspect">${t("no token yet")}</span>`}` : `<span class="lk unknown">${t("not detected in this browser")}</span>`;
+    const prog = run && run.running ? `<div class="meter" style="margin:8px 0"><i style="width:${run.total ? Math.round((run.done / run.total) * 100) : 0}%;animation:none;transition:width .6s"></i></div><div class="muted" style="font-size:12px">${t("{done}/{total} pages · {ok} prices · {fail} failed", { done: run.done || 0, total: run.total || 0, ok: run.ok || 0, fail: run.fail || 0 })}${run.shop ? ` · ${esc(run.shop)} ${esc(run.set_number || "")}` : ""}</div>` : "";
+    return `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${status}<span class="muted" style="font-size:13px">${rel.enabled === false ? t("Browser relay is off (Settings)") : t("{n} shop pages waiting for the relay", { n: rel.pending ?? 0 })}${last && last.ts ? " · " + t("last run {when}: {ok} prices, {fail} failed", { when: ago(last.ts), ok: last.ok || 0, fail: last.fail || 0 }) : ""}</span>
+      <span class="hsp" style="flex:1"></span><button class="btn sm" id="relaygo" ${here && !(run && run.running) && rel.enabled !== false ? "" : "disabled"}>▶ ${t("Run now in this browser")}</button></div>${prog}`;
+  }
+  bindRelay(box) { const b = box.querySelector("#relaygo"); if (b) b.onclick = () => { window.postMessage({ source: "lego-tracker-panel", type: "relay-run" }, "*"); this.state.relayRun = { running: true, done: 0, total: 0 }; box.innerHTML = this.relayBoxInner(); }; }
   set hass(h) { const first = !this._hass; this._hass = h; if (first) { this.render(true); this.load(); } }
   set narrow(v) { this._narrow = v; }
   set panel(_) {}
@@ -1113,6 +1134,15 @@ class LegoTrackerPanel extends HTMLElement {
       <div class="panel"><h3>🔑 ${t("Set data: API keys")}</h3><p>${t("The first source is always LEGO.com (RRP, image, name, “retiring soon”); the LEGO.com page is also tracked as a shop. Then: Brickset → Rebrickable → the public Brickset page (no key). If a source fails or misses something, the next one fills it in. Both keys are free and never sent back to your browser.")}</p>
         ${keyRow("brickset_api_key", t("Brickset API key"), t("Gives name, theme, year, pieces, image, RRP and retirement date."), "https://brickset.com/tools/webservices/requestkey")}
         ${keyRow("rebrickable_api_key", t("Rebrickable API key"), t("Gives name, theme, year, pieces and image (no RRP). After signing in: Account → Settings → API."), "https://rebrickable.com/api/")}</div>
+      <div class="panel"><h3>🛒 ${t("bol.com API (official, recommended)")}${st.bol_api ? ` <span class="lk ok">${t("active")}</span>` : ""}</h3>
+        <p>${t("bol.com blocks most servers, so the reliable way is bol.com's own API: free with a bol.com affiliate account (Partnerprogramma). Create API credentials there (client id + secret) and paste them here. Prices and links for bol.com then come from the API, without scraping or blocks.")} <a href="https://partner.bol.com" target="_blank" rel="noopener noreferrer">partner.bol.com ↗</a></p>
+        ${keyRow("bol_client_id", t("Client id"), "", "https://partner.bol.com")}
+        ${keyRow("bol_client_secret", t("Client secret"), "", "https://partner.bol.com")}
+        <div class="form" style="max-width:420px"><label>${t("bol.com country")}<select id="o_bolc">${[["auto", t("Automatic (from the LEGO.com country)")], ["NL", "bol.com NL"], ["BE", "bol.com BE"]].map(([v, l]) => `<option value="${v}" ${st.bol_country === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label></div></div>
+      <div class="panel"><h3>🔁 ${t("Browser relay")}</h3>
+        <p>${t("With the userscript installed, your own browser fetches the shop pages that fail on the server (for example bol.com or Amazon) in the background while Home Assistant is open, and sends the prices. Your browser is a normal visitor, so it is rarely blocked. See Manage → Userscript.")}</p>
+        <div class="form"><label class="chk"><input type="checkbox" id="o_relay" ${st.browser_relay ? "checked" : ""}> ${t("Browser relay on")}</label>
+        <label>${t("At most every … hours")}<input id="o_relayh" type="number" min="1" max="168" value="${st.relay_hours}"></label></div></div>
       <div class="panel"><h3>🏪 ${t("Shops")}</h3><p>${t("Tick the shops to check. “Pause automatically” pauses a shop after a block (1 → 3 → 6 → 12 → 24 h); switch it off if you don't want that (more risk of stricter blocks).")}</p>
         <p>${t("The search URL decides how “Find links” finds a product; every shop has a default that you can change. Easiest: search the shop for e.g. “lego 10311”, copy the address bar and paste it here — the set number is replaced by {query} automatically. {query} = “LEGO + set number”, {number} = the set number, {locale} = the LEGO.com country. ↺ restores the default.", { query: "<code>{query}</code>", number: "<code>{number}</code>", locale: "<code>{locale}</code>" })}</p>
         <div class="form" style="max-width:420px"><label>${t("LEGO.com country (language-country)")}<input id="o_locale" value="${esc(st.lego_locale || "nl-be")}" placeholder="nl-be"></label></div>
@@ -1144,7 +1174,9 @@ class LegoTrackerPanel extends HTMLElement {
     const ua = navigator.userAgent, browser = /Edg\//.test(ua) ? "edge" : /Firefox\//.test(ua) ? "firefox" : /Safari\//.test(ua) && !/Chrome\//.test(ua) ? "safari" : "chrome";
     const stores = { chrome: ["Chrome", "https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo"], edge: ["Edge", "https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd"], firefox: ["Firefox", "https://addons.mozilla.org/firefox/addon/tampermonkey/"], safari: ["Safari", "https://www.tampermonkey.net/?browser=safari"] };
     const step = (n, title, body) => `<div class="action" style="--i:${n}"><b><span class="st ok" style="margin-right:6px">${n}</span>${title}</b>${body}</div>`;
-    return `<div class="panel"><h3>🧩 ${t("Send prices from your own browser")}</h3><p>${t("Shops block servers, but not your browser. The userscript reads the price and product title on every product page you visit and sends them to Home Assistant. That also works for Amazon and bol.com, and the title helps the link check. Only products that are already tracked (same link or ASIN) are updated.")}</p>
+    setTimeout(() => this.relayPing(), 50);
+    return `<div class="panel"><h3>🔁 ${t("Browser relay")}</h3><p>${t("While Home Assistant is open in a browser with the userscript, that browser fetches the shop pages that fail on the server (for example bol.com) in the background, calmly one by one, and sends the prices to Home Assistant. It runs automatically at most every few hours (Settings), or now with the button.")}</p><div id="relaybox">${this.relayBoxInner()}</div></div>
+      <div class="panel"><h3>🧩 ${t("Send prices from your own browser")}</h3><p>${t("Shops block servers, but not your browser. The userscript reads the price and product title on every product page you visit and sends them to Home Assistant. That also works for Amazon and bol.com, and the title helps the link check. Only products that are already tracked (same link or ASIN) are updated.")}</p>
       ${last ? `<div class="banner" style="background:color-mix(in srgb,var(--lt-green) 12%,var(--lt-card));border-color:color-mix(in srgb,var(--lt-green) 40%,transparent)">✅ ${t("Works: last price received {when} (set {number}, {price} at {shop}).", { when: ago(last.ts), number: esc(last.set_number), price: EUR(last.price), shop: esc(this.state.data.retailers[last.retailer] || last.retailer) })} <a data-goto="log/all" style="cursor:pointer">${t("Logbook")} →</a></div>` : `<div class="banner">${t("No price received through the userscript yet.")}</div>`}</div>
       <div class="actions">
       ${step(1, t("Install Tampermonkey"), `<p>${t("Free browser extension. For your browser ({browser}):", { browser: stores[browser][0] })}</p><a class="btn" href="${stores[browser][1]}" target="_blank" rel="noopener noreferrer">${t("Tampermonkey for {browser}", { browser: stores[browser][0] })} ↗</a><p style="font-size:12px">${t("Other browsers:")} ${Object.entries(stores).filter(([k]) => k !== browser).map(([, [n, u]]) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${n}</a>`).join(" · ")}. ${t("In Chrome/Edge also switch on “Allow user scripts” for the extension, or developer mode.")}</p>`)}
@@ -1153,7 +1185,7 @@ class LegoTrackerPanel extends HTMLElement {
       ${step(4, t("Set the token"), `<p>${t("In your browser click the Tampermonkey icon → LEGO Price Tracker settings. The address is already filled in ({origin}); then paste the token.", { origin: esc(origin) })}</p>`)}
       ${step(5, t("Test"), `<p>${t("Open a product page of a set you track (click a set → “open ↗”). After a few seconds a green message appears at the bottom right, and “✅ Works” appears above.")}</p>`)}
       </div>
-      <div class="panel" style="margin-top:16px"><h3>🔒 ${t("Security")}</h3><p>${t("The script contains no token: that is only stored in Tampermonkey on your device. It only runs on the shop domains in your list and only sends the set number, URL, title and price to your own Home Assistant. You can revoke the token in your profile at any time.")}</p></div>`;
+      <div class="panel" style="margin-top:16px"><h3>🔒 ${t("Security")}</h3><p>${t("The script contains no token: that is only stored in Tampermonkey on your device. It only runs on the shop domains in your list and on your Home Assistant pages (for the browser relay), and only sends the set number, URL, title and price to your own Home Assistant. You can revoke the token in your profile at any time.")}</p></div>`;
   }
   vShops() {
     const st = this.state.data.retailer_stats || {};
@@ -1240,6 +1272,7 @@ class LegoTrackerPanel extends HTMLElement {
     })));
     root.querySelectorAll("[data-shoplog]").forEach((a) => a.addEventListener("click", () => { Object.assign(s.logv, { level: "", kind: "", retailer: a.dataset.shoplog, source: "", status: "fail", set: "", q: "", data: null, open: null }); s.section = "log"; s.sub.log = "checks"; this.persist(); this.render(true); }));
     // settings, errors, notifications
+    if ($("relaybox")) this.bindRelay($("relaybox"));
     if ($("o_save")) this.bindSettings(root, $);
     if ($("e_scope")) this.bindErrors(root, $);
     if ($("lg_reload")) this.bindLog(root, $);
@@ -1331,8 +1364,11 @@ class LegoTrackerPanel extends HTMLElement {
       this.renderContent(); this.toast(t("{name} added; press Save", { name }), "ok");
     });
     root.querySelectorAll("[data-testkey]").forEach((b) => b.addEventListener("click", () => this.busy(b, t("Testing…"), async () => {
-      const k = b.dataset.testkey, key = $("k_" + k).value.trim(), out = $("kres_" + k);
-      const r = await this._hass.callWS({ type: "lego_tracker/settings/test_key", source: k.split("_")[0], ...(key ? { key } : {}) });
+      const k = b.dataset.testkey, key = $("k_" + k).value.trim(), out = $("kres_" + (k.startsWith("bol_") ? "bol_client_secret" : k));
+      const src = k.split("_")[0], msg = { type: "lego_tracker/settings/test_key", source: src };
+      if (src === "bol") { const id = $("k_bol_client_id").value.trim(), sec = $("k_bol_client_secret").value.trim(); if (id) msg.key = id; if (sec) msg.secret = sec; } else if (key) msg.key = key;
+      const r = await this._hass.callWS(msg);
+      if (src === "bol") { $("kres_bol_client_id").innerHTML = ""; }
       out.innerHTML = r.ok ? `<b class="ok">✓ ${esc(tx(r.message))}</b>` : `<b class="err">✕ ${esc(tx(r.message))}</b>`;
     })));
     root.querySelectorAll("[data-clearkey]").forEach((b) => b.addEventListener("click", () => { $("k_" + b.dataset.clearkey).value = ""; $("k_" + b.dataset.clearkey).dataset.clear = "1"; this.toast(t("The key is cleared when you save")); }));
@@ -1346,7 +1382,8 @@ class LegoTrackerPanel extends HTMLElement {
         custom_shops: d.custom, shop_search: Object.fromEntries(d.shops.filter((x) => x.builtin).map((x) => [x.id, x.search === x.default_search ? "" : this.toTemplate(x.search || "")])),
         lego_locale: ($("o_locale").value || "nl-be").trim(), language: $("o_lang").value,
       };
-      for (const k of ["brickset_api_key", "rebrickable_api_key"]) { const el = $("k_" + k), v = el.value.trim(); if (v) f[k] = v; else if (el.dataset.clear) f[k] = ""; }
+      f.bol_country = $("o_bolc").value; f.browser_relay = $("o_relay").checked; f.relay_hours = +$("o_relayh").value || 6;
+      for (const k of ["brickset_api_key", "rebrickable_api_key", "bol_client_id", "bol_client_secret"]) { const el = $("k_" + k), v = el.value.trim(); if (v) f[k] = v; else if (el.dataset.clear) f[k] = ""; }
       if (!f.retailers.length) return this.toast(t("Switch on at least one shop"), "err");
       if (d.mode === "spread" && !(f.spread_hours >= 1 && f.spread_hours <= 168)) return this.toast(t("Cycle: between 1 and 168 hours"), "err");
       const langChanged = f.language !== st.language;

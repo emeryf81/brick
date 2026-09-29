@@ -19,6 +19,7 @@ from homeassistant.util import dt as dt_util
 
 from .client import Fetcher, lookup_metadata
 from .const import (
+    CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET, CONF_BOL_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS,
     CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_LANGUAGE, CONF_REFRESH_MODE, CONF_SPREAD_HOURS, DEFAULT_REFRESH_MODE, DEFAULT_SPREAD_HOURS, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, CONF_CUSTOM_SHOPS, CONF_DIGEST_TIME, CONF_NO_AUTOPAUSE, CONF_SHOP_SEARCH, CONF_VALUE_SOURCE, DEFAULT_DIGEST_TIME, GENERIC_SHOPS, CONF_DISCOUNT_THRESHOLD, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
     DEFAULT_REFRESH_TIMES, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS, DEFAULT_RETAILERS,
     DOMAIN, EVENT_JOB_DONE, EVENT_HIGH_DISCOUNT, EVENT_NEW_LOW, EVENT_TARGET_HIT, RETAILERS, STORAGE_KEY,
@@ -30,6 +31,8 @@ from .models import (
 )
 from .i18n import DEFAULT_LANGUAGE, LANGUAGES, LocalizedError, T, resolve, set_language
 from .notifications import Notifier, default_rules
+from .bol_api import BolApi, BolApiError
+from .parsers import Parsed, title_check
 from .shops import SEARCH, valid_search
 from .parsers import ACCESSORY_RE, KNOCKOFF_RE, clean_title, normalize_url, retailer_from_url, url_key
 
@@ -47,6 +50,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.store: dict[str, Any] = new_store()
         self.fetcher = Fetcher(hass, bool(self.opt(entry, CONF_IMPERSONATE, True)))
         self.fetcher.no_autopause = set(self.opt(entry, CONF_NO_AUTOPAUSE, []) or [])
+        self._bol_api: BolApi | None = None
+        self._bol_found: dict[str, dict[str, Any]] = {}
         self._alerted: set[tuple[str, str]] = set()
         self.job: dict[str, Any] | None = None
         self.last_job: dict[str, Any] | None = None
@@ -323,6 +328,62 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.hass.bus.async_fire(EVENT_JOB_DONE, {k: job[k] for k in ("kind", "total", "done", "found", "updated",
                                                                          "errors", "skipped", "cancelled")})
 
+    # ------------------------------------------------------------ bol.com API
+    @property
+    def bol_country(self) -> str:
+        c = str(self.opt(self.entry, CONF_BOL_COUNTRY, "auto") or "auto").upper()
+        if c in ("NL", "BE"):
+            return c
+        return "BE" if str(self.opt(self.entry, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE)).lower().endswith("-be") else "NL"
+
+    @property
+    def bol_api(self) -> BolApi | None:
+        """The official bol.com API when the user entered affiliate credentials (else: scraping)."""
+        cid, secret = self.opt(self.entry, CONF_BOL_CLIENT_ID, ""), self.opt(self.entry, CONF_BOL_CLIENT_SECRET, "")
+        if not (cid and secret):
+            return None
+        if self._bol_api is None:
+            self._bol_api = BolApi(async_get_clientsession(self.hass), cid, secret, self.bol_country)
+        return self._bol_api
+
+    async def _bol_match(self, num: str, url: str | None = None) -> dict[str, Any] | None:
+        """Find the set in the bol.com catalog: title must pass the link check; same product id wins."""
+        found = [p for p in await self.bol_api.search(f"LEGO {num}") if title_check(p["title"], num)[0] == "ok"]
+        pid = re.search(r"/(\d{13,17})/?", url or "")
+        for p in found:
+            if pid and p.get("url") and pid.group(1) in p["url"]:
+                return p
+        return found[0] if found else None
+
+    async def _discover(self, rid: str, num: str, force: bool = False) -> str | None:
+        if rid == "bol" and self.bol_api:
+            try:
+                match = await self._bol_match(num)
+            except BolApiError as err:
+                self.log("error", "discover", str(err), set_number=num, retailer=rid, source="bol.com API")
+                return None
+            if not match:
+                return None
+            self._bol_found[num] = match
+            return match.get("url") or f"https://www.bol.com/{'be' if self.bol_country == 'BE' else 'nl'}/nl/s/?searchtext={match['ean']}"
+        return await self.fetcher.discover(rid, num, force=force)
+
+    async def _fetch(self, rid: str, offer: dict[str, Any], num: str, force: bool = False) -> tuple[Any, str | None]:
+        if rid == "bol" and self.bol_api:
+            try:
+                ean, title, image = offer.get("ean"), offer.get("title"), None
+                if not ean:
+                    match = self._bol_found.pop(num, None) or await self._bol_match(num, offer.get("url"))
+                    if not match:
+                        return None, T("bol.com API: set not found in the catalog")
+                    ean, title, image = match["ean"], match["title"], match.get("image")
+                    offer["ean"] = ean
+                price = await self.bol_api.best_price(ean)
+                return Parsed(price=price, title=title, image=image, unavailable=price is None), None
+            except BolApiError as err:
+                return None, str(err)
+        return await self.fetcher.fetch_offer(rid, offer["url"], force=force)
+
     def _live_retailers(self, force: bool) -> list[str]:
         if force:
             self.fetcher.reset_cooldowns()
@@ -349,7 +410,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         before = self.compute()["statuses"].get(num, {})
         offers = [(rid, o) for rid, o in self.store["offers"].get(num, {}).items()
                   if rid in live and o.get("url") and o.get("link_status") != "rejected"]
-        results = await asyncio.gather(*(self.fetcher.fetch_offer(rid, o["url"], force=force) for rid, o in offers))
+        results = await asyncio.gather(*(self._fetch(rid, o, num, force) for rid, o in offers))
         counts = {"updated": 0, "errors": 0, "skipped": 0}
         shop_results: dict[str, dict[str, Any]] = {}
         for (rid, offer), (parsed, error) in zip(offers, results):
@@ -417,7 +478,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         offers = self.store["offers"].setdefault(num, {})
         found = False
         if not (offers.get(retailer) or {}).get("url"):
-            url = await self.fetcher.discover(retailer, num, force=True)
+            url = await self._discover(retailer, num, force=True)
             rejected = set(self.store.setdefault("rejected", {}).get(num, []))
             if not url or url_key(retailer, url) in rejected:
                 reason = T("found a link you rejected earlier; not linked again") if url else T("no matching product found")
@@ -425,6 +486,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.push_update()
                 return {"ok": False, "found": False, "error": reason}
             offers[retailer] = {"url": url, "history": [], "found": time.time()}
+            if retailer == "bol" and num in self._bol_found:
+                offers[retailer]["ean"] = self._bol_found[num]["ean"]
             found = True
             self.log("ok", "discover", T("link found"), set_number=num, retailer=retailer, url=url, source="panel")
         await self.refresh_set(num, [retailer], source="panel", force=True)
@@ -459,12 +522,14 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def discover_set(self, num: str, retailers: list[str] | None = None) -> dict[str, int]:
         live = retailers if retailers is not None else self._live_retailers(False)
         todo = self._missing(num, live)
-        urls = await asyncio.gather(*(self.fetcher.discover(r, num) for r in todo))
+        urls = await asyncio.gather(*(self._discover(r, num) for r in todo))
         rejected = set(self.store.setdefault("rejected", {}).get(num, []))
         found = 0
         for rid, url in zip(todo, urls):
             if url and url_key(rid, url) not in rejected:
                 self.store["offers"].setdefault(num, {})[rid] = {"url": url, "history": [], "found": time.time()}
+                if rid == "bol" and num in self._bol_found:
+                    self.store["offers"][num][rid]["ean"] = self._bol_found[num]["ean"]
                 found += 1
                 self.log("ok", "discover", T("link found"), set_number=num, retailer=rid, url=url)
             elif url:
@@ -477,6 +542,50 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if url and self.job and self.job.get("running"):
                 self.job["shops"].setdefault(rid, {"ok": 0, "err": 0})["ok"] += 1
         return {"found": found}
+
+    # ------------------------------------------------------------ browser relay
+    @property
+    def relay_enabled(self) -> bool:
+        return bool(self.opt(self.entry, CONF_RELAY, True))
+
+    def relay_items(self, limit: int = 40) -> dict[str, Any]:
+        """Shop pages the user's own browser should fetch (userscript relay): links that failed on the
+        server or weren't fetched in the last 20 h, oldest first. bol.com via the API is left out."""
+        items: list[tuple[float, dict[str, Any]]] = []
+        if self.relay_enabled:
+            day = time.time() - 20 * 3600
+            for num, offers in self.store["offers"].items():
+                if num not in self.store["sets"]:
+                    continue
+                for rid, o in offers.items():
+                    if (rid not in self.retailers or rid == "lego_com" or not o.get("url") or o.get("manual_price")
+                            or o.get("link_status") == "rejected" or (rid == "bol" and self.bol_api)):
+                        continue
+                    last = o.get("last_ok") or 0
+                    if o.get("error") or last < day:
+                        items.append((last, {"set_number": num, "retailer": rid, "shop": RETAILERS[rid][0], "url": o["url"]}))
+        items.sort(key=lambda x: x[0])
+        return {"enabled": self.relay_enabled, "interval_hours": int(self.opt(self.entry, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS)),
+                "items": [i for _, i in items[:limit]], "total": len(items)}
+
+    def relay_result(self, item: dict[str, Any]) -> str:
+        """One page fetched by the user's browser: a price (stored like the userscript) or a failure."""
+        url, price, error = item.get("url"), item.get("price"), item.get("error")
+        rid = item.get("retailer") or (retailer_from_url(url) if url else None)
+        num = normalize_set_number(item["set_number"]) if item.get("set_number") else None
+        if price:
+            self.report_price(float(price), url=url, set_number=num, retailer=rid, title=item.get("title"), via="relay")
+            status = "ok"
+        else:
+            self.log("warning", "userscript", T("your browser could not fetch the price either: {error}", error=str(error or "")[:120] or "?"),
+                     set_number=num, retailer=rid, url=url, source="relay")
+            status = "fail"
+        rl = self.store.setdefault("relay_last", {"ts": 0, "ok": 0, "fail": 0})
+        if time.time() - rl.get("ts", 0) > 900:           # a new run: start counting again
+            rl.update(ok=0, fail=0)
+        rl["ts"] = time.time()
+        rl[status] = rl.get(status, 0) + 1
+        return status
 
     async def discover_offers(self, set_number: str | None = None) -> int:
         """Inline discovery for one set (or all sets, used by tests)."""
@@ -600,7 +709,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return self.start_job("update", T("Updating collection"), nums, work)
 
     # ---------------------------------------------------------------- settings
-    SECRET_KEYS = (CONF_BRICKSET_KEY, CONF_REBRICKABLE_KEY)
+    SECRET_KEYS = (CONF_BRICKSET_KEY, CONF_REBRICKABLE_KEY, CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET)
 
     def settings_get(self) -> dict[str, Any]:
         o = {**self.entry.data, **self.entry.options}
@@ -625,6 +734,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "lego_locale": o.get(CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE),
             "refresh_mode": self.refresh_mode, "spread_hours": self.spread_hours,
             "language": o.get(CONF_LANGUAGE, DEFAULT_LANGUAGE), "languages": LANGUAGES,
+            "bol_country": o.get(CONF_BOL_COUNTRY, "auto"), "bol_api": bool(self.bol_api),
+            "browser_relay": bool(o.get(CONF_RELAY, True)), "relay_hours": int(o.get(CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS)),
         }
 
     def settings_validate(self, fields: dict[str, Any]) -> dict[str, Any]:
@@ -645,7 +756,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             num("discount_threshold", 1, 90)
         if "min_history_days" in fields:
             num("min_history_days", 0, 90)
-        for key in ("auto_refresh", "use_impersonation"):
+        for key in ("auto_refresh", "use_impersonation", CONF_RELAY):
             if key in fields:
                 opts[key] = bool(fields[key])
         if "refresh_times" in fields:
@@ -670,7 +781,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for key in self.SECRET_KEYS:          # None/absent = keep, "" = clear
             if fields.get(key) is not None:
                 val = str(fields[key]).strip()
-                if val and not re.fullmatch(r"[A-Za-z0-9_\-]{8,128}", val):
+                if val and not re.fullmatch(r"[A-Za-z0-9_\-]{8,128}" if key in (CONF_BRICKSET_KEY, CONF_REBRICKABLE_KEY) else r"[\x21-\x7e]{8,256}", val):
                     raise LocalizedError("{field}: invalid key", field=key)
                 opts[key] = val
         if "custom_shops" in fields:
@@ -704,6 +815,12 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if fields["language"] != "auto" and fields["language"] not in LANGUAGES:
                 raise LocalizedError("Unknown language")
             opts[CONF_LANGUAGE] = fields["language"]
+        if "bol_country" in fields:
+            if str(fields["bol_country"]) not in ("auto", "NL", "BE"):
+                raise LocalizedError("{field}: invalid value", field="bol_country")
+            opts[CONF_BOL_COUNTRY] = str(fields["bol_country"])
+        if "relay_hours" in fields:
+            num(CONF_RELAY_HOURS, 1, 168)
         if "lego_locale" in fields:
             loc = str(fields["lego_locale"] or "").strip().lower()
             if not re.fullmatch(r"[a-z]{2}-[a-z]{2}", loc):
@@ -715,6 +832,22 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if "no_autopause" in fields:
             opts[CONF_NO_AUTOPAUSE] = [r for r in fields["no_autopause"] if r in valid_ids]
         return opts
+
+    async def test_bol(self, client_id: str | None = None, secret: str | None = None) -> tuple[bool, str]:
+        """Settings test button: log in and look up set 10281 in the bol.com catalog."""
+        cid = client_id or self.opt(self.entry, CONF_BOL_CLIENT_ID, "")
+        sec = secret or self.opt(self.entry, CONF_BOL_CLIENT_SECRET, "")
+        if not (cid and sec):
+            return False, T("no key entered")
+        api = BolApi(async_get_clientsession(self.hass), cid, sec, self.bol_country)
+        try:
+            found = [p for p in await api.search("LEGO 10281") if title_check(p["title"], "10281")[0] == "ok"]
+        except BolApiError as err:
+            return False, str(err)
+        if not found:
+            return True, T("logged in, but set 10281 was not found")
+        p = found[0]
+        return True, T("works: 10281 = {name}", name=p["title"][:60] + (f" (€{p['price']:.2f})" if p.get("price") else ""))
 
     def resume_shop(self, retailer: str | None) -> None:
         self.fetcher.reset_cooldowns(retailer)
@@ -1027,7 +1160,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return out
 
     def report_price(self, price: float, *, url: str | None = None, set_number: str | None = None,
-                     retailer: str | None = None, title: str | None = None) -> str:
+                     retailer: str | None = None, title: str | None = None, via: str | None = None) -> str:
         """Accept a price observed elsewhere (userscript, n8n, automation). Returns the set number."""
         if url and not retailer:
             retailer = retailer_from_url(url)
@@ -1047,7 +1180,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if url and not offer.get("url"):
                 offer["url"] = normalize_url(retailer, url)
             found = (num, retailer)
-        source = "userscript" if url else "panel"
+        source = ("relay" if via == "relay" else "userscript") if url else "panel"
         if found is None:
             self.log("warning", "userscript" if url else "user", T("price received for a product that is not tracked"),
                      url=url, retailer=retailer, price=price, source=source, set_number=num)
@@ -1063,7 +1196,12 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         before = self.compute()["statuses"].get(num, {})
         record_price(offer, price)
         offer["last_ok"] = offer["last_checked"]
-        self.log("ok", "userscript" if url else "user", T("price €{price} received via Tampermonkey", price=f"{price:.2f}") if url else T("price €{price} entered by hand", price=f"{price:.2f}"),
+        msg = (T("price €{price} fetched by your browser (relay)", price=f"{price:.2f}") if source == "relay"
+               else T("price €{price} received via Tampermonkey", price=f"{price:.2f}") if url
+               else T("price €{price} entered by hand", price=f"{price:.2f}"))
+        if url:
+            offer["error"] = None
+        self.log("ok", "userscript" if url else "user", msg,
                  set_number=num, retailer=retailer, url=url or offer.get("url"), price=price, source=source)
         if url:
             self.store["userscript_last"] = {"ts": time.time(), "set_number": num, "retailer": retailer, "price": price}
