@@ -8,6 +8,7 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
 from .const import DOMAIN, RETAILERS
+from .csv_import import analyze_csv
 from .models import combined_history, normalize_set_number
 
 
@@ -24,6 +25,7 @@ def _card(coord, num: str, with_history: bool = False) -> dict[str, Any]:
     series = combined_history(offers)
     card = {
         **s, **st,
+        "watched": coll is None,
         "owned": coll is not None,
         "collection": coll,
         "spark": [p for _, p in series][-60:],
@@ -46,6 +48,7 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_set_detail)
     websocket_api.async_register_command(hass, ws_collection)
     websocket_api.async_register_command(hass, ws_update_set)
+    websocket_api.async_register_command(hass, ws_import_preview)
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/overview"})
@@ -65,6 +68,9 @@ def ws_overview(hass, connection, msg):
         "sets": [_card(coord, n) for n in coord.store["sets"]],
         "summary": (coord.data or coord.compute())["summary"],
         "wishlist": (coord.data or coord.compute())["wishlist"],
+        "analytics": (coord.data or coord.compute())["analytics"],
+        "events": list(reversed(coord.store.get("events", [])[-40:])),
+        "retailer_stats": coord.retailer_stats(),
         "health": {
             "errors": sum(s["offers_error"] for s in (coord.data or coord.compute())["statuses"].values()),
             "paused_hours": {RETAILERS[r][0]: round(coord.fetcher.cooldown_left(r) / 3600, 1)
@@ -110,5 +116,24 @@ def ws_update_set(hass, connection, msg):
     if coord is None or num not in coord.store["sets"]:
         connection.send_error(msg["id"], "not_found", f"Set {num} not tracked")
         return
-    coord.update_set(num, msg["fields"])
+    try:
+        coord.update_set(num, msg["fields"])
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
     connection.send_result(msg["id"], _card(coord, num))
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({
+    vol.Required("type"): f"{DOMAIN}/import_preview", vol.Required("csv_text"): str,
+    vol.Optional("replace", default=False): bool,
+})
+@callback
+def ws_import_preview(hass, connection, msg):
+    """Dry run: parse + validate a CSV without changing anything."""
+    coord = _coord(hass)
+    if coord is None:
+        connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
+        return
+    connection.send_result(msg["id"], analyze_csv(msg["csv_text"], coord.store, replace=msg["replace"]))

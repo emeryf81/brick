@@ -105,7 +105,7 @@ def test_csv_import_european_and_duplicates():
 
 def test_csv_without_number_column():
     rows, warnings = csv_import.parse_collection_csv("a,b\n1,2\n")
-    assert rows == [] and "set-number" in warnings[0]
+    assert rows == [] and "setnummers" in warnings[0]
 
 
 def test_url_normalization():
@@ -193,3 +193,108 @@ def test_validate_backup():
     for bad in ([], {"nope": 1}, {"sets": {"abc": {}}}, {"sets": {}, "offers": []}):
         with pytest.raises(ValueError):
             models.validate_backup(bad)
+
+
+# ------------------------------------------------------------------ 0.4.0: import checks
+from datetime import date as _date  # noqa: E402
+
+MESSY = """Setnummer;Naam;Thema;Aantal;Betaald;Aankoopdatum;Jaar;Staat
+10281-1;Bonsai;Botanicals;1;39,99;24/12/2021;2021;NISB
+abc;Rommel;;1;;;;
+10311;Orchidee;Botanicals;0;45;;2022;
+42143;Ferrari;Technic;1;-5;;2022;
+10281;Bonsai;Botanicals;1;49,99;31/02/2022;2021;gebouwd
+21330;Home Alone;Ideas;1;999;2030-01-01;1800;
+75192;;Star Wars;60;;;;
+"""
+
+
+def test_analyze_flags_every_problem():
+    store = models.new_store()
+    store["sets"]["21330"] = {"rrp": 299.99}
+    store["collection"]["75192"] = {"qty": 1}
+    a = csv_import.analyze_csv(MESSY, store, today=_date(2026, 9, 29))
+    by = {r["line"]: r for r in a["rows"]}
+    txt = lambda n: " | ".join(i["text"] for i in by[n]["issues"])  # noqa: E731
+    assert by[2]["status"] == "ok" and by[2]["condition"] == "Sealed" and by[2]["added"] == "2021-12-24"
+    assert by[3]["status"] == "error" and "ongeldig setnummer" in txt(3)
+    assert by[4]["status"] == "error" and "aantal is 0" in txt(4)
+    assert by[5]["status"] == "error" and "negatief" in txt(5)
+    assert by[6]["status"] == "warning" and "31/02/2022" in txt(6) and "extra exemplaar" in txt(6)
+    assert by[6]["condition"] == "Gebouwd" and "added" not in by[6]
+    assert by[7]["status"] == "warning" and "toekomst" in txt(7) and "1800" in txt(7) and "3× de adviesprijs" in txt(7)
+    assert by[8]["status"] == "warning" and "erg hoog" in txt(8) and "bijgewerkt" in txt(8)
+    assert a["summary"]["error"] == 3 and a["summary"]["merged"] == 1 and a["summary"]["update"] == 1
+    assert a["columns"]["Setnummer"] == "Setnummer" and a["ignored_columns"] == []
+    rows = csv_import.importable_rows(a)
+    res = csv_import.apply_import(store, rows)
+    assert store["collection"]["10281"]["qty"] == 2 and store["collection"]["10281"]["paid"] == 44.99
+    assert "10311" not in store["collection"] and "42143" not in store["collection"]
+    assert res["added"] == 2 and res["updated"] == 1
+
+
+def test_analyze_fatal_cases():
+    assert "setnummers" in csv_import.analyze_csv("foo;bar\n1;2\n")["fatal"]
+    assert csv_import.analyze_csv("   ")["fatal"] == "Leeg bestand."
+    assert "te groot" in csv_import.analyze_csv("Number\n" + "1" * 2_100_000)["fatal"]
+    a = csv_import.analyze_csv("Number,Foo,Name\n10281,x,Bonsai\n")
+    assert a["ignored_columns"] == ["Foo"]
+
+
+def test_paid_average_ignores_missing_prices():
+    store = models.new_store()
+    csv_import.apply_import(store, [{"set_number": "1", "qty": 1, "paid": 40.0}, {"set_number": "1", "qty": 1}])
+    assert store["collection"]["1"] == {"qty": 2, "paid": 40.0}
+
+
+def test_csv_export_neutralises_formulas():
+    out = models.rows_to_csv([{"Name": "=HYPERLINK(\"x\")", "Qty": 1}], ["Name", "Qty"])
+    assert "'=HYPERLINK" in out
+
+
+# ------------------------------------------------------------------ 0.4.0: deals & sanity
+def test_deal_score_ranges():
+    assert models.deal_score({"best_price": None}) == 0
+    top = models.deal_score({"best_price": 50, "discount_rrp": 50, "all_time_low": 50, "history_days": 30,
+                             "discount_avg": 25, "target_hit": True})
+    meh = models.deal_score({"best_price": 95, "discount_rrp": 5, "all_time_low": 60, "history_days": 30})
+    assert top == 100 and meh < 20
+
+
+def test_retirement_status():
+    now = time.mktime((2026, 9, 29, 12, 0, 0, 0, 0, -1))
+    assert models.retirement_status({"exit_date": "2026-12-31"}, now)["retiring_soon"]
+    assert models.retirement_status({"exit_date": "2025-12-31"}, now)["retired"]
+    assert not models.retirement_status({"exit_date": "2028-01-01"}, now)["retiring_soon"]
+    assert models.retirement_status({"retiring": True}, now)["retiring_soon"]
+
+
+def test_suspicious_price_guard():
+    assert "adviesprijs" in models.is_suspicious_price(4.99, {"rrp": 49.99}, {})
+    assert models.is_suspicious_price(39.99, {"rrp": 49.99}, {}) is None
+    offer = {"history": [[1, 100.0], [2, 98.0], [3, 101.0]]}
+    assert models.is_suspicious_price(9.0, {}, offer) and models.is_suspicious_price(95.0, {}, offer) is None
+
+
+def test_collection_analytics():
+    store = models.new_store()
+    store["sets"] = {"1": {"theme": "Icons", "year": 2021, "pieces": 1000}, "2": {"theme": "City", "year": 2022}}
+    store["collection"] = {"1": {"qty": 1, "paid": 100, "condition": "Sealed"}, "2": {"qty": 2, "paid": 50}}
+    st = {"1": {"best_price": 150}, "2": {"best_price": 40}}
+    a = models.collection_analytics(store, st)
+    assert list(a["by_theme"]) == ["Icons", "City"] and a["by_theme"]["City"]["count"] == 2
+    assert a["by_year"]["2022"]["value"] == 80 and a["by_condition"] == {"Sealed": 1, "Onbekend": 2}
+    assert a["top_gainers"][0]["pct"] == 50.0 and a["top_losers"][0]["set_number"] == "2"
+    assert all(m["pct"] >= 0 for m in a["top_gainers"])
+    assert a["avg_paid_per_piece"] == 0.1
+
+
+def test_backup_validation_rejects_bad_offers():
+    base = {"sets": {"10281": {}}, "offers": {"10281": {"bol": {"url": "javascript:alert(1)", "history": []}}}}
+    with pytest.raises(ValueError, match="URL"):
+        models.validate_backup(base)
+    base["offers"]["10281"]["bol"] = {"url": "https://x", "history": [["a", 1]]}
+    with pytest.raises(ValueError, match="historiek"):
+        models.validate_backup(base)
+    with pytest.raises(ValueError, match="onbekende set"):
+        models.validate_backup({"sets": {}, "offers": {"1": {}}})

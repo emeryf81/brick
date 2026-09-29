@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import logging
 import time
+from datetime import date
 from datetime import timedelta
 from typing import Any
 
@@ -21,7 +22,7 @@ from .const import (
     STORAGE_VERSION,
 )
 from .models import (
-    collection_rows, collection_series, collection_summary, COLLECTION_COLUMNS, rows_to_csv, validate_backup, wishlist_summary, compute_set_status, new_store, normalize_set_number,
+    add_event, collection_analytics, collection_rows, collection_series, is_suspicious_price, collection_summary, COLLECTION_COLUMNS, rows_to_csv, validate_backup, wishlist_summary, compute_set_status, new_store, normalize_set_number,
     record_price, today_iso,
 )
 from .parsers import normalize_url, retailer_from_url, url_key
@@ -77,7 +78,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for num, s in self.store["sets"].items()
         }
         return {"statuses": statuses, "summary": collection_summary(self.store, statuses),
-                "wishlist": wishlist_summary(self.store, statuses)}
+                "wishlist": wishlist_summary(self.store, statuses),
+                "analytics": collection_analytics(self.store, statuses)}
 
     async def _async_update_data(self) -> dict[str, Any]:
         await self.refresh_all()
@@ -95,7 +97,12 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if rid not in self.retailers or not offer.get("url"):
                 continue
             parsed, error = await self.fetcher.fetch_offer(rid, offer["url"])
-            record_price(offer, parsed.price if parsed else None, error=error)
+            price = parsed.price if parsed else None
+            if price is not None and (warn := is_suspicious_price(price, self.store["sets"][num], offer)):
+                price, error = None, warn
+            record_price(offer, price, error=error)
+            if price is not None:
+                offer["last_ok"] = offer["last_checked"]
             if parsed:
                 s = self.store["sets"][num]
                 if parsed.image and not s.get("image"):
@@ -143,6 +150,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if after.get(flag) and not before.get(flag) and key not in self._alerted:
                 self._alerted.add(key)
                 self.hass.bus.async_fire(event, payload)
+                add_event(self.store, flag, {k: payload[k] for k in ("set_number", "name", "price", "retailer")}
+                          | {"discount": payload["discount"]})
                 self.hass.async_create_task(self.async_notify("LEGO deal", text, payload.get("url")))
 
     async def async_notify(self, title: str, message: str, url: str | None = None) -> None:
@@ -173,7 +182,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                          "target_price": target_price}.items():
             if val:
                 s[key] = val
-        for key in ("name", "theme", "subtheme", "year", "pieces", "image", "rrp"):
+        for key in ("name", "theme", "subtheme", "year", "pieces", "image", "rrp", "exit_date"):
             if meta.get(key) and not s.get(key):
                 s[key] = meta[key]
         self.store["offers"].setdefault(num, {})
@@ -203,20 +212,83 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.store["offers"].setdefault(num, {})[retailer] = {"url": url, "history": []}
         self.push_update()
 
+    SET_FIELDS = {"name": str, "theme": str, "subtheme": str, "rrp": float, "pieces": int, "year": int,
+                  "image": str, "target_price": float, "notes": str, "priority": int, "retiring": bool,
+                  "exit_date": str}
+    COLL_FIELDS = {"qty": int, "paid": float, "current_value": float, "added": str, "condition": str,
+                   "location": str}
+    CLEARABLE = {"target_price", "notes", "priority", "retiring", "exit_date", "subtheme"}
+
+    @staticmethod
+    def _coerce(key: str, typ: type, value: Any) -> Any:
+        """Validate a single user-supplied field. Raises ValueError with a readable message."""
+        if typ is str:
+            value = str(value).strip()[:200]
+            if key in ("added", "exit_date") and value:
+                try:
+                    date.fromisoformat(value)
+                except ValueError as err:
+                    raise ValueError(f"{key}: ongeldige datum {value!r}") from err
+                if key == "added" and value > today_iso():
+                    raise ValueError("aankoopdatum ligt in de toekomst")
+            if key == "image" and value and not value.startswith("https://"):
+                raise ValueError("afbeelding moet een https-URL zijn")
+            return value
+        if typ is bool:
+            return bool(value)
+        try:
+            num = typ(value)
+        except (TypeError, ValueError) as err:
+            raise ValueError(f"{key}: {value!r} is geen getal") from err
+        limits = {"rrp": 10000, "paid": 10000, "current_value": 10000, "target_price": 10000, "pieces": 12000,
+                  "qty": 999, "priority": 3, "year": 2100}
+        if num < 0 or num > limits.get(key, 1e9):
+            raise ValueError(f"{key}: {num} valt buiten het toegestane bereik")
+        if key == "qty" and num == 0:
+            raise ValueError("aantal moet minstens 1 zijn")
+        return num
+
     def update_set(self, set_number: str, fields: dict[str, Any]) -> None:
         num = normalize_set_number(set_number)
-        allowed = {"name", "theme", "subtheme", "rrp", "pieces", "year", "image", "target_price", "notes"}
         s = self.store["sets"][num]
-        s.update({k: v for k, v in fields.items() if k in allowed and v not in (None, "")})
-        for k in ("target_price", "notes"):            # explicit clear: empty string / 0
-            if k in fields and fields[k] in ("", 0, None):
-                s.pop(k, None)
-        coll = {k: fields[k] for k in ("qty", "paid", "current_value", "added", "condition") if k in fields}
+        clean_set: dict[str, Any] = {}
+        clean_coll: dict[str, Any] = {}
+        for key, value in fields.items():
+            typ = self.SET_FIELDS.get(key) or self.COLL_FIELDS.get(key)
+            if typ is None:
+                continue
+            if value in ("", None) or (value == 0 and key in self.CLEARABLE):
+                if key in self.CLEARABLE:
+                    s.pop(key, None)
+                elif key in self.COLL_FIELDS and num in self.store["collection"]:
+                    self.store["collection"][num].pop(key, None)
+                continue
+            target = clean_set if key in self.SET_FIELDS else clean_coll
+            target[key] = self._coerce(key, typ, value)
+        s.update(clean_set)
         if fields.get("owned") is False:
             self.store["collection"].pop(num, None)
-        elif coll or fields.get("owned"):
-            self.store["collection"].setdefault(num, {"qty": 1}).update(coll)
+        elif clean_coll or fields.get("owned"):
+            self.store["collection"].setdefault(num, {"qty": 1}).update(clean_coll)
         self.push_update()
+
+    def retailer_stats(self) -> dict[str, dict[str, Any]]:
+        statuses = (self.data or self.compute())["statuses"]
+        out: dict[str, dict[str, Any]] = {}
+        for rid, (label, _) in RETAILERS.items():
+            offers = [(n, o) for n, by in self.store["offers"].items() for r, o in by.items() if r == rid]
+            last_ok = max((o.get("last_ok") or 0 for _, o in offers), default=0)
+            out[rid] = {
+                "label": label, "enabled": rid in self.retailers, "offers": len(offers),
+                "ok": sum(1 for _, o in offers if o.get("available")),
+                "errors": sum(1 for _, o in offers if o.get("error")),
+                "cheapest": sum(1 for n, _ in offers if statuses.get(n, {}).get("best_retailer") == rid),
+                "last_ok": last_ok or None,
+                "paused_hours": round(self.fetcher.cooldown_left(rid) / 3600, 1),
+                "failing": [{"set_number": n, "name": self.store["sets"].get(n, {}).get("name"), "error": o["error"]}
+                            for n, o in offers if o.get("error")][:50],
+            }
+        return out
 
     def report_price(self, price: float, *, url: str | None = None, set_number: str | None = None,
                      retailer: str | None = None) -> str:
@@ -242,6 +314,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if found is None:
             raise ValueError("No matching offer: pass the product url of a tracked offer, or set_number + retailer.")
         num, retailer = found
+        if url and (warn := is_suspicious_price(price, self.store["sets"][num], self.store["offers"][num][retailer])):
+            raise ValueError(warn)
         before = self.compute()["statuses"].get(num, {})
         record_price(self.store["offers"][num][retailer], price)
         self._fire_events(num, before, self.compute()["statuses"].get(num, {}))

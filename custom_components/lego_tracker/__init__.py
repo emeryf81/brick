@@ -23,7 +23,7 @@ from .const import (
     STATIC_URL,
 )
 from .coordinator import LegoCoordinator
-from .csv_import import apply_import, parse_collection_csv
+from .csv_import import analyze_csv, apply_import, importable_rows
 from .websocket_api import async_register_websocket
 
 _LOGGER = logging.getLogger(__name__)
@@ -221,16 +221,19 @@ def _register_services(hass: HomeAssistant) -> None:
             text = await hass.async_add_executor_job(Path(path).read_text, "utf-8-sig")
         if not text:
             raise ServiceValidationError("Provide csv_text or file_path")
-        rows, warnings = parse_collection_csv(text)
+        analysis = analyze_csv(text, c.store, replace=call.data["replace"])
+        rows = importable_rows(analysis)
         if not rows:
-            raise ServiceValidationError("; ".join(warnings) or "No rows found")
+            raise ServiceValidationError(analysis["fatal"] or "Geen importeerbare regels (alle regels bevatten fouten).")
         result = apply_import(c.store, rows, replace=call.data["replace"])
+        warnings = [f"regel {r['line']}: " + "; ".join(x["text"] for x in r["issues"] if x["level"] != "info")
+                    for r in analysis["rows"] if r["status"] != "ok"]
         for r in rows:
             c.store["offers"].setdefault(r["set_number"], {})
         c.push_update()
         if call.data["track_prices"]:
             hass.async_create_task(_discover_offers(c, [r["set_number"] for r in rows]))
-        return {**result, "warnings": warnings[:20]}
+        return {**result, "skipped": analysis["summary"]["error"], "warnings": warnings[:50]}
 
     async def report_price(call: ServiceCall) -> None:
         try:

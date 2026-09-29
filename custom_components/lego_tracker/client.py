@@ -201,4 +201,5 @@ async def brickset_lookup(session: aiohttp.ClientSession, api_key: str, set_numb
         "year": s.get("year"), "pieces": s.get("pieces"),
         "image": (s.get("image") or {}).get("imageURL"), "rrp": rrp,
         "themeGroup": s.get("themeGroup"),
+        "exit_date": (s.get("exitDate") or "")[:10] or None,
     }

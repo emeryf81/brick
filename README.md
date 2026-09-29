@@ -4,36 +4,44 @@ LEGO Price Tracker voor Home Assistant
 
 Custom integration (HACS-compatibel) die LEGO-sets en hun prijzen volgt bij **Amazon.nl, Amazon.de, Amazon.com.be, bol.com en Kruidvat.be**, met een dagelijks dashboard, prijsgrafieken en collectiewaarde.
 
-> Status: 0.3.0. Getest met unit- en integratietests (39) tegen een echte Home Assistant-core (2026.2.3): config flow, options flow, herladen, services, sensoren, websocket en CSV-import. Het paneel is in Chromium gerenderd met nagemaakte data. **Nog niet gedaan:** een run op jouw HA OS 2026.9 en een controle van de winkel-parsers tegen de live sites. Verwacht dat je die parsers moet bijstellen.
+> Status: 0.4.0. 50 unit- en integratietests tegen een echte Home Assistant-core (2026.2.3). Het paneel is in Chromium getest (desktop en mobiel, licht en donker) met door de integratie zelf gegenereerde testdata. **Nog niet gedaan:** een controle van de winkel-parsers tegen de live sites.
 
-## Wat het doet
-- **Sidebar-paneel "LEGO"** (toont bovenaan de draaiende versie en het gebruikte request-type) met tabbladen:
-  - **Vandaag**: 🔻 laagste prijs ooit · 🎯 streefprijs bereikt · 🏷️ korting ≥ drempel (schuifregelaar) · 📉 sterk gedaald in 30 dagen. Een waarschuwingsbalk toont aanbiedingen zonder prijs en gepauzeerde winkels.
-  - **Alle sets**: filter op thema **en subthema** (Botanicals, Technic, Creator, Icons, City, Friends, …), zoeken, sorteren op korting / prijs / **prijs per steen** / grootste daling, "in bezit / wishlist". Elke kaart toont trend (7/30 dagen), ct per steen en streefprijs.
-  - **Wishlist**: sets die je nog niet hebt, met totaalprijs nu, totale adviesprijs en besparing.
-  - **Collectie**: groeigrafiek (waarde vs. aankoopkost), waarde per thema, winst/verlies per set, CSV-export.
-  - **Toevoegen / import**: set toevoegen (met streefprijs), **meerdere setnummers plakken**, winkels opnieuw zoeken, winkel-link koppelen, CSV-import, **back-up en herstel (JSON)**.
-  - Klik op een set: prijsgrafiek per winkel met **hover-tooltip** en bereik (30 d / 90 d / 1 jaar / alles), adviesprijs-lijn, laagste prijs per winkel, links, handmatige prijs, bewerken (thema, streefprijs, notitie, bezit).
-- **Streefprijs per set**: bereikt de beste prijs je streefprijs, dan volgt een event én (optioneel) een melding.
-- **Meldingen**: kies in de opties een notify-service (bv. `notify.mobile_app_telefoon`) en krijg een push bij nieuwe laagste prijs, hoge korting, streefprijs en de dagelijkse samenvatting (met link naar de winkel).
-- **Sensoren**: gevolgde sets, sets op record-laag, sets met hoge korting, sets onder streefprijs, wishlist-kost, aanbiedingen met fout (met pauze-info), collectiewaarde/-kost/-groei, plus **één prijssensor per set** (attributen: prijs per steen, trend 7/30 dagen, streefprijs, per winkel). Home Assistant maakt daar zelf historiek- en statistiekgrafieken van.
-- **Events** voor automations: `lego_tracker_new_all_time_low`, `lego_tracker_high_discount`, `lego_tracker_target_price_reached`, `lego_tracker_daily_digest`.
-- **Diagnostics-download** (zonder geheimen) voor foutzoeken.
+## Opbouw van het paneel
+Het sidebar-paneel **LEGO** heeft drie delen:
 
-## Services
-`add_set`, `add_sets`, `remove_set`, `set_offer`, `report_price`, `discover_offers`, `refresh`, `import_collection`, `export_collection` (CSV terug als response), `export_data` / `import_data` (volledige JSON-back-up), `send_digest`. Zie *Ontwikkelaarstools → Acties*.
+**🏷️ Deals & watchlist** (sets die je in het oog houdt)
+- *Vandaag*: deal van de dag, alle deals (laagste prijs ooit, streefprijs, korting ≥ drempel of dealscore ≥ 70), sets die binnenkort verdwijnen, sterke dalers, en een tijdlijn met recente deals.
+- *Watchlist*: sets die je nog niet hebt, sorteerbaar op prioriteit (★–★★★), dealscore, korting, prijs per steen; totaal nu vs. adviesprijs.
+- *Alle prijzen*: alles wat gevolgd wordt, met thema- en subthemafilters.
 
-Voorbeeld-automation:
-```yaml
-trigger:
-  - platform: event
-    event_type: lego_tracker_target_price_reached
-action:
-  - service: notify.mobile_app_telefoon
-    data:
-      title: "{{ trigger.event.data.name }}"
-      message: "€{{ trigger.event.data.price }} bij {{ trigger.event.data.retailer }}"
-```
+**📦 Mijn collectie** (wat je hebt)
+- *Overzicht*: waarde, aankoopkost, groei, stenen, betaald per steen; groeigrafiek; waarde per thema (donut); sets per jaar; grootste stijgers en sets onder aankoopprijs; staat van je sets.
+- *Sets*: tegels of tabel, filter op thema en staat (Sealed / Geopend / Gebouwd / Incompleet), locatie, CSV-export.
+
+**⚙️ Beheer**
+- *Toevoegen*: kies "in het oog houden" of "in mijn collectie"; meteen melding als de set al gevolgd wordt; bulk plakken; winkel-link koppelen.
+- *Importeren*: wizard in drie stappen (bestand → controle → import), zie hieronder.
+- *Winkels*: status per winkel (links, met prijs, goedkoopste voor, laatst gelukt, pauze), lijst met mislukte aanbiedingen.
+- *Back-up*: JSON-back-up en herstel (samenvoegen of vervangen), CSV-export.
+
+Klik op een set voor de prijsgrafiek per winkel (hover-tooltip, 30 d / 90 d / 1 jaar / alles, lijnen voor advies- en streefprijs), statistieken, handmatige prijs, en het bewerken van *Volgen* (streefprijs, prioriteit, uitfaseerdatum, notitie) en *Collectie* (aantal, betaald, datum, staat, locatie).
+
+Vloeiende animaties (sectiewissel, kaarten, tellende cijfers, grafieken die intekenen, dialoog, meldingen) worden uitgeschakeld als je systeem "minder beweging" vraagt. Het paneel volgt je HA-thema, ook donker.
+
+## Dealscore (0–100)
+Korting t.o.v. adviesprijs (max 45) + nabijheid van de laagste prijs ooit (max 25) + korting t.o.v. de mediaan van 90 dagen (max 20) + streefprijs bereikt (10). ≥ 70 = topdeal, ≥ 45 = goede deal.
+
+## Controles
+- **CSV-import** wordt eerst volledig gecontroleerd zonder iets op te slaan. Per regel: ongeldig setnummer, aantal 0 of negatief, negatieve prijzen (fout, regel overgeslagen); onwaarschijnlijk jaar/aantal stenen/prijs, prijs > 3× adviesprijs, onbekende of toekomstige datum, datum vóór uitgavejaar, te lange tekst (waarschuwing, veld genegeerd); dubbele regels (samengevoegd als extra exemplaar); al in collectie (wordt bijgewerkt). Max 2 MB / 5000 regels. Nederlandse en Engelse kolomnamen.
+- **Bewerken** in het paneel: getallen en datums worden gevalideerd (geen negatieve bedragen, geen toekomstige aankoopdatum, aantal ≥ 1).
+- **Prijzen**: een opgehaalde prijs die < 20% of > 4× de adviesprijs is (of sterk afwijkt van de historiek) wordt niet opgeslagen maar als "verdachte prijs" gemeld. Dat vangt accessoires en marketplace-prijzen die per ongeluk worden uitgelezen.
+- **Back-up herstellen**: structuur, setnummers, URL's en prijshistoriek worden gecontroleerd vóór er iets verandert.
+- **CSV-export** is beschermd tegen formule-injectie in spreadsheets.
+
+## Sensoren, events en services
+- **Sensoren**: gevolgde sets, sets op laagste prijs ooit, sets met hoge korting, sets onder streefprijs, beste dealscore (top 5 in de attributen), sets die binnenkort verdwijnen, wishlist-kost, aanbiedingen met fout, collectiewaarde/-kost/-groei, plus één prijssensor per set (prijs per steen, trend, dealscore, prijzen per winkel als attributen).
+- **Events**: `lego_tracker_new_all_time_low`, `lego_tracker_high_discount`, `lego_tracker_target_price_reached`, `lego_tracker_daily_digest`. Kies in de opties een notify-service voor pushmeldingen.
+- **Services**: `add_set`, `add_sets`, `remove_set`, `set_offer`, `report_price`, `discover_offers`, `refresh`, `import_collection`, `export_collection`, `export_data`, `import_data`, `send_digest`.
 
 ## Installatie
 1. HACS → Custom repositories → deze repo, categorie *Integration* (of kopieer `custom_components/lego_tracker` naar je `config/`).
