@@ -29,6 +29,15 @@ def _coord(hass: HomeAssistant):
     return next(iter(entries.values()), None)
 
 
+def _bw_status(coord) -> dict[str, Any] | None:
+    if not coord.brickwatch_enabled:
+        return None
+    bw = coord.store.get("brickwatch") or {}
+    return {"sets": sum(1 for e in bw.values() if e.get("status") == "ok"),
+            "missing": sum(1 for e in bw.values() if e.get("status") == "missing"),
+            "last": max((e.get("ts", 0) for e in bw.values()), default=None) or None}
+
+
 def _card(coord, num: str, with_history: bool = False) -> dict[str, Any]:
     s = coord.store["sets"][num]
     st = (coord.data or coord.compute())["statuses"].get(num, {})
@@ -53,6 +62,8 @@ def _card(coord, num: str, with_history: bool = False) -> dict[str, Any]:
     }
     if with_history:
         card["history"] = {rid: o.get("history", []) for rid, o in offers.items()}
+        if coord.brickwatch_enabled:
+            card["brickwatch"] = (coord.store.get("brickwatch") or {}).get(num) or {"status": "none"}
         card["combined"] = series
     return card
 
@@ -75,6 +86,7 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_offer_update)
     websocket_api.async_register_command(hass, ws_offer_fetch)
     websocket_api.async_register_command(hass, ws_set_enrich)
+    websocket_api.async_register_command(hass, ws_brickwatch_fetch)
     websocket_api.async_register_command(hass, ws_notify_set)
     websocket_api.async_register_command(hass, ws_notify_test)
     hass.http.register_view(UserscriptView())
@@ -106,6 +118,7 @@ def ws_overview(hass, connection, msg):
         "userscript_last": coord.store.get("userscript_last"), "relay_last": coord.store.get("relay_last"),
         "relay": {"enabled": coord.relay_enabled, "pending": coord.relay_items(100)["total"] if coord.relay_enabled else 0},
         "bol_api": bool(coord.bol_api),
+        "brickwatch": _bw_status(coord),
         "value_source": coord.store.get("value_source", "shop_first"),
         "health": {
             "errors": sum(s["offers_error"] for s in (coord.data or coord.compute())["statuses"].values()),
@@ -390,6 +403,34 @@ async def ws_set_enrich(hass, connection, msg):
     coord._save()
     coord.push_update()
     connection.send_result(msg["id"], {"result": res, "set": _card(coord, num, with_history=True)})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/brickwatch/fetch", vol.Optional("set_number"): str,
+                                  vol.Optional("retry_missing", default=False): bool})
+@websocket_api.async_response
+async def ws_brickwatch_fetch(hass, connection, msg):
+    """Hidden option: one set's Brickwatch page now (and a price check), or a job for all sets."""
+    coord = _coord(hass)
+    if not coord.brickwatch_enabled:
+        connection.send_error(msg["id"], "not_enabled", "Brickwatch is not enabled")
+        return
+    if not msg.get("set_number"):
+        try:
+            connection.send_result(msg["id"], {"job": coord.start_brickwatch()})
+        except ValueError as err:
+            connection.send_error(msg["id"], "busy", str(err))
+        return
+    num = normalize_set_number(msg["set_number"])
+    if num not in coord.store["sets"]:
+        connection.send_error(msg["id"], "not_found", tr("Set {number} is not tracked.", number=num))
+        return
+    entry = await coord.brickwatch_refresh(num, force=True, retry_missing=msg["retry_missing"])
+    if entry:
+        await coord.refresh_set(num, source="panel")
+    coord._save()
+    coord.push_update()
+    connection.send_result(msg["id"], {"found": bool(entry), "set": _card(coord, num, with_history=True)})
 
 
 class RelayView(HomeAssistantView):

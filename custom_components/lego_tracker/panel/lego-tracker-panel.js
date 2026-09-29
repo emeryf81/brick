@@ -199,7 +199,7 @@ tr.efix > td{padding:0 4px 8px}
 .sub{display:flex;gap:4px;margin:0 0 14px;overflow-x:auto;scrollbar-width:none}
 .sub button{border:0;background:none;padding:8px 14px;border-radius:99px;cursor:pointer;color:var(--lt-muted);font-weight:500;white-space:nowrap;transition:background .2s,color .2s}
 .sub button:hover{background:var(--lt-soft)}.sub button.on{background:var(--lt-soft);color:var(--lt-accent)}
-.sub .count{font-size:11px;background:var(--lt-accent);color:var(--lt-on-accent);border-radius:99px;padding:1px 7px;margin-left:5px}
+.sub .secretlink{flex:1;min-width:40px;opacity:0;cursor:default;padding:0}.sub .count{font-size:11px;background:var(--lt-accent);color:var(--lt-on-accent);border-radius:99px;padding:1px 7px;margin-left:5px}
 /* kpis */
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}
 .kpi{background:var(--lt-card);border-radius:var(--lt-radius);padding:14px 16px;box-shadow:var(--lt-shadow);position:relative;overflow:hidden}
@@ -448,7 +448,7 @@ class LegoTrackerPanel extends HTMLElement {
         <div class="hsp"></div>${status}<button class="btn ghost sm" data-act="discover" title="${t("Search shop links for sets that have none yet")}">🔎 <span class="lbl">${t("Find links")}</span></button><button class="btn sm" data-act="refresh" title="${t("Fetch all shop prices now")}">↻ <span class="lbl">${t("Refresh prices")}</span></button></header>
       <div id="jobbar"></div>
       <nav class="seg" role="tablist">${Object.entries(SECTIONS).map(([k, v]) => `<button role="tab" data-sec="${k}" class="${k === s.section ? "on" : ""}">${t(v.label)}<small>${t(v.hint)}</small></button>`).join("")}<span class="ind"></span></nav>
-      <div class="sub">${sec.subs.map(([k, l]) => `<button data-sub="${k}" class="${k === sub ? "on" : ""}">${t(l)}${this.subCount(s.section, k)}</button>`).join("")}</div>
+      <div class="sub">${sec.subs.map(([k, l]) => `<button data-sub="${k}" class="${k === sub ? "on" : ""}">${t(l)}${this.subCount(s.section, k)}</button>`).join("")}${s.section === "manage" ? `<button data-sub="secret" class="secretlink" tabindex="-1" aria-hidden="true"></button>` : ""}</div>
       <div id="content"></div></div><div class="toasts"></div><dialog id="dlg"></dialog>`;
     // keep notifications and an open set dialog alive across re-renders (e.g. when a job finishes)
     if (keepToasts) root.querySelector(".toasts").replaceWith(keepToasts);
@@ -544,7 +544,7 @@ class LegoTrackerPanel extends HTMLElement {
     const s = this.state, el = this.shadowRoot.getElementById("content"); if (!el) return;
     if (s.err) { el.innerHTML = `<div class="empty"><span class="big">⚠️</span>${t("Could not load data: {error}", { error: esc(s.err) })}<br><br><button class="btn" id="retry">${t("Try again")}</button></div>`; el.querySelector("#retry").onclick = () => this.load(true); return; }
     if (!s.data) { el.innerHTML = `<div class="kpis">${"<div class='skel' style='height:86px'></div>".repeat(4)}</div><div class="grid">${"<div class='skel' style='height:260px'></div>".repeat(8)}</div>`; return; }
-    const view = { deals: { today: this.vToday, watch: this.vWatch, all: this.vAll }, collection: { overview: this.vCollOverview, sets: this.vCollSets }, log: { all: this.vLog, checks: this.vLog, errors: this.vErrors }, manage: { notify: this.vNotify, add: this.vAdd, import: this.vImport, links: this.vLinks, shops: this.vShops, settings: this.vSettings, userscript: this.vUserscript, backup: this.vBackup } }[s.section][s.sub[s.section]];
+    const view = { deals: { today: this.vToday, watch: this.vWatch, all: this.vAll }, collection: { overview: this.vCollOverview, sets: this.vCollSets }, log: { all: this.vLog, checks: this.vLog, errors: this.vErrors }, manage: { notify: this.vNotify, add: this.vAdd, import: this.vImport, links: this.vLinks, shops: this.vShops, settings: this.vSettings, userscript: this.vUserscript, backup: this.vBackup, secret: this.vSecret } }[s.section][s.sub[s.section]];
     el.className = animate && !REDUCED ? "enter" : "";
     el.innerHTML = view.call(this);
     this.bindContent(el);
@@ -841,8 +841,8 @@ class LegoTrackerPanel extends HTMLElement {
     const retailers = this.state.data.retailers;
     return Object.entries(e.results || {}).map(([rid, r]) => {
       const cls = r.ok ? "ok" : r.ok === false ? "fail" : "skip", name = esc(retailers[rid] || rid);
-      const val = r.ok ? `${r.price != null ? EUR(r.price) : "✓"}${r.manual ? " ✎" : ""}` : r.ok === false ? "✕" : "⏸";
-      const why = r.error ? tx(r.error) : r.manual ? t("manual price wins; the shop said {price}", { price: EUR(r.price) }) : "";
+      const val = r.ok ? `${r.price != null ? EUR(r.price) : "✓"}${r.manual ? " ✎" : ""}${r.via === "brickwatch" ? " ⓑ" : ""}` : r.ok === false ? "✕" : "⏸";
+      const why = r.error ? tx(r.error) : r.manual ? t("manual price wins; the shop said {price}", { price: EUR(r.price) }) : r.via === "brickwatch" ? t("price via Brickwatch (the shop itself failed)") : "";
       return full ? `<div class="res ${cls}" style="display:flex;gap:8px;align-items:center;margin:3px 0"><b style="min-width:110px">${name}</b><span>${val}</span><span class="muted" style="font-size:12px">${esc(why)}</span></div>`
         : `<span class="res ${cls}" title="${esc(why)}">${name} <b>${val}</b></span>`;
     }).join(full ? "" : " ");
@@ -1100,7 +1100,7 @@ class LegoTrackerPanel extends HTMLElement {
     try { this.state.settings = await this._hass.callWS({ type: "lego_tracker/settings/get" }); this.state.settingsErr = null; }
     catch (e) { this.state.settingsErr = e.message || String(e); }
     this.state.draft = null;
-    if (this.state.section === "manage" && this.state.sub.manage === "settings") this.renderContent();
+    if (this.state.section === "manage" && ["settings", "secret"].includes(this.state.sub.manage)) this.renderContent();
   }
   vSettings() {
     const st = this.state.settings;
@@ -1273,6 +1273,7 @@ class LegoTrackerPanel extends HTMLElement {
     root.querySelectorAll("[data-shoplog]").forEach((a) => a.addEventListener("click", () => { Object.assign(s.logv, { level: "", kind: "", retailer: a.dataset.shoplog, source: "", status: "fail", set: "", q: "", data: null, open: null }); s.section = "log"; s.sub.log = "checks"; this.persist(); this.render(true); }));
     // settings, errors, notifications
     if ($("relaybox")) this.bindRelay($("relaybox"));
+    if ($("x_bw")) this.bindSecret(root, $);
     if ($("o_save")) this.bindSettings(root, $);
     if ($("e_scope")) this.bindErrors(root, $);
     if ($("lg_reload")) this.bindLog(root, $);
@@ -1414,6 +1415,46 @@ class LegoTrackerPanel extends HTMLElement {
     });
   }
 
+  // ---------------------------------------------------------------- secret options (hidden link in the Manage tabs)
+  vSecret() {
+    const st = this.state.settings;
+    if (this.state.settingsErr) return this.emptyState("🔒", t("Only administrators can change settings."));
+    if (!st) { this.loadSettings(); return `<div class="skel" style="height:200px"></div>`; }
+    const bw = this.state.data.brickwatch;
+    return `<div class="panel"><h3>🕵️ ${t("Secret options")}</h3>
+      <div class="rule${st.brickwatch ? "" : " off"}"><label class="switch"><input type="checkbox" id="x_bw" ${st.brickwatch ? "checked" : ""}><i></i></label><div style="flex:1"><b>🧱 ${t("Brickwatch as price source")}</b><div class="sum">${t("Per set, the Brickwatch page with the prices of all shops is read (at most every 6 h). Shops that fail themselves (e.g. bol.com) get the Brickwatch price, shops without a link get one, and the set window shows every shop. Sets that are not on Brickwatch are not retried within a day.")}</div></div></div>
+      ${bw ? `<p class="muted">${t("{n} sets with Brickwatch prices, {m} not on Brickwatch", { n: bw.sets, m: bw.missing })}${bw.last ? " · " + t("last fetch {when}", { when: ago(bw.last) }) : ""}</p>
+        <button class="btn" id="x_bwjob">↻ ${t("Fetch Brickwatch for all sets")}</button>` : ""}</div>`;
+  }
+  bindSecret(root, $) {
+    const cb = $("x_bw"); if (!cb) return;
+    cb.addEventListener("change", () => this.busy(null, "", async () => {
+      await this._hass.callWS({ type: "lego_tracker/settings/set", fields: { brickwatch: cb.checked } });
+      await new Promise((r) => setTimeout(r, 1500));
+      this.state.settings = null; await this.load();
+      this.toast(cb.checked ? t("Brickwatch on") : t("Brickwatch off"), "ok");
+    }));
+    const job = $("x_bwjob"); if (job) job.onclick = () => this.busy(job, t("Starting…"), async () => {
+      const r = await this._hass.callWS({ type: "lego_tracker/brickwatch/fetch" });
+      this.state.job = r.job; this.pollJob(); this.renderJob();
+      this.toast(t("{job} started for {n} sets", { job: tx(r.job.label), n: r.job.total }), "ok");
+    });
+  }
+  brickwatchHtml(s) {
+    const bw = s.brickwatch; if (!bw) return "";
+    const retailers = this.state.data.retailers;
+    const head = `<h3 style="margin:16px 0 4px;display:flex;align-items:center;gap:8px">🧱 ${t("Brickwatch: all shops")}<span class="hsp" style="flex:1"></span>${bw.url ? `<a class="btn ghost sm" href="${esc(bw.url)}" target="_blank" rel="noopener noreferrer">brickwatch.net ↗</a>` : ""}<button class="btn ghost sm" id="bwgo" type="button">↻ ${t("Fetch")}</button></h3>`;
+    if (bw.status !== "ok") {
+      const msg = bw.status === "missing" ? t("Not on Brickwatch; next try {when}.", { when: DATE(bw.ts + 86400, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) })
+        : bw.status === "error" ? tx(bw.error || "") : t("Not fetched yet.");
+      return head + `<p class="muted" style="font-size:13px">${esc(msg)}</p>`;
+    }
+    const low = Math.min(...bw.shops.map((x) => x.price));
+    const rows = bw.shops.map((x) => `<tr><td><b>${esc(x.name)}</b>${x.retailer ? ` <span class="abadge" title="${t("a shop you track")}">${esc(retailers[x.retailer] || x.retailer)}</span>` : ""}</td>
+      <td class="num"><b class="${x.price === low ? "ok" : ""}">${EUR(x.price)}</b></td><td>${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${t("open")} ↗</a>` : ""}</td></tr>`).join("");
+    return head + `<p class="muted" style="font-size:12px;margin:0 0 6px">${t("{n} shops · updated {when}", { n: bw.shops.length, when: ago(bw.ts) })}</p><div class="tscroll"><table class="tbl"><tr><th>${t("Shop")}</th><th class="num">${t("Price")}</th><th></th></tr>${rows}</table></div>`;
+  }
+
   // ---------------------------------------------------------------- shop table (dialog + item editor)
   /** Every shop with a link plus the enabled shops without one: link, price, and per-shop actions. */
   shopTableHtml(s, focus = null) {
@@ -1538,6 +1579,7 @@ class LegoTrackerPanel extends HTMLElement {
         <h3 style="margin:16px 0 4px;display:flex;align-items:center;gap:8px">🏪 ${t("Shops: links & prices")}<span class="hsp" style="flex:1"></span><button class="btn ghost sm" id="lg" type="button">📜 ${t("Logbook")}</button></h3>
         <p class="muted" style="font-size:12px;margin:0 0 6px">${t("Edit a link or price and press Save. What you enter by hand always wins and is never overwritten; empty a field to hand it back to the automatic search / price.")}</p>
         ${this.shopTableHtml(s, focusShop)}
+        ${this.brickwatchHtml(s)}
         <form id="ef" style="margin-top:16px" autocomplete="off">
         <fieldset><legend>👀 ${t("Tracking")}</legend><div class="form"><label>${t("Target price")} (€)<input name="target_price" type="number" min="0" step="0.01" value="${s.target_price ?? ""}"></label>
           <label>${t("Priority")}<select name="priority">${[0, 1, 2, 3].map((p) => `<option value="${p}" ${(s.priority || 0) === p ? "selected" : ""}>${p ? "★".repeat(p) : "–"}</option>`).join("")}</select></label>
@@ -1585,6 +1627,7 @@ class LegoTrackerPanel extends HTMLElement {
     const find = async (btn) => this.busy(btn, t("Searching…"), async () => { const r = await this.svc("discover_offers", { set_number: num }, true); await this.load(); this.toast(t("{n} shop links found", { n: r.response.found }), r.response.found ? "ok" : ""); this.openSet(num); });
     q("find").onclick = (e) => find(e.currentTarget);
     q("enr").onclick = (e) => this.busy(e.currentTarget, t("Fetching…"), async () => { const r = await this._hass.callWS({ type: "lego_tracker/set/enrich", set_number: num }); await this.load(); this.toast(r.result.updated ? t("Set data updated") : t("No new set data found"), r.result.updated ? "ok" : ""); this.openSet(num); });
+    if (q("bwgo")) q("bwgo").onclick = (e) => this.busy(e.currentTarget, "", async () => { const r = await this._hass.callWS({ type: "lego_tracker/brickwatch/fetch", set_number: num, retry_missing: true }); await this.load(); this.toast(r.found ? t("Brickwatch prices fetched") : t("Not on Brickwatch"), r.found ? "ok" : ""); this.openSet(num); });
     q("rf").onclick = (e) => this.busy(e.currentTarget, t("Fetching…"), async () => { await this.svc("refresh", { set_number: num }); await this.load(); this.openSet(num); });
     q("rm").onclick = () => { if (!confirm(t(s.owned ? "Delete set {number} with its whole price history, and remove it from your collection?" : "Delete set {number} with its whole price history?", { number: num }))) return; this.busy(q("rm"), "", async () => { await this.svc("remove_set", { set_number: num }); this.closeDialog(); await this.load(); this.toast(t("Set {number} deleted", { number: num }), "ok"); }); };
     this.hookCharts(dlg);

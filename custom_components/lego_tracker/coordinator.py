@@ -19,6 +19,7 @@ from homeassistant.util import dt as dt_util
 
 from .client import Fetcher, lookup_metadata
 from .const import (
+    CONF_BRICKWATCH, BRICKWATCH_FRESH_HOURS, BRICKWATCH_MISSING_HOURS,
     CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET, CONF_BOL_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS,
     CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_LANGUAGE, CONF_REFRESH_MODE, CONF_SPREAD_HOURS, DEFAULT_REFRESH_MODE, DEFAULT_SPREAD_HOURS, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, CONF_CUSTOM_SHOPS, CONF_DIGEST_TIME, CONF_NO_AUTOPAUSE, CONF_SHOP_SEARCH, CONF_VALUE_SOURCE, DEFAULT_DIGEST_TIME, GENERIC_SHOPS, CONF_DISCOUNT_THRESHOLD, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
     DEFAULT_REFRESH_TIMES, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS, DEFAULT_RETAILERS,
@@ -32,6 +33,8 @@ from .models import (
 from .i18n import DEFAULT_LANGUAGE, LANGUAGES, LocalizedError, T, resolve, set_language
 from .notifications import Notifier, default_rules
 from .bol_api import BolApi, BolApiError
+from . import brickwatch as bwatch
+from .shops import all_domains
 from .parsers import Parsed, title_check
 from .shops import SEARCH, valid_search
 from .parsers import ACCESSORY_RE, KNOCKOFF_RE, clean_title, normalize_url, retailer_from_url, url_key
@@ -168,13 +171,15 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     # ------------------------------------------------------------ spread checks
     def _spread_candidates(self) -> list[str]:
+        if self.brickwatch_enabled:          # Brickwatch can also find prices for sets without links
+            return list(self.store["sets"])
         live = set(self._live_retailers(False))
         return [n for n, offers in self.store["offers"].items() if n in self.store["sets"]
                 and any(r in live and o.get("url") for r, o in offers.items())]
 
     def spread_interval(self) -> float:
         """Seconds between two set checks: cycle / number of sets (each set once per cycle)."""
-        n = len([n for n, o in self.store["offers"].items() if n in self.store["sets"] and o])
+        n = len(self.store["sets"]) if self.brickwatch_enabled else len([n for n, o in self.store["offers"].items() if n in self.store["sets"] and o])
         return max(20.0, self.spread_hours * 3600 / max(1, n))
 
     def start_spread(self, delay: float = 60) -> None:
@@ -369,6 +374,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return await self.fetcher.discover(rid, num, force=force)
 
     async def _fetch(self, rid: str, offer: dict[str, Any], num: str, force: bool = False) -> tuple[Any, str | None]:
+        if "brickwatch.net" in (offer.get("url") or ""):
+            return None, T("no Brickwatch price for this shop")
         if rid == "bol" and self.bol_api:
             try:
                 ean, title, image = offer.get("ean"), offer.get("title"), None
@@ -384,6 +391,76 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return None, str(err)
         return await self.fetcher.fetch_offer(rid, offer["url"], force=force)
 
+    # ------------------------------------------------------------ Brickwatch (hidden option)
+    @property
+    def brickwatch_enabled(self) -> bool:
+        return bool(self.opt(self.entry, CONF_BRICKWATCH, False))
+
+    async def brickwatch_refresh(self, num: str, force: bool = False, retry_missing: bool = False) -> dict[str, Any] | None:
+        """The set's Brickwatch page (all shops), re-used for a few hours. A missing page is not retried
+        within a day. Also links tracked shops that have no link yet and fills in empty set data."""
+        store = self.store.setdefault("brickwatch", {})
+        entry = store.get(num)
+        now = time.time()
+        if entry and entry.get("status") == "missing" and now - entry["ts"] < BRICKWATCH_MISSING_HOURS * 3600 and not retry_missing:
+            return None
+        if entry and entry.get("status") == "ok" and now - entry["ts"] < BRICKWATCH_FRESH_HOURS * 3600 and not force:
+            return entry
+        url = bwatch.set_url(num, self.opt(self.entry, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE))
+        status, page, error = await self.fetcher.get_page("brickwatch", url, force=force)
+        parsed = bwatch.parse_set_page(page, num, url, all_domains()) if status == 200 and page else None
+        if status == 404 or (status == 200 and parsed is None):
+            store[num] = {"status": "missing", "ts": now, "url": url}
+            self.log("info", "fetch", T("not on Brickwatch: next try tomorrow"), set_number=num, url=url, source="Brickwatch")
+            return None
+        if parsed is None:
+            store[num] = {**(entry or {}), "status": "error", "ts": now, "url": url, "error": error or T("HTTP error {status}", status=status)}
+            self.log("warning", "fetch", store[num]["error"], set_number=num, url=url, source="Brickwatch")
+            return None
+        entry = store[num] = {"status": "ok", "ts": now, "url": url, **parsed}
+        s = self.store["sets"].get(num)
+        if s is not None:
+            if parsed.get("name") and not s.get("name"):
+                s["name"], s["name_source"] = parsed["name"][:120], "Brickwatch"
+            if parsed.get("image") and not s.get("image"):
+                s["image"], s["image_source"] = parsed["image"], "Brickwatch"
+            if parsed.get("rrp") and not s.get("rrp"):
+                s["rrp"], s["rrp_source"] = parsed["rrp"], "Brickwatch"
+            offers = self.store["offers"].setdefault(num, {})
+            rejected = set(self.store.setdefault("rejected", {}).get(num, []))
+            for shop in parsed["shops"]:
+                rid = shop.get("retailer")
+                if rid in self.retailers and not (offers.get(rid) or {}).get("url") and shop.get("url") \
+                        and url_key(rid, shop["url"]) not in rejected:
+                    offers[rid] = {"url": shop["url"], "history": [], "found": now, "via": "brickwatch",
+                                   "title": f"LEGO {num} {parsed.get('name') or ''}".strip()}
+                    self.log("ok", "discover", T("link found via Brickwatch"), set_number=num, retailer=rid, url=shop["url"], source="Brickwatch")
+        return entry
+
+    def brickwatch_prices(self, num: str) -> dict[str, dict[str, Any]]:
+        """Fresh Brickwatch prices per tracked retailer."""
+        entry = (self.store.get("brickwatch") or {}).get(num)
+        if not entry or entry.get("status") != "ok" or time.time() - entry["ts"] > 26 * 3600:
+            return {}
+        return {sh["retailer"]: sh for sh in entry.get("shops", []) if sh.get("retailer")}
+
+    def start_brickwatch(self) -> dict[str, Any]:
+        """Job: fetch the Brickwatch page of every set and fill in prices where the shop itself fails."""
+        async def work(num: str) -> dict[str, int]:
+            entry = await self.brickwatch_refresh(num, force=True)
+            if entry is None:
+                return {"skipped": 1}
+            n = 0
+            for rid, shop in self.brickwatch_prices(num).items():
+                o = self.store["offers"].get(num, {}).get(rid)
+                if o and not o.get("manual_price") and (o.get("error") or not o.get("last_ok")
+                                                         or time.time() - o["last_ok"] > 20 * 3600 or o.get("via") == "brickwatch"):
+                    record_price(o, shop["price"])
+                    o["last_ok"] = o["last_checked"]
+                    n += 1
+            return {"updated": n}
+        return self.start_job("brickwatch", T("Fetching Brickwatch prices"), list(self.store["sets"]), work)
+
     def _live_retailers(self, force: bool) -> list[str]:
         if force:
             self.fetcher.reset_cooldowns()
@@ -392,8 +469,9 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # ------------------------------------------------------------------- refresh
     def start_refresh(self, force: bool = False) -> dict[str, Any]:
         live = self._live_retailers(force)
-        nums = [n for n, offers in self.store["offers"].items()
-                if n in self.store["sets"] and any(r in live and o.get("url") for r, o in offers.items())]
+        nums = list(self.store["sets"]) if self.brickwatch_enabled else [
+            n for n, offers in self.store["offers"].items()
+            if n in self.store["sets"] and any(r in live and o.get("url") for r, o in offers.items())]
         paused = [RETAILERS[r][0] for r in self.retailers if r not in live]
         note = T("paused and skipped: {shops}", shops=", ".join(paused)) if paused else None
         return self.start_job("refresh", T("Refreshing shop prices"), nums,
@@ -407,13 +485,23 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         'price' entries for changes. A manual price always wins over the automatic one."""
         live = retailers if retailers is not None else self._live_retailers(False)
         s = self.store["sets"][num]
+        bw_prices: dict[str, dict[str, Any]] = {}
+        if self.brickwatch_enabled:
+            try:
+                await self.brickwatch_refresh(num, force=force)
+                bw_prices = self.brickwatch_prices(num)
+            except Exception:  # noqa: BLE001 - an extra source must never break the check
+                _LOGGER.exception("Brickwatch failed for %s", num)
         before = self.compute()["statuses"].get(num, {})
         offers = [(rid, o) for rid, o in self.store["offers"].get(num, {}).items()
-                  if rid in live and o.get("url") and o.get("link_status") != "rejected"]
+                  if (rid in live or (rid in bw_prices and rid in self.retailers)) and o.get("url") and o.get("link_status") != "rejected"]
         results = await asyncio.gather(*(self._fetch(rid, o, num, force) for rid, o in offers))
         counts = {"updated": 0, "errors": 0, "skipped": 0}
         shop_results: dict[str, dict[str, Any]] = {}
         for (rid, offer), (parsed, error) in zip(offers, results):
+            via = None
+            if (bwp := bw_prices.get(rid)) and (error or not parsed or parsed.price is None):
+                parsed, error, via = Parsed(price=bwp["price"], title=offer.get("title")), None, "brickwatch"
             if error and error.startswith("paused"):
                 counts["skipped"] += 1        # keep the last known price, just skip
                 shop_results[rid] = {"ok": None, "error": error}
@@ -436,6 +524,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                              else T("first price €{price}", price=f"{price:.2f}"),
                              set_number=num, retailer=rid, url=offer.get("url"), price=price, old_price=old_price, source=source)
             shop_results[rid] = {"ok": not error, "price": price, "error": error, "manual": bool(manual)}
+            if via:
+                shop_results[rid]["via"] = via
             if self.job and self.job.get("running"):
                 st = self.job["shops"].setdefault(rid, {"ok": 0, "err": 0})
                 st["err" if error else "ok"] += 1
@@ -735,7 +825,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "refresh_mode": self.refresh_mode, "spread_hours": self.spread_hours,
             "language": o.get(CONF_LANGUAGE, DEFAULT_LANGUAGE), "languages": LANGUAGES,
             "bol_country": o.get(CONF_BOL_COUNTRY, "auto"), "bol_api": bool(self.bol_api),
-            "browser_relay": bool(o.get(CONF_RELAY, True)), "relay_hours": int(o.get(CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS)),
+            "browser_relay": bool(o.get(CONF_RELAY, True)), "brickwatch": bool(o.get(CONF_BRICKWATCH, False)), "relay_hours": int(o.get(CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS)),
         }
 
     def settings_validate(self, fields: dict[str, Any]) -> dict[str, Any]:
@@ -756,7 +846,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             num("discount_threshold", 1, 90)
         if "min_history_days" in fields:
             num("min_history_days", 0, 90)
-        for key in ("auto_refresh", "use_impersonation", CONF_RELAY):
+        for key in ("auto_refresh", "use_impersonation", CONF_RELAY, CONF_BRICKWATCH):
             if key in fields:
                 opts[key] = bool(fields[key])
         if "refresh_times" in fields:
