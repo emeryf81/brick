@@ -833,7 +833,7 @@ BW_PAGE = '''<html><head><title>LEGO 10281 Bonsai - Brickwatch</title><meta prop
 
 def _pages(**by_host):
     """get_page mock: (status, html) per host fragment, 404 for the rest."""
-    async def get(src, url, force=False):
+    async def get(src, url, force=False, note_block=True):
         for frag, res in by_host.items():
             if frag.replace("_", ".") in url or frag in url:
                 return res(url) if callable(res) else res
@@ -951,6 +951,11 @@ def test_compare_parsers_skip_led_and_follow():
     # Shoparize: embedded JSON search results; LED kits and other sets are dropped
     r = compare.parse("shoparize", SHOPARIZE, "40460", "https://www.shoparize.com/be/q?q=lego+40460", d)
     assert [(x["name"], x["price"]) for x in r.shops] == [("bol.com", 11.49), ("Dreamland", 12.99)] and r.name is None
+    # Channable renders its results with JavaScript: the HTML doesn't even contain the query -> 'unreadable', not 'missing'
+    js_page = '<html><head><title>Search and Compare Prices Across Webshops | Channable</title></head><body><div id="__next"></div>' \
+              '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"page":{"title":"x"}}},"page":"/","query":{}}</script></body></html>'
+    r = compare.parse("channable", js_page, "10368", "https://shopping.channable.com/?country=BE&search=lego+10368", d)
+    assert r.kind == "missing" and r.note == "js"
     # Producthero needs the EAN
     assert compare.first_url("producthero", "60454", "nl-be") is None
     assert compare.first_url("producthero", "60454", "nl-be", "5702016914177") == \
@@ -976,6 +981,84 @@ async def test_compare_network_errors_pause_one_hour_and_job_stops(hass: HomeAss
     with patch.object(c.fetcher, "get_page", page):
         await c.compare_refresh("10281")                           # paused: skipped
     assert page.await_count == 5
+
+
+# structure of a real Kieskeurig.be search result (2026-09): click-outs via ocean.kieskeurig.be, prices in 'font-bold'
+KK_CARDS = """<html><body><ul class="productlist_grid">
+<li><article class="productcard"><a href="/bouw_en_constructiespeelgoed/product/51044251-lego-icons-chrysant-botanical-collection-10368">LEGO Icons Chrysant - Botanical Collection - 10368</a>
+<span>v.a. € 15,98</span><a href="https://ocean.kieskeurig.be/e/c/aaa" class="productcard_cta" rel="sponsored nofollow noopener">Naar goedkoopste shop</a>
+<ul class="productcard_pricelist"><li><a href="https://ocean.kieskeurig.be/e/c/bbb" class="productcard_priceitem-link" rel="sponsored nofollow noopener">
+<span class="productcard_priceitem-shop">bol.</span><div><span class="productcard_priceitem-amount font-bold">€ 15,98</span></div></a></li>
+<li><a href="https://ocean.kieskeurig.be/e/c/ccc" class="productcard_priceitem-link" rel="sponsored nofollow noopener">
+<span class="productcard_priceitem-shop">Wehkamp</span><div><span class="productcard_priceitem-amount font-bold">€ 27,89</span></div></a></li></ul></article></li>
+<li><article class="productcard"><a href="/bouw_en_constructiespeelgoed/product/51370743-lego-botanical-collection-10369">LEGO 10369</a>
+<ul><li><a href="https://ocean.kieskeurig.be/e/c/ddd" rel="sponsored"><span class="productcard_priceitem-shop">bol.</span><span class="font-bold">€ 39,99</span></a></li></ul></article></li>
+</ul></body></html>"""
+
+
+async def test_kieskeurig_product_page_403_uses_search_results(hass: HomeAssistant, entry, no_network):
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "brickwatch": True, "compare_sources": ["kieskeurig"]})
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10368"}, blocking=True)
+
+    async def get(src, url, force=False, note_block=True):
+        if "/search" in url:
+            return 200, KK_CARDS, None
+        return 403, "", "blocked (HTTP 403)"
+    page = AsyncMock(side_effect=get)
+    with patch.object(c.fetcher, "get_page", page):
+        got = await c.compare_refresh("10368")
+    assert [(x["retailer"], x["price"]) for x in got["kieskeurig"]["shops"]] == [("bol", 15.98), (None, 27.89)]
+    assert page.await_args_list[1].kwargs["note_block"] is False and c.fetcher.cooldown_left("kieskeurig") == 0   # site not paused
+    with patch.object(c.fetcher, "get_page", page):
+        await c.compare_refresh("10368", refresh=True)
+    assert page.await_count == 3                     # product pages skipped for a day: only the search page
+
+
+# structure of a real BrickEconomy set page (2026-09, region Europe)
+BE_PAGE = """<html><head><script type="application/ld+json">{"@context": "https://schema.org/","@type": "Product",
+"name": "LEGO Botanical Collection Chrysanthemum","image": ["https://www.brickeconomy.com/resources/images/sets/lego-10368-1_xlarge.jpg"],
+"sku": "10368-1","gtin13": "5702017719689","offers": {"@type": "AggregateOffer","lowPrice": "23.79","priceCurrency": "USD"}}</script></head>
+<body><div>Theme</div><div>Botanicals</div><div>Year</div><div>2025</div>
+<h4>Set Details</h4><div>Set number</div><div>10368-1</div><div>Name</div><div>Chrysanthemum</div><div>Theme</div><div><a>Icons</a></div>
+<div>Subtheme</div><div>Botanical Collection</div><div>Year</div><div>2024</div><div>Availability</div><div>Retail</div>
+<div>Pieces</div><div>278 <small>(PPP €0.11)</small></div>
+<h4>Set Pricing</h4><div>Retail price</div><div>€29.99</div><div>Market price</div><div>€22.31</div><div>-25.6%</div>
+<h4>Set Predictions</h4><div>Retirement</div><div>Early to mid 2027</div><div>69.6%</div><div>1 year retired</div><div>€35.07</div>
+<div>5 years retired</div><div>€33 - €37</div><div>EAN</div><div>5702017719689</div></body></html>"""
+
+
+async def test_brickeconomy_market_value_and_retirement(hass: HomeAssistant, entry, no_network):
+    from custom_components.lego_tracker import compare
+
+    r = compare.parse("brickeconomy", BE_PAGE, "10368", "https://www.brickeconomy.com/set/10368-1/", {})
+    assert r.kind == "data" and r.data["theme"] == "Icons" and r.data["year"] == 2024 and r.data["pieces"] == 278
+    assert r.data["market_new"] == 22.31 and r.rrp == 29.99 and r.data["forecast_5y"] == [33.0, 37.0] and r.ean == "5702017719689"
+    assert compare.forecast_date("Early to mid 2027") == "2027-05-31" and compare.forecast_date("Retired December 2024") == "2024-12-31"
+    assert compare.parse("brickeconomy", BE_PAGE.replace("10368-1</div>", "10369-1</div>").replace("10368", "x"), "10368", "u", {}).kind == "missing"
+    assert compare._eur("$24.99") is None                                  # only euro values
+
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "brickwatch": True, "compare_sources": ["brickeconomy"]})
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10368"}, blocking=True)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
+    c.store["collection"]["10368"] = {"qty": 1, "paid": 25.0, "condition": "Sealed"}
+    c.store["sets"]["10281"].update(exit_date="2026-12-31", exit_date_source="user")
+    page = AsyncMock(side_effect=lambda src, url, force=False, note_block=True:
+                     (200, BE_PAGE if "10368" in url else BE_PAGE.replace("10368", "10281"), None))
+    with patch.object(c.fetcher, "get_page", page):
+        await c.compare_refresh("10368")
+        await c.compare_refresh("10281")
+    assert page.await_args_list[0].args[1] == "https://www.brickeconomy.com/set/10368-1/"
+    s, e = c.store["sets"]["10368"], c.store["collection"]["10368"]
+    assert s["exit_date"] == "2027-05-31" and s["exit_date_source"] == "BrickEconomy" and s["market"]["market_new"] == 22.31
+    assert e["current_value"] == 22.31 and e["value_source"] == "BrickEconomy" and len(e["value_history"]) == 1
+    assert c.store["sets"]["10281"]["exit_date"] == "2026-12-31"           # your own date wins
+    assert c.compare_prices("10368") == {}                                  # no shop prices from BrickEconomy
+    c.store["compare"]["brickeconomy"]["10368"]["ts"] -= 12 * 3600
+    with patch.object(c.fetcher, "get_page", page):
+        await c.compare_refresh("10368")
+    assert page.await_count == 2                                            # re-used for a day, not 6 h
 
 
 async def test_relay_fetches_comparison_pages(hass: HomeAssistant, entry, no_network, hass_client):

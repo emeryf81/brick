@@ -41,7 +41,7 @@ def _bw_status(coord) -> dict[str, Any] | None:
         out[src] = {"name": name, "enabled": src in coord.compare_sources,
                     "sets": sum(1 for e in st.values() if e.get("status") == "ok"),
                     "missing": sum(1 for e in st.values() if e.get("status") == "missing"),
-                    "errors": sum(1 for e in st.values() if e.get("status") == "error" or e.get("last_error")),
+                    "errors": sum(1 for e in st.values() if e.get("status") in ("error", "unreadable") or e.get("last_error")),
                     "last": max((e.get("ts", 0) for e in st.values()), default=None) or None,
                     "paused_until": coord.fetcher.blocked_until.get(src) if coord.fetcher.cooldown_left(src) > 0 else None,
                     "net_errors": coord._net_errors.get(src, 0)}

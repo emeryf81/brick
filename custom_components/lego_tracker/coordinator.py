@@ -64,6 +64,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.notifier = Notifier(self)
         self._net_errors: dict[str, int] = {}
         self._compare_debug: dict[str, dict[str, Any]] = {}
+        self._compare_fallback: dict[tuple[str, str], Any] = {}   # prices on a search page, used when its product page fails
+        self._no_follow: dict[str, float] = {}                     # site -> until when its product pages are skipped (403)
         self._compare_retry_unsub: Callable[[], None] | None = None
         def _paused(rid: str, hours: float) -> None:
             if rid in compare.SOURCES:
@@ -450,9 +452,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                            steps: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
         st, now = self._cstore(src), time.time()
         entry = st.get(num)
-        if entry and entry.get("status") == "missing" and now - entry["ts"] < COMPARE_MISSING_HOURS * 3600 and not retry_missing:
+        if entry and entry.get("status") in ("missing", "unreadable") and now - entry["ts"] < COMPARE_MISSING_HOURS * 3600 and not retry_missing:
             return None
-        if entry and entry.get("status") == "ok" and now - entry["ts"] < COMPARE_FRESH_HOURS * 3600 and not refresh:
+        if entry and entry.get("status") == "ok" and now - entry["ts"] < compare.FRESH_HOURS.get(src, COMPARE_FRESH_HOURS) * 3600 \
+                and not refresh:
             return entry
         if not force and self.fetcher.cooldown_left(src) > 0:
             return entry if entry and entry.get("status") == "ok" else None
@@ -462,7 +465,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return None                                      # site doesn't cover this country / needs an EAN
         step, kind = 0, "error"
         while url:
-            status, page, error = await self.fetcher.get_page(src, url, force=True)
+            status, page, error = await self.fetcher.get_page(src, url, force=True, note_block=step == 0)
             if steps is not None:
                 steps.append({"url": url, "status": status, "error": error, "size": len(page or "")})
             kind, url = self.compare_page(src, num, url, status, page, error, step)
@@ -480,7 +483,15 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._compare_debug[src] = {"url": url, "status": status, "error": error, "set": num, "ts": now, "via": via,
                                     "html": (page or "")[:1_500_000]}
 
+        fb = self._compare_fallback.pop((src, num), None) if step else None
+
         def fail(msg: str) -> tuple[str, None]:
+            if fb is not None:                               # the product page failed: the search result's prices
+                if status == 403:
+                    self._no_follow[src] = now + 24 * 3600
+                    self.log("info", "fetch", T("{source} blocks its product pages: prices from the search results for a day",
+                                                source=name), set_number=num, url=url, source=name)
+                return self._compare_store(src, num, *fb, via, now)
             old = st.get(num)
             if old and old.get("status") == "ok":            # keep the last good prices
                 old.update(last_error=msg, err_ts=now)
@@ -500,16 +511,32 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         elif status >= 400:
             return fail(T("HTTP error {status}", status=status))
         else:
-            res = compare.parse(src, page, num, url, all_domains(), step)
+            no_follow = self._no_follow.get(src, 0) > now
+            res = compare.parse(src, page, num, url, all_domains(), compare.MAX_STEPS - 1 if no_follow else step)
         if res.kind == "follow" and res.url and compare.is_compare_url(res.url) and step < compare.MAX_STEPS - 1:
+            if res.shops:
+                self._compare_fallback[(src, num)] = (compare.Result("offers", shops=res.shops), url)
             return "follow", res.url
-        if res.kind != "offers":
+        if res.kind not in ("offers", "data") and fb is not None:
+            return self._compare_store(src, num, *fb, via, now)
+        if res.kind not in ("offers", "data") and res.note == "js":
+            msg = T("{source} loads its results with JavaScript: this page has no results to read", source=name)
+            st[num] = {"status": "unreadable", "ts": now, "url": url, "error": msg}
+            self.log("warning", "fetch", msg, set_number=num, url=url, source=name)
+            return "missing", None
+        if res.kind not in ("offers", "data"):
             st[num] = {"status": "missing", "ts": now, "url": url, "note": res.note}
             self.log("info", "fetch", T("not on {source}: next try tomorrow", source=name), set_number=num, url=url, source=name)
             return "missing", None
-        st[num] = {"status": "ok", "ts": now, "url": url, "name": res.name, "image": res.image, "rrp": res.rrp,
-                   "ean": res.ean, "shops": res.shops, "via": via}
+        return self._compare_store(src, num, res, url, via, now)
+
+    def _compare_store(self, src: str, num: str, res: Any, url: str, via: str, now: float) -> tuple[str, None]:
+        name = compare.SOURCES[src][0]
+        self._cstore(src)[num] = {"status": "ok", "ts": now, "url": url, "name": res.name, "image": res.image, "rrp": res.rrp,
+                                  "ean": res.ean, "shops": res.shops, "via": via, **({"data": res.data} if res.data else {})}
         s = self.store["sets"].get(num)
+        if s is not None and res.data:
+            self._apply_market(num, s, res.data, name, now)
         if s is not None:
             if res.name and not s.get("name") and not compare.is_accessory(res.name):
                 s["name"], s["name_source"] = res.name[:120], name
@@ -520,6 +547,27 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if res.ean and not s.get("ean") and len(res.ean) == 13:
                 s["ean"] = res.ean
         return "ok", None
+
+    def _apply_market(self, num: str, s: dict[str, Any], d: dict[str, Any], name: str, now: float) -> None:
+        """BrickEconomy: set data where empty, the retirement (forecast) date unless you set one yourself,
+        and the market value of owned sets (new, or used for opened / built sets) as their value."""
+        for key in ("theme", "subtheme", "year", "pieces"):
+            if d.get(key) and not s.get(key):
+                s[key] = d[key]
+        s["market"] = {k: d.get(k) for k in ("market_new", "market_used", "availability", "retired", "retirement",
+                                               "forecast_1y", "forecast_5y")} | {"ts": now, "source": name}
+        when = compare.forecast_date(d.get("retired") or d.get("retirement"))
+        if when and (not s.get("exit_date") or s.get("exit_date_source") == name):
+            s["exit_date"], s["exit_date_source"] = when, name
+        entry = self.store["collection"].get(num)
+        if entry is not None:
+            opened = entry.get("condition") in ("Opened", "Built", "Incomplete")
+            value = (d.get("market_used") if opened else None) or d.get("market_new")
+            if value:
+                hist = list(entry.get("value_history") or [])
+                if not hist or abs(hist[-1][1] - value) > 0.005:
+                    hist.append([now, value])
+                entry["value_history"], entry["current_value"], entry["value_source"] = hist[-500:], value, name
 
     def _compare_links(self, num: str) -> None:
         """Tracked shops without a link get one from a comparison site (the shop's own page when the site
@@ -812,7 +860,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     for num, s in self.store["sets"].items():
                         e = self._cstore(src).get(num) or {}
                         fresh = e.get("status") == "ok" and time.time() - e["ts"] < 20 * 3600 and not e.get("last_error")
-                        missing = e.get("status") == "missing" and time.time() - e["ts"] < COMPARE_MISSING_HOURS * 3600
+                        missing = e.get("status") in ("missing", "unreadable") and time.time() - e["ts"] < COMPARE_MISSING_HOURS * 3600
                         if fresh or missing or not (paused or e.get("status") == "error" or e.get("last_error")):
                             continue
                         if (url := compare.first_url(src, num, locale, s.get("ean"))):
@@ -1354,7 +1402,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                    "location": str}
     CLEARABLE = {"target_price", "notes", "priority", "retiring", "exit_date", "subtheme",
                  "name", "theme", "rrp", "pieces", "year", "image"}      # cleared = automatic again
-    SOURCE_KEYS = {"name": "name_source", "rrp": "rrp_source", "image": "image_source", "retiring": "retiring_source"}
+    SOURCE_KEYS = {"name": "name_source", "rrp": "rrp_source", "image": "image_source", "retiring": "retiring_source",
+                   "exit_date": "exit_date_source"}
 
     @staticmethod
     def _coerce(key: str, typ: type, value: Any) -> Any:

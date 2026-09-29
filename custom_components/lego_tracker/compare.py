@@ -16,6 +16,7 @@ import html as htmllib
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import quote_plus, urljoin, urlparse
@@ -30,8 +31,10 @@ SOURCES: dict[str, tuple[str, str]] = {
     "shoparize": ("Shoparize", "www.shoparize.com"),
     "channable": ("Channable Shopping", "shopping.channable.com"),
     "producthero": ("Producthero", "shopping.producthero.com"),
+    "brickeconomy": ("BrickEconomy", "www.brickeconomy.com"),     # market value + retirement, not shop prices
 }
-HOSTS = {"www.brickwatch.net", "www.kieskeurig.be", "www.kieskeurig.nl", "www.shoparize.com",
+FRESH_HOURS = {"brickeconomy": 24}          # market values move slowly: once a day is enough
+HOSTS = {"www.brickeconomy.com", "www.brickwatch.net", "www.kieskeurig.be", "www.kieskeurig.nl", "www.shoparize.com",
          "shopping.channable.com", "shopping.producthero.com"}
 MAX_STEPS = 3
 
@@ -39,7 +42,9 @@ BW_LOCALES = {"nl-be": "nl-BE", "fr-be": "fr-BE", "en-be": "en-BE", "nl-nl": "nl
               "en-gb": "en-GB", "de-de": "de-DE", "en-de": "en-DE"}
 PRICE_RE = re.compile(r"(?:€\s*(\d{1,4}(?:[.\s]\d{3})*(?:[.,]\d{1,2})?|\d{1,4}[.,]-)|(\d{1,4}(?:[.\s]\d{3})*(?:[.,]\d{1,2})?)\s*€"
                       r"|EUR\s*(\d{1,4}(?:[.,]\d{1,2})?))")
-OLD_PRICE = re.compile(r"old|strike|was|rrp|advies|retail|list-?price|msrp|original|crossed|uvp|shipping|verzend|delivery", re.I)
+# class words of struck-through / old / advisory / shipping prices (whole words: 'font-bold' is not 'old')
+OLD_PRICE = re.compile(r"(?:^|[\s_:-])(?:old|strike|strikethrough|line-through|was|rrp|advies|adviesprijs|retail|list-?price|msrp|"
+                       r"original|crossed|uvp|shipping|verzend|verzendkosten|delivery)(?:$|[\s_:-])", re.I)
 RRP_RE = re.compile(r"(?:adviesprijs|winkelprijs|verkoopprijs lego|rrp|prix conseillé|prix public|uvp|retail price)[^€\d]{0,60}"
                     r"(?:€\s*([\d.,]+)|([\d.,]+)\s*€)", re.I)
 # not the set itself: LED / lighting kits and other accessories, knock-offs
@@ -95,6 +100,8 @@ def first_url(source: str, num: str, lego_locale: str | None = None, ean: str | 
         return f"https://www.shoparize.com/{'uk' if cc == 'GB' else cc.lower()}/q?q={q}"
     if source == "channable":
         return f"https://shopping.channable.com/?country={cc}&search={q}"
+    if source == "brickeconomy":
+        return f"https://www.brickeconomy.com/set/{num}-1/"
     if source == "producthero":
         if not ean or not ean.isdigit():
             return None
@@ -193,7 +200,7 @@ def shop_retailer(name: str, href: str | None, domains: dict[str, str]) -> str |
         for rid, dom in domains.items():
             if host == dom or host.endswith("." + dom):
                 return rid
-    n = (name or "").lower().strip()
+    n = re.sub(r"\s+logo$", "", (name or "").lower().strip()).strip(" .")     # 'bol. logo' -> 'bol'
     for rid, dom in domains.items():               # custom shops: their domain in the shop name
         if dom and dom in n:
             return rid
@@ -222,13 +229,25 @@ def _shop_name(row: _Node, link: _Node) -> str:
     return urlparse(link.attrs.get("href", "")).netloc.removeprefix("www.") or "?"
 
 
-def _is_out_link(href: str, host: str) -> bool:
+def _is_out_link(href: str, host: str, rel: str = "") -> bool:
+    """A link to a shop: 'sponsored' links, other domains, and the site's own click-out redirects
+    (e.g. ocean.kieskeurig.be/e/c/..., /go/..., ?url=...)."""
     if not href or href.startswith(("#", "mailto:", "javascript:", "tel:")):
         return False
+    if "sponsored" in rel.lower():
+        return True
     u = urlparse(href)
-    if u.netloc and u.netloc.lower() != host and not u.netloc.lower().endswith(host.removeprefix("www.")):
+    net = u.netloc.lower()
+    base = host.removeprefix("www.")
+    if net and net != host and not net.endswith(base):
         return True                                   # direct outgoing link
-    return bool(re.search(r"/(?:go|out|redirect|click|clickout|buy|visit|link|r|goto|naar|shop)/|[?&](?:url|u|target)=", href, re.I))
+    if net and net != host and re.match(r"(?:ocean|click|clicks|out|go|redirect|track|tracking|r)\.", net):
+        return True                                   # the site's own click-out subdomain
+    return bool(re.search(r"/(?:go|out|redirect|click|clickout|buy|visit|link|r|goto|naar|shop|e/c)/|[?&](?:url|u|target)=", href, re.I))
+
+
+def _out(n: _Node, host: str) -> bool:
+    return n.tag == "a" and _is_out_link(n.attrs.get("href", ""), host, n.attrs.get("rel", ""))
 
 
 # ------------------------------------------------------------------ extraction layers
@@ -366,6 +385,10 @@ def _balanced(s: str, start: int) -> str:
     return ""
 
 
+# button texts, not shop names
+CTA_RE = re.compile(r"^(?:naar|bekijk|ga naar|bezoek|koop|kopen|bestel|buy|view|visit|go to|zum|voir|ver|shop now|meer)\b|goedkoopste|cheapest|günstigsten|moins cher", re.I)
+
+
 def _dom_offers(root: _Node, page_url: str, search: bool) -> list[dict[str, Any]]:
     """HTML heuristic: the smallest block around a (shop) link that holds a euro price."""
     host = urlparse(page_url).netloc.lower()
@@ -373,7 +396,7 @@ def _dom_offers(root: _Node, page_url: str, search: bool) -> list[dict[str, Any]
     seen: set[int] = set()
     for link in (n for n in root.iter() if n.tag == "a" and n.attrs.get("href")):
         href = link.attrs["href"]
-        if not search and not _is_out_link(href, host):
+        if not search and not _out(link, host):
             continue
         row, depth = link, 0
         while row.parent is not None and depth < 6 and not _prices(row):
@@ -382,11 +405,14 @@ def _dom_offers(root: _Node, page_url: str, search: bool) -> list[dict[str, Any]
         if not prices or id(row) in seen:
             continue
         # a block with several offers is a whole list, not one offer
-        if sum(1 for n in row.iter() if n.tag == "a" and _is_out_link(n.attrs.get("href", ""), host)) > 2 or len(set(prices)) > 3:
+        if sum(1 for n in row.iter() if _out(n, host)) > 2 or len(set(prices)) > 3:
             continue
         seen.add(id(row))
         text = row.all_text()
-        out.append({"name": _shop_name(row, link), "price": min(prices), "url": urljoin(page_url, htmllib.unescape(href)),
+        name = _shop_name(row, link)
+        if not search and CTA_RE.search(name):
+            continue                                  # "Naar goedkoopste shop": a button, not a shop
+        out.append({"name": name, "price": min(prices), "url": urljoin(page_url, htmllib.unescape(href)),
                     "title": text[:300] if search else None})
     return out
 
@@ -402,6 +428,7 @@ class Result:
     ean: str | None = None
     shops: list[dict[str, Any]] = field(default_factory=list)
     note: str | None = None
+    data: dict[str, Any] | None = None       # set data without shop prices (BrickEconomy)
 
 
 def _page_title(page: str) -> str:
@@ -434,6 +461,25 @@ def _links(root: _Node, page_url: str, pattern: str, num: str) -> list[str]:
         cands.append((-score, href))
     seen: set[str] = set()
     return [h for _, h in sorted(cands) if not (h in seen or seen.add(h))]
+
+
+def _card_offers(root: _Node, page_url: str, product_url: str) -> list[dict[str, Any]]:
+    """Offers inside the search-result card of one product (the block around its link that holds
+    shop links, but no other product)."""
+    host = urlparse(page_url).netloc.lower()
+    pid = re.search(r"/product/(\d+)", product_url)
+    for a in (n for n in root.iter() if n.tag == "a" and pid and f"/product/{pid.group(1)}" in n.attrs.get("href", "")):
+        card = a
+        for _ in range(12):
+            if card.parent is None:
+                break
+            card = card.parent
+            ids = {m.group(1) for n in card.iter() if n.tag == "a" and (m := re.search(r"/product/(\d+)", n.attrs.get("href", "")))}
+            if len(ids) > 1:
+                break                                  # grew into the next product
+            if any(_out(n, host) for n in card.iter()):
+                return _dom_offers(card, page_url, False)
+    return []
 
 
 def _collect(page: str, page_url: str, search: bool, root: _Node | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -471,6 +517,8 @@ def _finish(info: dict[str, Any], offers: list[dict[str, Any]], page: str, num: 
 
 def parse(source: str, page: str, num: str, page_url: str, domains: dict[str, str], step: int = 0) -> Result:
     """What one fetched page of a source gives: offers, a URL to follow, or 'not there'."""
+    if source == "brickeconomy":
+        return parse_brickeconomy(page, num)
     root = _dom(page)
     path = urlparse(page_url).path
     if source == "brickwatch":
@@ -497,7 +545,14 @@ def parse(source: str, page: str, num: str, page_url: str, domains: dict[str, st
     if source == "kieskeurig":
         if "/product/" not in path:
             links = _links(root, page_url, r"/product/\d+", num)
-            return Result("follow", url=links[0]) if links and step < MAX_STEPS - 1 else Result("missing")
+            if not links:
+                return Result("missing")
+            # the result card already lists the cheapest shops: kept as a fallback for the product page
+            card = _card_offers(root, page_url, links[0])
+            fallback = _finish({}, card, "", num, domains, False, page_url).shops if card else []
+            if step < MAX_STEPS - 1:
+                return Result("follow", url=links[0], shops=fallback)
+            return Result("offers" if fallback else "missing", shops=fallback)
         head = _h1(page) + " " + _page_title(page)
         if is_accessory(head):
             return Result("missing", note="only accessories")
@@ -510,8 +565,95 @@ def parse(source: str, page: str, num: str, page_url: str, domains: dict[str, st
         info, offers = _collect(page, page_url, False, root)
         return _finish(info, offers, page, num, domains, False, page_url)
     # search result pages (Shoparize, Channable): every result is one shop's offer
+    if not has_number(page, num):
+        # a server-rendered result page always repeats the query; without it the results are
+        # loaded afterwards by JavaScript and there is nothing in this HTML to read
+        return Result("missing", note="js")
     info, offers = _jsonld(page)
     offers = [o for o in offers if o.get("title")] or _embedded(page) or _dom_offers(root, page_url, True)
     res = _finish({}, offers, page, num, domains, True, page_url)
     res.name = res.image = res.rrp = None            # a search page says nothing about the set itself
     return res
+
+
+# ------------------------------------------------------------------ BrickEconomy (value, not shop prices)
+SEASONS = (("early to mid", 5, 31), ("mid to late", 9, 30), ("early", 3, 31), ("mid", 6, 30), ("late", 12, 31))
+MONTHS = {m: i + 1 for i, m in enumerate(("january", "february", "march", "april", "may", "june", "july", "august",
+                                          "september", "october", "november", "december"))}
+
+
+def _eur(text: str | None) -> float | None:
+    """A euro amount; None for other currencies (the site follows the visitor's region)."""
+    if not text or "€" not in text:
+        return None
+    m = re.search(r"€\s*([\d.,]+)", text)
+    return parse_price(m.group(1)) if m else None
+
+
+def forecast_date(text: str | None) -> str | None:
+    """'Early to mid 2027' -> '2027-05-31', 'December 2024' -> '2024-12-31' (end of the period)."""
+    if not text or not (y := re.search(r"(20\d\d)", text)):
+        return None
+    t, year = text.lower(), int(y.group(1))
+    for word, month in MONTHS.items():
+        if word in t:
+            nxt = date(year + (month == 12), month % 12 + 1, 1)
+            return (nxt - timedelta(days=1)).isoformat()
+    for word, month, day in SEASONS:
+        if word in t:
+            return f"{year}-{month:02d}-{day:02d}"
+    return f"{year}-12-31"
+
+
+def parse_brickeconomy(page: str, num: str) -> Result:
+    """Set page: market value (new / used), retail price, retirement (forecast), set data."""
+    info, _ = _jsonld(page)
+    body = re.sub(r"<(script|style|noscript)\b.*?</\1>", " ", page, flags=re.S | re.I)
+    lines = [x for x in (re.sub(r"\s+", " ", htmllib.unescape(l)).strip() for l in re.split(r"<[^>]+>", body)) if x]
+
+    def after(label: str, start: int = 0, want: str | None = None) -> str | None:
+        """The first line after a label line (optionally the first one matching a pattern, within 4 lines)."""
+        for i in range(start, len(lines)):
+            if lines[i].lower() == label.lower():
+                for nxt in lines[i + 1:i + 5]:
+                    if want is None or re.search(want, nxt):
+                        return nxt
+                return None
+        return None
+
+    details = next((i for i, x in enumerate(lines) if x.lower() == "set details"), 0)
+    setno = after("Set number", details) or ""
+    if not re.fullmatch(rf"{re.escape(num)}(?:-\d+)?", setno) and not has_number(info.get("name") or "", num):
+        return Result("missing")                        # search / home page: not this set
+    pricing = next((i for i, x in enumerate(lines) if x.lower() == "set pricing"), 0)
+    predictions = next((i for i, x in enumerate(lines) if x.lower() == "set predictions"), len(lines))
+    used = None
+    for i in range(pricing, predictions):               # retired sets: separate new / used values
+        if lines[i].lower() in ("used", "used value", "value used") and (v := _eur(" ".join(lines[i + 1:i + 3]))):
+            used = v
+            break
+    five = after("5 years retired", want=r"€\s*\d+\s*-\s*€\s*\d+")
+    pieces = re.match(r"\d+", after("Pieces", details) or "")
+    availability = after("Availability", details) or ""
+    retired = after("Retired", details, want=r"20\d\d") if "retired" in availability.lower() else None
+    data = {
+        "market_new": _eur(after("Market price", pricing, want="€")) or _eur(after("Value", pricing, want="€")) or _eur(after("New/Sealed", pricing, want="€")),
+        "market_used": used,
+        "retail": _eur(after("Retail price", pricing, want="€")) or _eur(after("Europe", want="€")),
+        "availability": availability or None,
+        "retired": retired,
+        "retirement": None if retired else after("Retirement", predictions),
+        "forecast_1y": _eur(after("1 year retired", want="€")),
+        "forecast_5y": [parse_price(x) for x in re.findall(r"€\s*([\d.,]+)", five)] if five else None,
+        "theme": after("Theme", details), "subtheme": after("Subtheme", details),
+        "year": int(y) if (y := after("Year", details) or "").isdigit() else None,
+        "pieces": int(pieces.group(0)) if pieces else None,
+        "ean": (e if (e := after("EAN") or "").isdigit() and len(e) == 13 else None) or info.get("ean"),
+    }
+    if "retired" in availability.lower() and not data["retired"]:
+        data["retired"] = availability
+    name = info.get("name") or after("Name", details)
+    image = info.get("image")
+    return Result("data", name=re.sub(r"\s+", " ", str(name or "")).strip()[:160] or None,
+                  image=image if isinstance(image, str) and image.startswith("https://") else None,
+                  rrp=data["retail"], ean=data["ean"], data=data)

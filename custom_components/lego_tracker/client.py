@@ -182,8 +182,9 @@ class Fetcher:
         self.blocks[retailer] = 0
         return parsed, None
 
-    async def get_page(self, key: str, url: str, force: bool = False) -> tuple[int, str, str | None]:
-        """(status, html, error) for an extra source (e.g. Brickwatch), with the same politeness and pauses."""
+    async def get_page(self, key: str, url: str, force: bool = False, note_block: bool = True) -> tuple[int, str, str | None]:
+        """(status, html, error) for an extra source (e.g. Brickwatch), with the same politeness and pauses.
+        note_block=False: a refusal doesn't pause the whole site (e.g. only its product pages are blocked)."""
         if not force and (left := self.cooldown_left(key)) > 0:
             return 0, "", T("paused {hours} h after being blocked", hours=f"{left / 3600:.1f}")
         try:
@@ -191,7 +192,8 @@ class Fetcher:
         except Exception as err:  # noqa: BLE001
             return 0, "", T("network error: {error}", error=str(err)[:120])
         if status in (403, 429, 503):
-            self._note_block(key)
+            if note_block:
+                self._note_block(key)
             return status, "", T("blocked (HTTP {status})", status=status)
         return status, page, None
 

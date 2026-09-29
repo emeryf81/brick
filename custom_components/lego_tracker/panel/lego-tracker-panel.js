@@ -55,7 +55,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const signPct = (v) => (v == null ? "–" : `${v > 0 ? "+" : ""}${v.toLocaleString(LOC, { maximumFractionDigits: 1 })}%`);
 const DATE = (ts, o = { day: "2-digit", month: "short" }) => new Date(ts * 1000).toLocaleDateString(LOC, o);
 const TIME = (ts) => new Date(ts * 1000).toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" });
-const SRC = { brickwatch: "Brickwatch", kieskeurig: "Kieskeurig", shoparize: "Shoparize", channable: "Channable Shopping", producthero: "Producthero" };
+const SRC = { brickwatch: "Brickwatch", kieskeurig: "Kieskeurig", shoparize: "Shoparize", channable: "Channable Shopping", producthero: "Producthero", brickeconomy: "BrickEconomy" };
 const ago = (ts) => {
   if (!ts) return t("never");
   const s = Date.now() / 1000 - ts;
@@ -1433,7 +1433,8 @@ class LegoTrackerPanel extends HTMLElement {
     return `<div class="panel"><h3>🕵️ ${t("Secret options")}</h3>
       <div class="rule${st.brickwatch ? "" : " off"}"><label class="switch"><input type="checkbox" id="x_bw" ${st.brickwatch ? "checked" : ""}><i></i></label><div style="flex:1"><b>🧱 ${t("Price-comparison sites as price source")}</b><div class="sum">${t("Per set, comparison sites (Brickwatch, Kieskeurig, Shoparize, Channable, Producthero) are read, at most every 6 h. Shops that fail themselves (e.g. bol.com) get the comparison price, shops without a link get one, and the set window shows every shop. LED kits and other accessories are skipped. A site that doesn't have a set is not asked again within a day; after 5 network errors in a row a site is paused for 1 hour.")}</div></div></div>
       ${bw ? `<div class="tscroll" style="margin-top:10px"><table class="tbl"><tr><th>${t("Site")}</th><th>${t("Status")}</th><th class="num">${t("Sets")}</th><th class="num">${t("Not there")}</th><th class="num">${t("Errors")}</th><th>${t("Last fetch")}</th><th></th></tr>${rows}</table></div>
-        <p class="muted" style="font-size:12px">${t("When a site refuses the server, your own browser fetches the page via the userscript (browser relay) and Home Assistant reads it.")}</p>
+        <p class="muted" style="font-size:12px">${t("When a site refuses the server, your own browser fetches the page via the userscript (browser relay) and Home Assistant reads it.")}
+          ${t("BrickEconomy gives no shop prices but the market value (used as the value of sets you own) and the expected retirement date, once a day.")}</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0">
           <button class="btn" id="x_bwjob">↻ ${t("Fetch all comparison sites for all sets")}</button>
           <span class="hsp" style="flex:1"></span>
@@ -1461,7 +1462,7 @@ class LegoTrackerPanel extends HTMLElement {
       const e = r.entry || {}, name = SRC[src] || src;
       const steps = r.steps.map((x, i) => `<tr><td>${i + 1}</td><td class="ell"><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url)}</a></td><td>${x.status || "–"}</td><td>${x.error ? esc(tx(x.error)) : ""}</td><td class="num">${Math.round(x.size / 1024)} kB</td></tr>`).join("");
       const verdict = e.status === "ok" ? `<span class="ok">✓ ${t("{n} shops found", { n: e.shops.length })}</span>${e.name ? " · " + esc(e.name) : ""}`
-        : e.status === "missing" ? `<span class="warn">${t("Not on {source}", { source: name })}</span>` : e.status === "error" ? `<span class="bad">${esc(tx(e.error || ""))}</span>`
+        : e.status === "missing" ? `<span class="warn">${t("Not on {source}", { source: name })}</span>` : ["error", "unreadable"].includes(e.status) ? `<span class="bad">${esc(tx(e.error || ""))}</span>`
         : `<span class="muted">${t("Not fetched (paused, or this site needs an EAN / doesn't cover your country)")}</span>`;
       const shops = e.status === "ok" ? `<table class="tbl">${e.shops.map((x) => `<tr><td>${esc(x.name)}</td><td class="num">${EUR(x.price)}</td><td>${x.retailer ? esc(this.state.data.retailers[x.retailer] || x.retailer) : ""}</td></tr>`).join("")}</table>` : "";
       out.innerHTML = `<div class="panel" style="margin-top:8px;background:var(--bg2,transparent)"><b>🔬 ${esc(name)} · ${esc(num)}</b> — ${verdict}
@@ -1490,8 +1491,16 @@ class LegoTrackerPanel extends HTMLElement {
       const link = e.url ? ` <a href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">↗</a>` : "";
       if (e.status !== "ok") {
         const msg = e.status === "missing" ? t("Not on {source}; next try {when}.", { source: e.name, when: when(e.ts + 86400) })
-          : e.status === "error" ? tx(e.error || "") : t("Not fetched yet.");
+          : ["error", "unreadable"].includes(e.status) ? tx(e.error || "") : t("Not fetched yet.");
         return `<p class="muted" style="font-size:13px;margin:4px 0"><b>${esc(e.name)}</b>${link} · ${esc(msg)}</p>`;
+      }
+      if (e.data) {       // BrickEconomy: market value and retirement, no shop prices
+        const d = e.data, f5 = d.forecast_5y && d.forecast_5y.length === 2 ? `${EUR(d.forecast_5y[0])} – ${EUR(d.forecast_5y[1])}` : null;
+        const bits = [d.market_new != null && `${t("Market value new")}: <b>${EUR(d.market_new)}</b>`, d.market_used != null && `${t("used")}: <b>${EUR(d.market_used)}</b>`,
+          d.retired ? `${t("Retired")}: ${esc(d.retired)}` : d.retirement && `${t("Expected to retire")}: ${esc(d.retirement)}`,
+          d.forecast_1y != null && `${t("1 year after retirement")}: ${EUR(d.forecast_1y)}`, f5 && `${t("5 years after retirement")}: ${f5}`].filter(Boolean);
+        return `<p style="font-size:13px;margin:10px 0 4px"><b>${esc(e.name || id)}</b>${link} <span class="muted">· ${t("updated {when}", { when: ago(e.ts) })}</span></p>
+          <p style="font-size:13px;margin:0 0 6px">${bits.join(" · ") || esc(t("No values on this page"))}</p>`;
       }
       const low = Math.min(...e.shops.map((x) => x.price));
       const rows = e.shops.map((x) => `<tr><td><b>${esc(x.name)}</b>${x.retailer ? ` <span class="abadge" title="${t("a shop you track")}">${esc(retailers[x.retailer] || x.retailer)}</span>` : ""}</td>
