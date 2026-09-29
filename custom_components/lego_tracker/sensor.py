@@ -12,6 +12,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, RETAILERS
 from .coordinator import LegoCoordinator
+from .models import offer_price
 
 SUMMARY = (
     SensorEntityDescription(key="tracked_sets", translation_key="tracked_sets", icon="mdi:toy-brick-search",
@@ -171,5 +172,5 @@ class SetPriceSensor(CoordinatorEntity[LegoCoordinator], SensorEntity):
             "deal_score": st.get("deal_score"), "retiring_soon": st.get("retiring_soon"), "discount_rrp": st.get("discount_rrp"),
             "high_discount": st.get("high_discount"), "owned": self._num in self.coordinator.store["collection"],
             "entity_picture": s.get("image"),
-            "prices": {RETAILERS[r][0]: o.get("last_price") for r, o in offers.items() if r in RETAILERS and o.get("available")},
+            "prices": {RETAILERS[r][0]: offer_price(o) for r, o in offers.items() if r in RETAILERS and offer_price(o)},
         }

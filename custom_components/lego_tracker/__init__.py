@@ -23,6 +23,7 @@ from .const import (
     STATIC_URL,
 )
 from .coordinator import LegoCoordinator
+from .i18n import T
 from .shops import apply_shop_options
 from .csv_import import analyze_csv, apply_import, importable_rows
 from .models import normalize_set_number
@@ -149,6 +150,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         coord._job_source = "schedule"
         coord.start_refresh()
 
+    if coord.refresh_mode == "spread":
+        coord.start_spread()
     if coord.auto_refresh:
         for hour, minute in coord.refresh_times:
             entry.async_on_unload(async_track_time_change(hass, _scheduled_refresh, hour, minute, 0))
@@ -187,7 +190,7 @@ def _register_services(hass: HomeAssistant) -> None:
         c = _coordinator(hass)
         nums = list(dict.fromkeys(re.findall(r"\d{4,7}", call.data["set_numbers"])))
         if not nums:
-            raise ServiceValidationError("No set numbers found")
+            raise ServiceValidationError(T("No set numbers found"))
         for n in nums:
             await c.add_set(n, theme=call.data.get("theme"), owned={"qty": 1} if call.data["owned"] and n not in c.store["collection"] else None)
         return {"added": len(nums)}
@@ -239,7 +242,7 @@ def _register_services(hass: HomeAssistant) -> None:
         if num := call.data.get("set_number"):
             num = normalize_set_number(num)
             if num not in c.store["sets"]:
-                raise ServiceValidationError(f"Set {num} wordt niet gevolgd")
+                raise ServiceValidationError(T("Set {number} is not tracked.", number=num))
             res = await c.refresh_set(num, c._live_retailers(call.data["force"]))
             c.push_update()
             return {"started": False, **res}
@@ -292,12 +295,13 @@ def _register_services(hass: HomeAssistant) -> None:
         analysis = analyze_csv(text, c.store, replace=call.data["replace"])
         rows = importable_rows(analysis)
         if not rows:
-            raise ServiceValidationError(analysis["fatal"] or "Geen importeerbare regels (alle regels bevatten fouten).")
+            raise ServiceValidationError(analysis["fatal"] or T("No importable lines (every line has errors)."))
         result = apply_import(c.store, rows, replace=call.data["replace"])
         c.log("ok" if not analysis["summary"]["error"] else "warning", "import",
-              f"CSV geïmporteerd: {result['added']} nieuw, {result['updated']} bijgewerkt, {analysis['summary']['error']} regels overgeslagen"
-              + (" (collectie vervangen)" if call.data["replace"] else ""), source="import")
-        warnings = [f"regel {r['line']}: " + "; ".join(x["text"] for x in r["issues"] if x["level"] != "info")
+              T("CSV imported: {added} new, {updated} updated, {skipped} lines skipped", added=result["added"],
+                updated=result["updated"], skipped=analysis["summary"]["error"])
+              + (" " + T("(collection replaced)") if call.data["replace"] else ""), source="import")
+        warnings = [T("line {line}: {issues}", line=r["line"], issues="; ".join(x["text"] for x in r["issues"] if x["level"] != "info"))
                     for r in analysis["rows"] if r["status"] != "ok"]
         for r in rows:
             c.store["offers"].setdefault(r["set_number"], {})

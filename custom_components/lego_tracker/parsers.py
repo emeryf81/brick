@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from urllib.parse import quote_plus, urlparse
 
 from .const import GENERIC_SHOPS
+from .i18n import T
 from .models import parse_price
 from .shops import LOCALE, SEARCH, all_domains, domain_of
 
@@ -288,17 +289,17 @@ KNOCKOFF_RE = re.compile(r"\b(keeppley|mould ?king|cada|lepin|bluebrixx|cobi|slu
 def title_check(title: str | None, set_number: str) -> tuple[str | None, str]:
     """('ok' | 'suspect' | None, reason). None = nothing to judge."""
     if not title:
-        return None, "nog geen producttitel bekend"
+        return None, T("no product title yet")
     t = htmllib.unescape(title)
     if KNOCKOFF_RE.search(t):
-        return "suspect", f"ander merk: {KNOCKOFF_RE.search(t).group(0)}"
+        return "suspect", T("other brand: {brand}", brand=KNOCKOFF_RE.search(t).group(0))
     if ACCESSORY_RE.search(t):
-        return "suspect", f"lijkt een accessoire ({ACCESSORY_RE.search(t).group(0)})"
+        return "suspect", T("looks like an accessory ({word})", word=ACCESSORY_RE.search(t).group(0))
     if not re.search(rf"(?<!\d){re.escape(set_number)}(?!\d)", t):
-        return "suspect", f"setnummer {set_number} staat niet in de titel"
+        return "suspect", T("set number {number} is not in the title", number=set_number)
     if not re.search(r"lego", t, re.I):
-        return "suspect", "geen LEGO in de titel"
-    return "ok", "titel bevat setnummer"
+        return "suspect", T("no LEGO in the title")
+    return "ok", T("title contains the set number")
 
 
 def slug_title(url: str) -> str | None:

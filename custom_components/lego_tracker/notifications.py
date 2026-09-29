@@ -17,6 +17,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, RETAILERS
+from .i18n import LocalizedError, T, tr
 from .models import normalize_set_number
 
 if TYPE_CHECKING:
@@ -27,18 +28,18 @@ EVENT_NOTIFICATION = f"{DOMAIN}_notification"
 
 # trigger id -> (label, per-set?, parameter)
 TRIGGERS: dict[str, tuple[str, bool, str | None]] = {
-    "all_time_low": ("Laagste prijs ooit", True, None),
-    "discount": ("Korting t.o.v. adviesprijs", True, "discount_pct"),
-    "target_hit": ("Streefprijs bereikt", True, None),
-    "price_below": ("Prijs onder een bedrag", True, "price_below"),
-    "price_drop": ("Prijsdaling", True, "drop_pct"),
-    "deal_score": ("Dealscore bereikt", True, "min_score"),
-    "retiring_soon": ("Verdwijnt binnenkort", True, None),
-    "back_in_stock": ("Weer leverbaar / eerste prijs", True, None),
-    "any_change": ("Elke prijswijziging", True, None),
-    "digest": ("Dagelijkse samenvatting", False, None),
-    "job_done": ("Taak klaar (verversen, links zoeken…)", False, None),
-    "problems": ("Problemen (winkel gepauzeerd, fouten)", False, None),
+    "all_time_low": ("All-time low", True, None),
+    "discount": ("Discount vs RRP", True, "discount_pct"),
+    "target_hit": ("Target price reached", True, None),
+    "price_below": ("Price below an amount", True, "price_below"),
+    "price_drop": ("Price drop", True, "drop_pct"),
+    "deal_score": ("Deal score reached", True, "min_score"),
+    "retiring_soon": ("Retiring soon", True, None),
+    "back_in_stock": ("Back in stock / first price", True, None),
+    "any_change": ("Any price change", True, None),
+    "digest": ("Daily digest", False, None),
+    "job_done": ("Job finished (refresh, link search…)", False, None),
+    "problems": ("Problems (shop paused, errors)", False, None),
 }
 SCOPES = ("all", "watchlist", "collection", "themes", "sets")
 TARGET_TYPES = ("mobile", "notify", "entity", "email", "persistent", "tts", "event")
@@ -52,10 +53,10 @@ def default_rules(threshold: float, notify_service: str = "") -> list[dict[str, 
         svc = notify_service if notify_service.startswith("notify.") else f"notify.{notify_service}"
         targets.append({"type": "mobile" if "mobile_app_" in svc else "notify", "service": svc})
     return [
-        {"id": "deals", "name": "Alle deals", "enabled": True, "scope": {"type": "all"},
+        {"id": "deals", "name": "All deals", "enabled": True, "scope": {"type": "all"},
          "triggers": ["all_time_low", "discount", "target_hit"], "params": {"discount_pct": int(threshold)},
          "shops": [], "targets": targets, "cooldown_hours": 24, "quiet": None, "image": True, "link": True},
-        {"id": "digest", "name": "Dagelijkse samenvatting", "enabled": True, "scope": {"type": "all"},
+        {"id": "digest", "name": "Daily digest", "enabled": True, "scope": {"type": "all"},
          "triggers": ["digest"], "params": {}, "shops": [], "targets": list(targets), "cooldown_hours": 0,
          "quiet": None, "image": False, "link": False},
     ]
@@ -64,26 +65,26 @@ def default_rules(threshold: float, notify_service: str = "") -> list[dict[str, 
 def validate_rules(rules: Any) -> list[dict[str, Any]]:
     """Clean user input. Raises ValueError with a Dutch message."""
     if not isinstance(rules, list) or len(rules) > 50:
-        raise ValueError("Ongeldige lijst met regels (max 50).")
+        raise LocalizedError("Invalid list of rules (max 50).")
     out = []
     for i, r in enumerate(rules, 1):
         if not isinstance(r, dict):
-            raise ValueError(f"Regel {i} is ongeldig.")
-        name = str(r.get("name") or f"Regel {i}").strip()[:60]
+            raise LocalizedError("Rule {n} is invalid.", n=i)
+        name = str(r.get("name") or T("Rule {n}", n=i)).strip()[:60]
         scope = r.get("scope") or {"type": "all"}
         stype = scope.get("type", "all")
         if stype not in SCOPES:
-            raise ValueError(f"{name}: onbekende keuze van sets.")
+            raise LocalizedError("{rule}: unknown choice of sets.", rule=name)
         themes = [str(t)[:60] for t in scope.get("themes", []) if t][:50]
         sets = list(dict.fromkeys(s for s in (normalize_set_number(x) for x in scope.get("sets", []))
                                   if re.fullmatch(r"\d{3,7}", s)))[:200]
         if stype == "themes" and not themes:
-            raise ValueError(f"{name}: kies minstens één thema.")
+            raise LocalizedError("{rule}: choose at least one theme.", rule=name)
         if stype == "sets" and not sets:
-            raise ValueError(f"{name}: kies minstens één set.")
+            raise LocalizedError("{rule}: choose at least one set.", rule=name)
         triggers = [t for t in r.get("triggers", []) if t in TRIGGERS]
         if not triggers:
-            raise ValueError(f"{name}: kies minstens één gebeurtenis.")
+            raise LocalizedError("{rule}: choose at least one event.", rule=name)
         p = r.get("params") or {}
         params: dict[str, float] = {}
         for key, lo, hi in (("discount_pct", 1, 95), ("price_below", 0.01, 10000), ("drop_pct", 1, 95), ("min_score", 1, 100)):
@@ -91,47 +92,47 @@ def validate_rules(rules: Any) -> list[dict[str, Any]]:
                 try:
                     v = float(p[key])
                 except (TypeError, ValueError) as err:
-                    raise ValueError(f"{name}: {key} is geen getal.") from err
+                    raise LocalizedError("{rule}: {field} is not a number.", rule=name, field=key) from err
                 if not lo <= v <= hi:
-                    raise ValueError(f"{name}: {key} moet tussen {lo} en {hi} liggen.")
+                    raise LocalizedError("{rule}: {field} must be between {lo} and {hi}.", rule=name, field=key, lo=lo, hi=hi)
                 params[key] = v
         for t in triggers:
             need = TRIGGERS[t][2]
             if need and need not in params:
-                raise ValueError(f"{name}: vul een waarde in voor '{TRIGGERS[t][0]}'.")
+                raise LocalizedError("{rule}: enter a value for '{event}'.", rule=name, event=TRIGGERS[t][0])
         targets = []
         for t in r.get("targets", [])[:10]:
             tt = t.get("type")
             if tt not in TARGET_TYPES:
-                raise ValueError(f"{name}: onbekende manier van versturen.")
+                raise LocalizedError("{rule}: unknown way of sending.", rule=name)
             clean: dict[str, Any] = {"type": tt}
             if tt in ("mobile", "notify", "email"):
                 svc = str(t.get("service") or "").strip()
                 if not re.fullmatch(r"notify\.[a-z0-9_]+", svc):
-                    raise ValueError(f"{name}: kies een notify-service.")
+                    raise LocalizedError("{rule}: choose a notify service.", rule=name)
                 clean["service"] = svc
             if tt == "email":
                 addrs = [a.strip() for a in re.split(r"[,;\s]+", str(t.get("to") or "")) if a.strip()]
                 if not addrs or not all(EMAIL_RE.match(a) for a in addrs):
-                    raise ValueError(f"{name}: ongeldig e-mailadres.")
+                    raise LocalizedError("{rule}: invalid e-mail address.", rule=name)
                 clean["to"] = addrs[:10]
             if tt == "entity":
                 ent = str(t.get("entity_id") or "")
                 if not re.fullmatch(r"notify\.[a-z0-9_]+", ent):
-                    raise ValueError(f"{name}: kies een notify-entiteit.")
+                    raise LocalizedError("{rule}: choose a notify entity.", rule=name)
                 clean["entity_id"] = ent
             if tt == "tts":
                 tts, mp = str(t.get("tts") or ""), str(t.get("media_player") or "")
                 if not re.fullmatch(r"tts\.[a-z0-9_]+", tts) or not re.fullmatch(r"media_player\.[a-z0-9_]+", mp):
-                    raise ValueError(f"{name}: kies een spraakdienst én een mediaspeler.")
+                    raise LocalizedError("{rule}: choose a speech service and a media player.", rule=name)
                 clean.update(tts=tts, media_player=mp)
             targets.append(clean)
         if not targets:
-            raise ValueError(f"{name}: kies minstens één ontvanger.")
+            raise LocalizedError("{rule}: choose at least one recipient.", rule=name)
         quiet = r.get("quiet")
         if quiet:
             if not (TIME_RE.match(str(quiet.get("from", ""))) and TIME_RE.match(str(quiet.get("to", "")))):
-                raise ValueError(f"{name}: stille uren als UU:MM.")
+                raise LocalizedError("{rule}: quiet hours as HH:MM.", rule=name)
             quiet = {"from": quiet["from"], "to": quiet["to"]}
         try:
             cooldown = max(0, min(24 * 30, float(r.get("cooldown_hours", 24))))
@@ -145,7 +146,7 @@ def validate_rules(rules: Any) -> list[dict[str, Any]]:
         })
     ids = [r["id"] for r in out]
     if len(set(ids)) != len(ids):
-        raise ValueError("Twee regels hebben dezelfde id.")
+        raise LocalizedError("Two rules have the same id.")
     return out
 
 
@@ -167,24 +168,24 @@ def set_triggers(rule: dict[str, Any], before: dict[str, Any], after: dict[str, 
         return out
     for t in rule["triggers"]:
         if t == "all_time_low" and after.get("is_all_time_low") and not before.get("is_all_time_low"):
-            out.append((t, "laagste prijs ooit"))
+            out.append((t, tr("all-time low")))
         elif t == "discount" and (d := after.get("discount_rrp")) is not None and d >= p["discount_pct"] \
                 and (before.get("discount_rrp") is None or before["discount_rrp"] < p["discount_pct"] or old is None):
-            out.append((t, f"−{d:.0f}% t.o.v. adviesprijs"))
+            out.append((t, tr("−{pct}% vs RRP", pct=f"{d:.0f}")))
         elif t == "target_hit" and after.get("target_hit") and not before.get("target_hit"):
-            out.append((t, "onder je streefprijs"))
+            out.append((t, tr("below your target price")))
         elif t == "price_below" and price <= p["price_below"] and (old is None or old > p["price_below"]):
-            out.append((t, f"onder €{p['price_below']:.2f}"))
+            out.append((t, tr("below €{price}", price=f"{p['price_below']:.2f}")))
         elif t == "price_drop" and old and price < old and (old - price) / old * 100 >= p["drop_pct"]:
-            out.append((t, f"gedaald met {(old - price) / old * 100:.0f}% (was €{old:.2f})"))
+            out.append((t, tr("dropped {pct}% (was €{old})", pct=f"{(old - price) / old * 100:.0f}", old=f"{old:.2f}")))
         elif t == "deal_score" and after.get("deal_score", 0) >= p["min_score"] > before.get("deal_score", 0):
-            out.append((t, f"dealscore {after['deal_score']}"))
+            out.append((t, tr("deal score {score}", score=after["deal_score"])))
         elif t == "retiring_soon" and after.get("retiring_soon") and not before.get("retiring_soon"):
-            out.append((t, "verdwijnt binnenkort"))
+            out.append((t, tr("retiring soon")))
         elif t == "back_in_stock" and old is None:
-            out.append((t, "weer te koop"))
+            out.append((t, tr("available again")))
         elif t == "any_change" and old is not None and abs(price - old) >= 0.01:
-            out.append((t, f"prijs gewijzigd (was €{old:.2f})"))
+            out.append((t, tr("price changed (was €{old})", old=f"{old:.2f}")))
     return out
 
 
@@ -232,7 +233,7 @@ class Notifier:
                 continue
             shop = RETAILERS.get(after.get("best_retailer"), ("",))[0]
             title = f"🧱 {num} {s.get('name') or ''}".strip()
-            message = f"€{after['best_price']:.2f} bij {shop}: " + ", ".join(h[1] for h in hits)
+            message = tr("€{price} at {shop}", price=f"{after['best_price']:.2f}", shop=shop) + ": " + ", ".join(h[1] for h in hits)
             await self.send(rule, title, message, url=after.get("best_url") if rule.get("link") else None,
                             image=s.get("image") if rule.get("image") else None,
                             data={"set_number": num, "triggers": [h[0] for h in hits], "price": after["best_price"]})
@@ -245,18 +246,19 @@ class Notifier:
                      and (not rule["shops"] or d["retailer"] in rule["shops"])]
             if not deals:
                 continue
-            lines = [f"• {d['set_number']} {d['name'] or ''}: €{d['price']:.2f} bij {RETAILERS.get(d['retailer'], ('',))[0]}"
+            lines = [f"• {d['set_number']} {d['name'] or ''}: " + tr("€{price} at {shop}", price=f"{d['price']:.2f}", shop=RETAILERS.get(d["retailer"], ("",))[0])
                      + (f" (−{d['discount']:.0f}%)" if d.get("discount") else "") + (" 🔻" if d.get("all_time_low") else "")
                      for d in deals[:15]]
-            more = f"\n… en nog {len(deals) - 15}" if len(deals) > 15 else ""
-            await self.send(rule, f"🧱 LEGO-deals vandaag ({len(deals)})", "\n".join(lines) + more,
+            more = "\n" + tr("… and {n} more", n=len(deals) - 15) if len(deals) > 15 else ""
+            await self.send(rule, "🧱 " + tr("LEGO deals today ({n})", n=len(deals)), "\n".join(lines) + more,
                             data={"deals": [d["set_number"] for d in deals]}, notification_id=f"{DOMAIN}_digest_{rule['id']}")
 
     async def on_job_done(self, job: dict[str, Any]) -> None:
-        text = (f"{job.get('label', 'Taak')} {'gestopt' if job.get('cancelled') else 'klaar'}: {job['done']}/{job['total']} sets"
-                + (f", {job['updated']} bijgewerkt" if job.get("updated") else "")
-                + (f", {job['found']} links gevonden" if job.get("found") else "")
-                + (f", {job['errors']} fouten" if job.get("errors") else ""))
+        label = tr(job.get("label") or "Job")
+        text = (tr("{label} stopped: {done}/{total} sets", label=label, done=job["done"], total=job["total"]) if job.get("cancelled")
+                else tr("{label} finished: {done}/{total} sets", label=label, done=job["done"], total=job["total"]))
+        text += "".join(", " + tr(t, n=job[k]) for k, t in (("updated", "{n} updated"), ("found", "{n} links found"),
+                                                          ("errors", "{n} errors")) if job.get(k))
         for rule in self.rules:
             if not rule.get("enabled"):
                 continue
@@ -269,8 +271,9 @@ class Notifier:
         for rule in self.rules:
             if rule.get("enabled") and "problems" in rule["triggers"] \
                     and self._cooled(f"{rule['id']}|pause|{retailer}", rule.get("cooldown_hours", 24)):
-                await self.send(rule, "⚠️ Winkel gepauzeerd",
-                                f"{RETAILERS.get(retailer, (retailer,))[0]} blokkeerde de prijsopvraging en wordt {hours:.0f} u gepauzeerd.")
+                await self.send(rule, "⚠️ " + tr("Shop paused"),
+                                tr("{shop} blocked the price check and is paused for {hours} h.",
+                                   shop=RETAILERS.get(retailer, (retailer,))[0], hours=f"{hours:.0f}"))
 
     # -------------------------------------------------------------- sending
     async def send(self, rule: dict[str, Any], title: str, message: str, *, url: str | None = None,
@@ -295,7 +298,7 @@ class Notifier:
                 _LOGGER.warning("Notification via %s failed: %s", target, err)
                 results.append({"target": target, "ok": False, "error": str(err)})
         self.coord.log("ok" if all(r["ok"] for r in results) else "error", "notify",
-                       f"{rule['name']}: {title} — " + ("in wachtrij (stille uren)" if quiet else
+                       f"{rule['name']}: {title} — " + (T("queued (quiet hours)") if quiet else
                        ", ".join(("✓ " if r["ok"] else "✕ ") + r["target"]["type"] + ("" if r["ok"] else f" ({r.get('error')})") for r in results)),
                        set_number=(data or {}).get("set_number"))
         log = self.store.setdefault("notify_log", [])
@@ -310,7 +313,7 @@ class Notifier:
         full = message + (f"\n{url}" if url and t["type"] in ("email", "notify", "entity") else "")
         if t["type"] == "persistent":
             await call("persistent_notification", "create",
-                       {"title": title, "message": message + (f"\n\n[Openen]({url})" if url else ""),
+                       {"title": title, "message": message + (f"\n\n[{tr('Open')}]({url})" if url else ""),
                         **({"notification_id": notification_id} if notification_id else {})}, blocking=True)
         elif t["type"] == "mobile":
             extra: dict[str, Any] = {}
@@ -324,7 +327,7 @@ class Notifier:
             await call("notify", t["service"].split(".", 1)[1], {"title": title, "message": full}, blocking=True)
         elif t["type"] == "email":
             html = (f"<h3>{title}</h3><p>{message.replace(chr(10), '<br>')}</p>"
-                    + (f'<p><a href="{url}">Bekijk in de winkel</a></p>' if url else "")
+                    + (f'<p><a href="{url}">{tr("View in the shop")}</a></p>' if url else "")
                     + (f'<img src="{image}" width="240">' if image else ""))
             await call("notify", t["service"].split(".", 1)[1],
                        {"title": title, "message": full, "target": t["to"], "data": {"html": html}}, blocking=True)
@@ -332,7 +335,7 @@ class Notifier:
             await call("notify", "send_message", {"entity_id": t["entity_id"], "title": title, "message": full}, blocking=True)
         elif t["type"] == "tts":
             await call("tts", "speak", {"entity_id": t["tts"], "media_player_entity_id": t["media_player"],
-                                        "message": f"{title}. {message}".replace("€", "euro ").replace("🧱", "")}, blocking=True)
+                                        "message": f"{title}. {message}".replace("€", "EUR ").replace("🧱", "")}, blocking=True)
         # "event": the lego_tracker_notification event was already fired
 
     async def flush_queues(self, _now: Any = None) -> None:
@@ -345,7 +348,7 @@ class Notifier:
                 continue
             queue[rule["id"]] = []
             body = "\n".join(f"• {i['title']}: {i['message']}" for i in items[:15])
-            await self.send(rule, f"🧱 {len(items)} LEGO-meldingen (stille uren)", body, force=True)
+            await self.send(rule, "🧱 " + tr("{n} LEGO notifications (quiet hours)", n=len(items)), body, force=True)
 
     # --------------------------------------------------------------- options
     def ha_options(self) -> dict[str, Any]:
