@@ -29,9 +29,9 @@ def _coord(hass: HomeAssistant):
     return next(iter(entries.values()), None)
 
 
-def _bw_status(coord) -> dict[str, Any] | None:
+def _compare_status(coord) -> dict[str, Any] | None:
     """Hidden option: state per price-comparison site."""
-    if not coord.brickwatch_enabled:
+    if not coord.compare_enabled:
         return None
     from . import compare
 
@@ -73,7 +73,7 @@ def _card(coord, num: str, with_history: bool = False) -> dict[str, Any]:
     }
     if with_history:
         card["history"] = {rid: o.get("history", []) for rid, o in offers.items()}
-        if coord.brickwatch_enabled:
+        if coord.compare_enabled:
             from .compare import SOURCES
 
             entries = coord.compare_entries(num)
@@ -105,6 +105,7 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_compare_test)
     websocket_api.async_register_command(hass, ws_compare_html)
     websocket_api.async_register_command(hass, ws_filter_test)
+    websocket_api.async_register_command(hass, ws_client_error)
     websocket_api.async_register_command(hass, ws_notify_set)
     websocket_api.async_register_command(hass, ws_notify_test)
     hass.http.register_view(UserscriptView())
@@ -136,7 +137,7 @@ def ws_overview(hass, connection, msg):
         "userscript_last": coord.store.get("userscript_last"), "relay_last": coord.store.get("relay_last"),
         "relay": {"enabled": coord.relay_enabled, "pending": coord.relay_items(100)["total"] if coord.relay_enabled else 0},
         "bol_api": bool(coord.bol_api),
-        "brickwatch": _bw_status(coord),
+        "compare": _compare_status(coord),
         "value_source": coord.store.get("value_source", "shop_first"),
         "health": {
             "errors": sum(s["offers_error"] for s in (coord.data or coord.compute())["statuses"].values()),
@@ -430,12 +431,12 @@ async def ws_set_enrich(hass, connection, msg):
 async def ws_compare_fetch(hass, connection, msg):
     """Hidden option: one set's comparison pages now (and a price check), or a job for all sets."""
     coord = _coord(hass)
-    if not coord.brickwatch_enabled:
+    if not coord.compare_enabled:
         connection.send_error(msg["id"], "not_enabled", "Comparison sites are not enabled")
         return
     if not msg.get("set_number"):
         try:
-            connection.send_result(msg["id"], {"job": coord.start_brickwatch()})
+            connection.send_result(msg["id"], {"job": coord.start_compare()})
         except ValueError as err:
             connection.send_error(msg["id"], "busy", str(err))
         return
@@ -477,6 +478,27 @@ async def ws_compare_test(hass, connection, msg):
             coord._cstore(src).pop(num, None)
     dbg = coord._compare_debug.get(src) or {}
     connection.send_result(msg["id"], {"steps": steps, "entry": entry, "size": len(dbg.get("html") or "")})
+
+
+_CLIENT_ERRORS: list[float] = []
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/client_error", vol.Required("message"): str,
+                                  vol.Optional("stack", default=""): str, vol.Optional("ua", default=""): str,
+                                  vol.Optional("view", default=""): str})
+@callback
+def ws_client_error(hass, connection, msg):
+    """The panel failed to draw (e.g. in the iPhone app): log it with the stack, at most 20 per hour."""
+    import logging
+    import time
+
+    now = time.time()
+    _CLIENT_ERRORS[:] = [t for t in _CLIENT_ERRORS if now - t < 3600]
+    if len(_CLIENT_ERRORS) < 20:
+        _CLIENT_ERRORS.append(now)
+        logging.getLogger(__package__).warning("Panel error in %s (view %s): %s\n%s", msg["ua"][:300], msg["view"][:60],
+                                                msg["message"][:500], msg["stack"][:3000])
+    connection.send_result(msg["id"], {"logged": len(_CLIENT_ERRORS) <= 20})
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/filter/test", vol.Required("title"): str,

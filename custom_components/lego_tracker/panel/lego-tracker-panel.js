@@ -32,8 +32,14 @@ function tx(msg, depth = 0) {
 }
 function setLocale(lang) {
   LOC = LOCALES[lang] || "en-IE";
-  NF = new Intl.NumberFormat(LOC, { style: "currency", currency: "EUR" });
-  NF0 = new Intl.NumberFormat(LOC, { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
+  // Safari/WebKit (iPhone app) is stricter than Chrome: give min and max decimals together, and never fail here
+  try {
+    NF = new Intl.NumberFormat(LOC, { style: "currency", currency: "EUR" });
+    NF0 = new Intl.NumberFormat(LOC, { style: "currency", currency: "EUR", minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  } catch (e) {
+    const plain = (dec) => ({ format: (v) => "€" + Number(v).toFixed(dec) });
+    NF = plain(2); NF0 = plain(0);
+  }
 }
 setLocale("en");
 async function loadLanguage(lang, version) {
@@ -55,7 +61,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const signPct = (v) => (v == null ? "–" : `${v > 0 ? "+" : ""}${v.toLocaleString(LOC, { maximumFractionDigits: 1 })}%`);
 const DATE = (ts, o = { day: "2-digit", month: "short" }) => new Date(ts * 1000).toLocaleDateString(LOC, o);
 const TIME = (ts) => new Date(ts * 1000).toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" });
-const SRC = { brickwatch: "Brickwatch", kieskeurig: "Kieskeurig", shoparize: "Shoparize", channable: "Channable Shopping", producthero: "Producthero", brickeconomy: "BrickEconomy" };
+const SRC = { kieskeurig: "Kieskeurig", shoparize: "Shoparize", channable: "Channable Shopping", producthero: "Producthero", brickeconomy: "BrickEconomy" };
 const ago = (ts) => {
   if (!ts) return t("never");
   const s = Date.now() / 1000 - ts;
@@ -380,7 +386,21 @@ class LegoTrackerPanel extends HTMLElement {
       <span class="hsp" style="flex:1"></span><button class="btn sm" id="relaygo" ${here && !(run && run.running) && rel.enabled !== false ? "" : "disabled"}>▶ ${t("Run now in this browser")}</button></div>${prog}`;
   }
   bindRelay(box) { const b = box.querySelector("#relaygo"); if (b) b.onclick = () => { window.postMessage({ source: "lego-tracker-panel", type: "relay-run" }, "*"); this.state.relayRun = { running: true, done: 0, total: 0 }; box.innerHTML = this.relayBoxInner(); }; }
-  set hass(h) { const first = !this._hass; this._hass = h; if (first) { this.render(true); this.load(); } }
+  set hass(h) {
+    const first = !this._hass; this._hass = h;
+    if (first) { try { this.render(true); } catch (e) { this.crash(e); } this.load().catch((e) => this.crash(e)); }
+  }
+  /** Something broke while drawing: show it (never a black page) and send it to the Home Assistant log. */
+  crash(e) {
+    const msg = String((e && e.message) || e), stack = String((e && e.stack) || "").slice(0, 3000);
+    try { if (this._hass) this._hass.callWS({ type: "lego_tracker/client_error", message: msg.slice(0, 500), stack, ua: navigator.userAgent.slice(0, 300), view: `${this.state.section}/${this.state.sub[this.state.section]}` }); } catch (x) { /* ignore */ }
+    if (!this.shadowRoot) return;
+    this.shadowRoot.innerHTML = `<div style="padding:24px;font-family:system-ui,sans-serif;color:var(--primary-text-color,#111);background:var(--primary-background-color,#fff);min-height:100vh;box-sizing:border-box">
+      <h2 style="margin:0 0 8px">🧱 LEGO Organizing Tool</h2><p>Something went wrong while showing this page. The error was sent to the Home Assistant log (custom_components.lego_tracker).</p>
+      <pre style="white-space:pre-wrap;font-size:12px;opacity:.8">${esc(msg)}</pre><button id="crash_reload" style="padding:10px 16px;border-radius:10px;border:0;background:#0057a6;color:#fff;font-size:15px">↻ Reload</button></div>`;
+    const b = this.shadowRoot.getElementById("crash_reload");
+    if (b) b.onclick = () => { this.state.section = "deals"; try { localStorage.removeItem("lego_tracker_ui"); } catch (x) { /* ignore */ } this._rendered = false; this.shadowRoot.innerHTML = ""; try { this.render(true); } catch (x) { this.crash(x); return; } this.load().catch((x) => this.crash(x)); };
+  }
   set narrow(v) { this._narrow = v; }
   set panel(_) {}
   persist() { try { localStorage.setItem("lego_tracker_ui", JSON.stringify({ section: this.state.section, sub: this.state.sub, cview: this.state.cview, range: this.state.range })); } catch (e) { /* ignore */ } }
@@ -438,6 +458,9 @@ class LegoTrackerPanel extends HTMLElement {
 
   // ---------------------------------------------------------------- shell
   render(animate = false) {
+    try { this._render(animate); } catch (e) { console.error(e); this.crash(e); }
+  }
+  _render(animate = false) {
     const s = this.state, root = this.shadowRoot;
     this._rendered = true;
     const sec = SECTIONS[s.section], sub = s.sub[s.section];
@@ -1285,7 +1308,7 @@ class LegoTrackerPanel extends HTMLElement {
     root.querySelectorAll("[data-shoplog]").forEach((a) => a.addEventListener("click", () => { Object.assign(s.logv, { level: "", kind: "", retailer: a.dataset.shoplog, source: "", status: "fail", set: "", q: "", data: null, open: null }); s.section = "log"; s.sub.log = "checks"; this.persist(); this.render(true); }));
     // settings, errors, notifications
     if ($("relaybox")) this.bindRelay($("relaybox"));
-    if ($("x_bw")) this.bindSecret(root, $);
+    if ($("x_cmp")) this.bindSecret(root, $);
     if ($("o_save")) this.bindSettings(root, $);
     if ($("e_scope")) this.bindErrors(root, $);
     if ($("lg_reload")) this.bindLog(root, $);
@@ -1445,7 +1468,7 @@ class LegoTrackerPanel extends HTMLElement {
     const st = this.state.settings;
     if (this.state.settingsErr) return this.emptyState("🔒", t("Only administrators can change settings."));
     if (!st) { this.loadSettings(); return `<div class="skel" style="height:200px"></div>`; }
-    const bw = this.state.data.brickwatch, sel = st.compare_sources || Object.keys(SRC);
+    const bw = this.state.data.compare, sel = st.compare_sources || Object.keys(SRC);
     const when = (ts) => DATE(ts, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
     const rows = bw ? Object.entries(bw.sources).map(([id, x]) => `<tr>
         <td><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" class="x_src" data-src="${id}" ${sel.includes(id) ? "checked" : ""}><b>${esc(x.name)}</b></label></td>
@@ -1455,20 +1478,20 @@ class LegoTrackerPanel extends HTMLElement {
         <td><button class="btn ghost sm x_test" data-src="${id}" type="button">🔬 ${t("Test")}</button></td></tr>`).join("") : "";
     const first = (this.sets[0] || {}).set_number || "";
     return `<div class="panel"><h3>🕵️ ${t("Secret options")}</h3>
-      <div class="rule${st.brickwatch ? "" : " off"}"><label class="switch"><input type="checkbox" id="x_bw" ${st.brickwatch ? "checked" : ""}><i></i></label><div style="flex:1"><b>🧱 ${t("Price-comparison sites as price source")}</b><div class="sum">${t("Per set, comparison sites (Brickwatch, Kieskeurig, Shoparize, Channable, Producthero) are read, at most every 6 h. Shops that fail themselves (e.g. bol.com) get the comparison price, shops without a link get one, and the set window shows every shop. LED kits and other accessories are skipped. A site that doesn't have a set is not asked again within a day; after 5 network errors in a row a site is paused for 1 hour.")}</div></div></div>
+      <div class="rule${st.compare ? "" : " off"}"><label class="switch"><input type="checkbox" id="x_cmp" ${st.compare ? "checked" : ""}><i></i></label><div style="flex:1"><b>🧱 ${t("Price-comparison sites as price source")}</b><div class="sum">${t("Per set, comparison sites (Kieskeurig, Shoparize, Channable, Producthero, BrickEconomy) are read, at most every 6 h. Shops that fail themselves (e.g. bol.com) get the comparison price, shops without a link get one, and the set window shows every shop. LED kits and other accessories are skipped. A site that doesn't have a set is not asked again within a day; after 5 network errors in a row a site is paused for 1 hour.")}</div></div></div>
       ${bw ? `<div class="tscroll" style="margin-top:10px"><table class="tbl"><tr><th>${t("Site")}</th><th>${t("Status")}</th><th class="num">${t("Sets")}</th><th class="num">${t("Not there")}</th><th class="num">${t("Errors")}</th><th>${t("Last fetch")}</th><th></th></tr>${rows}</table></div>
         <p class="muted" style="font-size:12px">${t("When a site refuses the server, your own browser fetches the page via the userscript (browser relay) and Home Assistant reads it.")}
           ${t("BrickEconomy gives no shop prices but the market value (used as the value of sets you own) and the expected retirement date, once a day.")}</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0">
-          <button class="btn" id="x_bwjob">↻ ${t("Fetch all comparison sites for all sets")}</button>
+          <button class="btn" id="x_cmpjob">↻ ${t("Fetch all comparison sites for all sets")}</button>
           <span class="hsp" style="flex:1"></span>
           <label class="muted" style="font-size:13px">${t("Test with set")} <input id="x_tnum" value="${esc(first)}" style="width:90px"></label></div>
         <div id="x_tout"></div>` : ""}</div>`;
   }
   bindSecret(root, $) {
-    const cb = $("x_bw"); if (!cb) return;
+    const cb = $("x_cmp"); if (!cb) return;
     cb.addEventListener("change", () => this.busy(null, "", async () => {
-      await this._hass.callWS({ type: "lego_tracker/settings/set", fields: { brickwatch: cb.checked } });
+      await this._hass.callWS({ type: "lego_tracker/settings/set", fields: { compare: cb.checked } });
       await new Promise((r) => setTimeout(r, 1500));
       this.state.settings = null; await this.load();
       this.toast(cb.checked ? t("Comparison sites on") : t("Comparison sites off"), "ok");
@@ -1500,16 +1523,16 @@ class LegoTrackerPanel extends HTMLElement {
         a.download = `${src}-${num}.html`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
       };
     }));
-    const job = $("x_bwjob"); if (job) job.onclick = () => this.busy(job, t("Starting…"), async () => {
+    const job = $("x_cmpjob"); if (job) job.onclick = () => this.busy(job, t("Starting…"), async () => {
       const r = await this._hass.callWS({ type: "lego_tracker/compare/fetch" });
       this.state.job = r.job; this.pollJob(); this.renderJob();
       this.toast(t("{job} started for {n} sets", { job: tx(r.job.label), n: r.job.total }), "ok");
     });
   }
-  brickwatchHtml(s) {
+  compareHtml(s) {
     const cmp = s.compare; if (!cmp) return "";
     const retailers = this.state.data.retailers;
-    const head = `<h3 style="margin:16px 0 4px;display:flex;align-items:center;gap:8px">🧱 ${t("Comparison sites: all shops")}<span class="hsp" style="flex:1"></span><button class="btn ghost sm" id="bwgo" type="button">↻ ${t("Fetch")}</button></h3>`;
+    const head = `<h3 style="margin:16px 0 4px;display:flex;align-items:center;gap:8px">🧱 ${t("Comparison sites: all shops")}<span class="hsp" style="flex:1"></span><button class="btn ghost sm" id="cmpgo" type="button">↻ ${t("Fetch")}</button></h3>`;
     const when = (ts) => DATE(ts, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
     const parts = Object.entries(cmp).map(([id, e]) => {
       const link = e.url ? ` <a href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">↗</a>` : "";
@@ -1659,7 +1682,7 @@ class LegoTrackerPanel extends HTMLElement {
         <h3 style="margin:16px 0 4px;display:flex;align-items:center;gap:8px">🏪 ${t("Shops: links & prices")}<span class="hsp" style="flex:1"></span><button class="btn ghost sm" id="lg" type="button">📜 ${t("Logbook")}</button></h3>
         <p class="muted" style="font-size:12px;margin:0 0 6px">${t("Edit a link or price and press Save. What you enter by hand always wins and is never overwritten; empty a field to hand it back to the automatic search / price.")}</p>
         ${this.shopTableHtml(s, focusShop)}
-        ${this.brickwatchHtml(s)}
+        ${this.compareHtml(s)}
         <form id="ef" style="margin-top:16px" autocomplete="off">
         <fieldset><legend>👀 ${t("Tracking")}</legend><div class="form"><label>${t("Target price")} (€)<input name="target_price" type="number" min="0" step="0.01" value="${s.target_price ?? ""}"></label>
           <label>${t("Priority")}<select name="priority">${[0, 1, 2, 3].map((p) => `<option value="${p}" ${(s.priority || 0) === p ? "selected" : ""}>${p ? "★".repeat(p) : "–"}</option>`).join("")}</select></label>
@@ -1707,7 +1730,7 @@ class LegoTrackerPanel extends HTMLElement {
     const find = async (btn) => this.busy(btn, t("Searching…"), async () => { const r = await this.svc("discover_offers", { set_number: num }, true); await this.load(); this.toast(t("{n} shop links found", { n: r.response.found }), r.response.found ? "ok" : ""); this.openSet(num); });
     q("find").onclick = (e) => find(e.currentTarget);
     q("enr").onclick = (e) => this.busy(e.currentTarget, t("Fetching…"), async () => { const r = await this._hass.callWS({ type: "lego_tracker/set/enrich", set_number: num }); await this.load(); this.toast(r.result.updated ? t("Set data updated") : t("No new set data found"), r.result.updated ? "ok" : ""); this.openSet(num); });
-    if (q("bwgo")) q("bwgo").onclick = (e) => this.busy(e.currentTarget, "", async () => { const r = await this._hass.callWS({ type: "lego_tracker/compare/fetch", set_number: num, retry_missing: true }); await this.load(); this.toast(r.found ? t("Comparison prices fetched") : t("No comparison site has this set"), r.found ? "ok" : ""); this.openSet(num); });
+    if (q("cmpgo")) q("cmpgo").onclick = (e) => this.busy(e.currentTarget, "", async () => { const r = await this._hass.callWS({ type: "lego_tracker/compare/fetch", set_number: num, retry_missing: true }); await this.load(); this.toast(r.found ? t("Comparison prices fetched") : t("No comparison site has this set"), r.found ? "ok" : ""); this.openSet(num); });
     q("rf").onclick = (e) => this.busy(e.currentTarget, t("Fetching…"), async () => { await this.svc("refresh", { set_number: num }); await this.load(); this.openSet(num); });
     q("rm").onclick = () => { if (!confirm(t(s.owned ? "Delete set {number} with its whole price history, and remove it from your collection?" : "Delete set {number} with its whole price history?", { number: num }))) return; this.busy(q("rm"), "", async () => { await this.svc("remove_set", { set_number: num }); this.closeDialog(); await this.load(); this.toast(t("Set {number} deleted", { number: num }), "ok"); }); };
     this.hookCharts(dlg);

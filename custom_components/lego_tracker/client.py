@@ -34,7 +34,7 @@ BROWSER_HEADERS = {
 ORIGINS = {
     "amazon_nl": "https://www.amazon.nl/", "amazon_de": "https://www.amazon.de/",
     "amazon_be": "https://www.amazon.com.be/", "bol": "https://www.bol.com/nl/nl/",
-    "kruidvat_be": "https://www.kruidvat.be/nl/", "brickwatch": "https://www.brickwatch.net/",
+    "kruidvat_be": "https://www.kruidvat.be/nl/",
 }
 # After a block we stop asking that retailer for a while: hammering makes bot protection stricter.
 COOLDOWN_HOURS = (1, 3, 6, 12, 24)
@@ -183,7 +183,7 @@ class Fetcher:
         return parsed, None
 
     async def get_page(self, key: str, url: str, force: bool = False, note_block: bool = True) -> tuple[int, str, str | None]:
-        """(status, html, error) for an extra source (e.g. Brickwatch), with the same politeness and pauses.
+        """(status, html, error) for an extra source (a comparison site), with the same politeness and pauses.
         note_block=False: a refusal doesn't pause the whole site (e.g. only its product pages are blocked)."""
         if not force and (left := self.cooldown_left(key)) > 0:
             return 0, "", T("paused {hours} h after being blocked", hours=f"{left / 3600:.1f}")

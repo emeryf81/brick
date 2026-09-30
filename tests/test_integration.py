@@ -23,6 +23,15 @@ def entry(hass):
 
 
 @pytest.fixture(autouse=True)
+def no_catalogue():
+    """Tests use real set numbers: without this the built-in catalogue would fill them in."""
+    from custom_components.lego_tracker import catalog
+
+    with patch.object(catalog, "_SETS", {}), patch.object(catalog, "load", lambda: {}):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def no_network():
     fetch = AsyncMock(return_value=(Parsed(price=30.0, title="LEGO Bonsai"), None))
     with patch("custom_components.lego_tracker.client.Fetcher.fetch_offer", fetch), \
@@ -824,94 +833,127 @@ async def test_userscript_has_relay_and_ha_include(hass: HomeAssistant, entry, h
     assert "// @include      *://*/lego-tracker*" in text and "/api/lego_tracker/relay" in text and "{{" not in text
 
 
-BW_PAGE = '''<html><head><title>LEGO 10281 Bonsai - Brickwatch</title><meta property="og:image" content="https://img.brickwatch.net/10281.jpg"></head>
-<body><h1>LEGO® Icons 10281 Bonsaiboompje</h1><p>Adviesprijs € 49,99</p><table>
-<tr><td><img alt="bol.com"></td><td><s>€ 49,99</s> € 36,49</td><td><a href="/nl-BE/go/1">Naar winkel</a></td></tr>
-<tr><td><img alt="Amazon.nl"></td><td>€ 37,10</td><td><a href="https://www.amazon.nl/dp/B0BONSAI01">Naar winkel</a></td></tr>
-<tr><td><img alt="Top1Toys"></td><td>€ 41,00</td><td><a href="/nl-BE/go/9">Naar winkel</a></td></tr></table></body></html>'''
-
-
-def _pages(**by_host):
-    """get_page mock: (status, html) per host fragment, 404 for the rest."""
+def _pages(**by_fragment):
+    """get_page mock: (status, html) per URL fragment, 404 for the rest."""
     async def get(src, url, force=False, note_block=True):
-        for frag, res in by_host.items():
-            if frag.replace("_", ".") in url or frag in url:
+        for frag, res in by_fragment.items():
+            if frag in url:
                 return res(url) if callable(res) else res
         return 404, "", None
     return AsyncMock(side_effect=get)
 
 
-async def test_brickwatch_hidden_source(hass: HomeAssistant, entry, no_network, hass_ws_client):
+async def test_comparison_sites_hidden_source(hass: HomeAssistant, entry, no_network, hass_ws_client):
     c = await _setup(hass, entry)
     ws = await hass_ws_client(hass)
     await ws.send_json({"id": 1, "type": "lego_tracker/compare/fetch"})
     assert (await ws.receive_json())["error"]["code"] == "not_enabled"          # off by default
-    hass.config_entries.async_update_entry(entry, options={**entry.options, "brickwatch": True})
+    # the option's name before 0.9.10 is still read
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "brickwatch": True, "compare_sources": ["kieskeurig"]})
     await hass.async_block_till_done()
     c = hass.data[DOMAIN][entry.entry_id]
-    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
-    await hass.services.async_call(DOMAIN, "set_offer", {"set_number": "10281", "retailer": "bol",
-                                                         "url": "https://www.bol.com/nl/nl/p/lego-bonsai/9300000038297067/"}, blocking=True)
+    assert c.compare_enabled
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "60454"}, blocking=True)
+    await hass.services.async_call(DOMAIN, "set_offer", {"set_number": "60454", "retailer": "bol",
+                                                         "url": "https://www.bol.com/nl/nl/p/lego-city-camper/9300000012345678/"}, blocking=True)
     no_network.side_effect = lambda rid, url, force=False: (None, "blocked (HTTP 403)")    # every shop blocks us
-    page = _pages(brickwatch=(200, BW_PAGE, None))
+    page = _pages(**{"/search": (200, KK_SEARCH, None), "/product/": (200, KK_PRODUCT, None)})
     with patch.object(c.fetcher, "get_page", page):
         await c.refresh_all()
     urls = [a.args[1] for a in page.await_args_list]
-    assert urls[0] == "https://www.brickwatch.net/nl-BE/set/10281/" and any("kieskeurig.be/search?q=lego+10281" in u for u in urls)
-    offers = c.store["offers"]["10281"]
-    assert offers["bol"]["last_price"] == 36.49 and offers["bol"]["error"] is None          # bol.com via Brickwatch
-    assert offers["amazon_nl"]["via"] == "brickwatch" and offers["amazon_nl"]["last_price"] == 37.10   # new link via Brickwatch
-    s = c.store["sets"]["10281"]
-    assert s["rrp"] == 49.99 and s["image"] == "https://img.brickwatch.net/10281.jpg" and "Bonsaiboompje" in s["name"]
+    assert urls[0] == "https://www.kieskeurig.be/search?q=lego+60454" and "52114913" in urls[1]
+    offers = c.store["offers"]["60454"]
+    assert offers["bol"]["last_price"] == 24.99 and offers["bol"]["error"] is None           # bol.com via Kieskeurig
+    assert offers["amazon_nl"]["via"] == "kieskeurig" and offers["amazon_nl"]["last_price"] == 27.49   # new shop via Kieskeurig
+    assert c.store["sets"]["60454"]["ean"] == "5702017583723"
     check = [e for e in c.store["activity"] if e["kind"] == "check"][-1]
-    assert check["results"]["bol"]["via"] == "brickwatch" and check["results"]["bol"]["ok"]
-    shops = {sh["name"]: sh for sh in c.store["compare"]["brickwatch"]["10281"]["shops"]}
-    assert shops["Top1Toys"]["retailer"] is None and shops["Top1Toys"]["price"] == 41.0      # every shop is kept
-    assert c.store["compare"]["kieskeurig"]["10281"]["status"] == "missing"
-    # the set dialog gets all shops per site; pages are re-used for a few hours
-    await ws.send_json({"id": 2, "type": "lego_tracker/set", "set_number": "10281"})
+    assert check["results"]["bol"]["via"] == "kieskeurig" and check["results"]["bol"]["ok"]
+    await ws.send_json({"id": 2, "type": "lego_tracker/set", "set_number": "60454"})
     card = (await ws.receive_json())["result"]
-    assert len(card["compare"]["brickwatch"]["shops"]) == 3 and card["compare"]["kieskeurig"]["status"] == "missing"
+    assert len(card["compare"]["kieskeurig"]["shops"]) == 2 and set(card["compare"]) == {"kieskeurig"}
     n = page.await_count
     with patch.object(c.fetcher, "get_page", page):
-        await c.refresh_set("10281")
-    assert page.await_count == n
+        await c.refresh_set("60454")
+    assert page.await_count == n                                                   # re-used for a few hours
     await ws.send_json({"id": 3, "type": "lego_tracker/overview"})
-    ov = (await ws.receive_json())["result"]["brickwatch"]
-    assert ov["sources"]["brickwatch"]["sets"] == 1 and ov["sources"]["kieskeurig"]["missing"] == 1
+    ov = (await ws.receive_json())["result"]["compare"]
+    assert ov["sources"]["kieskeurig"]["sets"] == 1 and "brickwatch" not in ov["sources"]
+    # switching it through the settings stores the new option name
+    await ws.send_json({"id": 4, "type": "lego_tracker/settings/set", "fields": {"compare": False}})
+    assert (await ws.receive_json())["success"]
+    await hass.async_block_till_done()
+    assert "brickwatch" not in entry.options and entry.options["compare"] is False
 
 
-async def test_brickwatch_missing_page_not_retried_within_a_day(hass: HomeAssistant, entry, no_network):
-    hass.config_entries.async_update_entry(entry, options={**entry.options, "brickwatch": True, "compare_sources": ["brickwatch"]})
+async def test_builtin_catalogue_skips_lookups(hass: HomeAssistant, entry, no_network):
+    import json
+
+    from custom_components.lego_tracker import catalog
+
+    cat = json.loads(catalog.PATH.read_text("utf-8"))["sets"]
+    catalog._SETS = cat                                    # the real file (other tests run without it)
+    assert len(cat) >= 100 and cat["10368"]["rrp"] == 29.99 and cat["10368"]["lego_url"].endswith("/product/10368")
+    c = await _setup(hass, entry)
+    lookup = AsyncMock(return_value=({"name": "from Brickset"}, "brickset.com"))
+    with patch("custom_components.lego_tracker.coordinator.lookup_metadata", lookup):
+        await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10368"}, blocking=True)
+        await hass.services.async_call(DOMAIN, "add_set", {"set_number": "99999"}, blocking=True)
+    s = c.store["sets"]["10368"]
+    assert lookup.await_count == 1 and lookup.await_args.args[-1] == "99999"        # only the unknown set is looked up
+    assert s["name"] == "Chrysanthemum" and s["rrp"] == 29.99 and s["rrp_source"] == "LEGO.com" and s["year"] == 2024
+    assert s["image"].startswith("https://www.lego.com/") and s["availability"] == "retail" and s["exit_date"] == "2027-05-31"
+    assert c.store["offers"]["10368"]["lego_com"]["url"] == "https://www.lego.com/nl-be/product/10368"   # no LEGO.com search
+    assert not c.needs_enrich("10368") or not s.get("pieces")
+    # your own values win: the catalogue only fills gaps
+    c.store["sets"]["10368"].update(name="Mijn chrysant", name_source="user", rrp=25.0, rrp_source="user")
+    catalog.apply("10368", c.store["sets"]["10368"], c.store["offers"]["10368"])
+    assert s["name"] == "Mijn chrysant" and s["rrp"] == 25.0
+
+
+async def test_removed_source_keeps_data_but_no_links(hass: HomeAssistant, entry, no_network, hass_storage):
+    from custom_components.lego_tracker.models import new_store
+
+    store = new_store()
+    store["sets"]["10281"] = {"set_number": "10281", "name": "Bonsai Tree"}
+    store["offers"]["10281"] = {
+        "amazon_nl": {"url": "https://www.brickwatch.net/nl-BE/set/10281/", "via": "brickwatch", "link_status": "ok",
+                      "history": [[1700000000, 37.1]], "last_price": 37.1},
+        "bol": {"url": "https://www.bol.com/nl/nl/p/bonsai/9300000038297067/", "via": "brickwatch", "history": [[1700000000, 36.49]]}}
+    store["brickwatch"] = {"10281": {"status": "ok", "ts": 1700000000, "url": "https://www.brickwatch.net/nl-BE/set/10281/",
+                                     "shops": [{"name": "Top1Toys", "price": 41.0, "url": "https://www.brickwatch.net/nl-BE/go/9"}]}}
+    hass_storage["lego_tracker.data"] = {"version": 1, "key": "lego_tracker.data", "data": store}
+    c = await _setup(hass, entry)
+    a, b = c.store["offers"]["10281"]["amazon_nl"], c.store["offers"]["10281"]["bol"]
+    assert "url" not in a and a["history"] == [[1700000000, 37.1]] and a["last_price"] == 37.1   # data stays, link goes
+    assert b["url"].startswith("https://www.bol.com/")                                           # a real shop link stays
+    old = c.store["compare"]["brickwatch"]["10281"]
+    assert "url" not in old and old["shops"] == [{"name": "Top1Toys", "price": 41.0}] and "brickwatch" not in c.store
+    assert c.compare_entries("10281") == {}
+    assert not any("brickwatch" in i["url"] for i in c.relay_items(100)["items"])
+
+
+async def test_missing_set_not_retried_within_a_day(hass: HomeAssistant, entry, no_network):
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare": True, "compare_sources": ["kieskeurig"]})
     c = await _setup(hass, entry)
     await hass.services.async_call(DOMAIN, "add_set", {"set_number": "385"}, blocking=True)
     page = AsyncMock(return_value=(404, "", None))
-    bw = lambda: c.store["compare"]["brickwatch"]   # noqa: E731
+    kk = lambda: c.store["compare"]["kieskeurig"]   # noqa: E731
     with patch.object(c.fetcher, "get_page", page):
         assert await c.compare_refresh("385") == {}
         assert await c.compare_refresh("385", force=True) == {}                        # not even forced
-        assert page.await_count == 1 and bw()["385"]["status"] == "missing"
-        bw()["385"]["ts"] -= 25 * 3600                                                 # a day later
+        assert page.await_count == 1 and kk()["385"]["status"] == "missing"
+        kk()["385"]["ts"] -= 25 * 3600                                                 # a day later
         await c.compare_refresh("385")
         assert page.await_count == 2
-    # a redirect to the home page counts as missing too
-    home = AsyncMock(return_value=(200, "<html><title>Brickwatch België</title><h1>Welkom</h1></html>", None))
-    bw().pop("385")
-    with patch.object(c.fetcher, "get_page", home):
+    # a search page without this set counts as missing too
+    empty = AsyncMock(return_value=(200, "<html><title>Zoeken</title><h1>Geen resultaten voor lego 385</h1></html>", None))
+    kk().pop("385")
+    with patch.object(c.fetcher, "get_page", empty):
         assert await c.compare_refresh("385") == {}
-    assert bw()["385"]["status"] == "missing"
+    assert kk()["385"]["status"] == "missing"
     assert "385" in c._spread_candidates()                                             # sets without links are checked too
 
 
-BW_LED = """<html><head><title>LED verlichting voor LEGO 43290 - Brickwatch</title></head><body>
-<h1>BriksMax LED-verlichtingsset voor LEGO 43290</h1>
-<table><tr><td>Shop X</td><td>€ 29,99</td><td><a href="https://shopx.example/led">Naar winkel</a></td></tr></table>
-<p>Hoort bij: <a href="/nl-BE/set/43290-1/lego-disney-magic-castle">LEGO Disney 43290 Het magische kasteel</a>
-<a href="/nl-BE/set/43290-2/led-kit">LED kit 43290</a></p></body></html>"""
-BW_REAL = """<html><head><title>LEGO 43290 - Brickwatch</title></head><body><h1>LEGO Disney 43290 Het magische kasteel</h1>
-<div class="offer"><span class="shop">bol.com</span><span class="price">€ 79,99</span><a href="/nl-BE/go/7">Bekijk</a></div>
-<div class="offer"><span class="shop">Dreamland</span><span class="price">€ 84,99</span><a href="/nl-BE/go/8">Bekijk</a></div>
-</body></html>"""
 KK_SEARCH = """<html><body><h1>Zoekresultaten lego 60454</h1><ul>
 <li><a href="/bouw_en_constructiespeelgoed/product/1111-led-light-kit-for-lego-60454">LED Light Kit for LEGO 60454</a> vanaf € 19,99</li>
 <li><a href="/bouw_en_constructiespeelgoed/product/52114913-lego-city-holiday-adventure-camper-van-60454">LEGO City 60454 Camper</a> vanaf € 24,99</li>
@@ -973,19 +1015,11 @@ async def test_own_filter_words_and_exceptions(hass: HomeAssistant, entry, no_ne
     assert not (await ws.receive_json())["success"]                                          # * only at the end
 
 
-def test_compare_parsers_skip_led_and_follow():
+def test_compare_parsers_skip_accessories_and_follow():
     from custom_components.lego_tracker import compare
     from custom_components.lego_tracker.shops import all_domains
 
     d = all_domains()
-    # Brickwatch: an LED-kit page for the number is not the set: follow the link to the real set page
-    r = compare.parse("brickwatch", BW_LED, "43290", "https://www.brickwatch.net/nl-BE/set/43290/", d)
-    assert r.kind == "follow" and r.url == "https://www.brickwatch.net/nl-BE/set/43290-1/lego-disney-magic-castle"
-    r = compare.parse("brickwatch", BW_LED.replace("/nl-BE/set/43290-1/lego-disney-magic-castle", "/x"), "43290",
-                      "https://www.brickwatch.net/nl-BE/set/43290/", d)
-    assert r.kind == "follow" and r.url == "https://www.brickwatch.net/nl-BE/search/?q=43290"      # or search the site
-    r = compare.parse("brickwatch", BW_REAL, "43290", "https://www.brickwatch.net/nl-BE/set/43290-1/x", d, step=1)
-    assert r.kind == "offers" and [(x["retailer"], x["price"]) for x in r.shops] == [("bol", 79.99), ("dreamland_be", 84.99)]
     # Kieskeurig: search -> product page (not the LED kit), JSON-LD offers, out of stock skipped, EAN kept
     r = compare.parse("kieskeurig", KK_SEARCH, "60454", "https://www.kieskeurig.be/search?q=lego+60454", d)
     assert r.kind == "follow" and "52114913" in r.url
@@ -1008,9 +1042,6 @@ def test_compare_parsers_skip_led_and_follow():
     </body></html>"""
     r = compare.parse("shoparize", mixed, "10368", "https://www.shoparize.com/be/q?q=lego+10368", d)
     assert [(x["retailer"], x["price"]) for x in r.shops] == [("dreamland_be", 27.99)]
-    # a real set whose description says 'display model' is still the set (only LED counts in the description)
-    real = BW_REAL.replace("<head>", '<head><meta name="description" content="A beautiful display model for adults">')
-    assert compare.parse("brickwatch", real, "43290", "https://www.brickwatch.net/nl-BE/set/43290/", d).kind == "offers"
     # Producthero needs the EAN
     assert compare.first_url("producthero", "60454", "nl-be") is None
     assert compare.first_url("producthero", "60454", "nl-be", "5702016914177") == \
@@ -1019,7 +1050,7 @@ def test_compare_parsers_skip_led_and_follow():
 
 
 async def test_compare_network_errors_pause_one_hour_and_job_stops(hass: HomeAssistant, entry, no_network):
-    hass.config_entries.async_update_entry(entry, options={**entry.options, "brickwatch": True, "compare_sources": ["brickwatch"]})
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare": True, "compare_sources": ["kieskeurig"]})
     c = await _setup(hass, entry)
     for n in ("10281", "10300", "10305", "10311", "10313", "10316", "10317"):
         await hass.services.async_call(DOMAIN, "add_set", {"set_number": n}, blocking=True)
@@ -1027,10 +1058,10 @@ async def test_compare_network_errors_pause_one_hour_and_job_stops(hass: HomeAss
     page = AsyncMock(return_value=(0, "", err))
     with patch.object(c.fetcher, "get_page", page), \
             patch("homeassistant.helpers.event.async_call_later") as later:
-        c.start_brickwatch()
+        c.start_compare()
         await c._job_task
     assert page.await_count == 5                                   # 5 network errors in a row: stop asking
-    assert 3500 < c.fetcher.cooldown_left("brickwatch") <= 3600
+    assert 3500 < c.fetcher.cooldown_left("kieskeurig") <= 3600
     assert c.last_job["cancelled"] and later.call_args.args[1] > 3600    # the rest follows after the pause
     assert any("5 network errors in a row" in e["message"] for e in c.store["activity"])
     with patch.object(c.fetcher, "get_page", page):
@@ -1052,7 +1083,7 @@ KK_CARDS = """<html><body><ul class="productlist_grid">
 
 
 async def test_kieskeurig_product_page_403_uses_search_results(hass: HomeAssistant, entry, no_network):
-    hass.config_entries.async_update_entry(entry, options={**entry.options, "brickwatch": True, "compare_sources": ["kieskeurig"]})
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare": True, "compare_sources": ["kieskeurig"]})
     c = await _setup(hass, entry)
     await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10368"}, blocking=True)
 
@@ -1093,7 +1124,7 @@ async def test_brickeconomy_market_value_and_retirement(hass: HomeAssistant, ent
     assert compare.parse("brickeconomy", BE_PAGE.replace("10368-1</div>", "10369-1</div>").replace("10368", "x"), "10368", "u", {}).kind == "missing"
     assert compare._eur("$24.99") is None                                  # only euro values
 
-    hass.config_entries.async_update_entry(entry, options={**entry.options, "brickwatch": True, "compare_sources": ["brickeconomy"]})
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare": True, "compare_sources": ["brickeconomy"]})
     c = await _setup(hass, entry)
     await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10368"}, blocking=True)
     await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
@@ -1117,7 +1148,7 @@ async def test_brickeconomy_market_value_and_retirement(hass: HomeAssistant, ent
 
 
 async def test_relay_fetches_comparison_pages(hass: HomeAssistant, entry, no_network, hass_client):
-    hass.config_entries.async_update_entry(entry, options={**entry.options, "brickwatch": True, "compare_sources": ["kieskeurig"]})
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare": True, "compare_sources": ["kieskeurig"]})
     c = await _setup(hass, entry)
     await hass.services.async_call(DOMAIN, "add_set", {"set_number": "60454"}, blocking=True)
     c.fetcher.blocked_until["kieskeurig"] = time.time() + 3600       # the server is refused
