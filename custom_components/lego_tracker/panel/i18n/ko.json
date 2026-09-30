@@ -299,6 +299,7 @@
 "Invalid list of rules (max 50).": "잘못된 규칙 목록 (최대 50개).",
 "Invalid price": "잘못된 가격",
 "Invalid price.": "잘못된 가격입니다.",
+"Invalid priority filter.": "잘못된 우선순위 필터입니다.",
 "Invalid set {number} in the backup.": "백업에 잘못된 세트 {number}이(가) 있습니다.",
 "Job": "작업",
 "Job finished (refresh, link search…)": "작업 완료 (새로 고침, 링크 찾기…)",

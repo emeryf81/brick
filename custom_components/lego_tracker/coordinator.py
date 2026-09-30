@@ -869,8 +869,9 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if is_search_url(url):
                 search_page = url if url.startswith("http") else None
             else:
-                self.set_offer(num, retailer, url)            # a product page or ASIN: that is the link
-        if not (offers.get(retailer) or {}).get("url"):
+                # a product page or ASIN is the link; the same page keeps its history, a manual price stays
+                self.update_offer(num, retailer, url=url)
+        if search_page or not (offers.get(retailer) or {}).get("url"):
             url = await self._discover(retailer, num, force=True, url=search_page)
             rejected = set(self.store.setdefault("rejected", {}).get(num, []))
             if not url or url_key(retailer, url) in rejected:
@@ -879,7 +880,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.log("warning", "discover", reason, set_number=num, retailer=retailer, url=url, source="panel")
                 self.push_update()
                 return {"ok": False, "found": False, "error": reason}
-            offers[retailer] = {"url": url, "history": [], "found": time.time()}
+            if (offers.get(retailer) or {}).get("url"):
+                self.update_offer(num, retailer, url=url)    # searched on a page you pasted: keep what can be kept
+            else:
+                offers[retailer] = {"url": url, "history": [], "found": time.time()}
             if retailer == "bol" and num in self._bol_found:
                 offers[retailer]["ean"] = self._bol_found[num]["ean"]
             found = True

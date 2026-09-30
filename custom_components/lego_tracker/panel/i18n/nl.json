@@ -299,6 +299,7 @@
 "Invalid list of rules (max 50).": "Ongeldige lijst met regels (max 50).",
 "Invalid price": "Ongeldige prijs",
 "Invalid price.": "Ongeldige prijs.",
+"Invalid priority filter.": "Ongeldige prioriteitsfilter.",
 "Invalid set {number} in the backup.": "Ongeldige set {number} in de back-up.",
 "Job": "Taak",
 "Job finished (refresh, link search…)": "Taak klaar (verversen, links zoeken…)",

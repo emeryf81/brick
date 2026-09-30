@@ -495,9 +495,20 @@ def ws_logs_export(hass, connection, msg):
     from .models import retirement_status
 
     coord = _coord(hass)
+    if coord is None:
+        connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
+        return
     if not msg["parts"]:
         connection.send_error(msg["id"], "invalid", tr("Choose at least one part to export."))
         return
+    prio = (msg.get("filters") or {}).get("priority")
+    if prio not in (None, "", 0):
+        try:
+            if not 1 <= int(prio) <= 3:
+                raise ValueError
+        except (TypeError, ValueError):
+            connection.send_error(msg["id"], "invalid", tr("Invalid priority filter."))
+            return
     text, counts = log_export.build(coord.store, msg, coord.is_watched, lambda s: retirement_status(s)["retiring_soon"])
     connection.send_result(msg["id"], {"csv": text, "counts": counts})
 

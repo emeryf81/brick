@@ -423,6 +423,11 @@ def _generic_result(page: str, domain: str, set_number: str) -> str | None:
     return _generic_link(page, domain, set_number) or _generic_tile(page, domain, set_number)
 
 
+# links inside a product tile that are not another product (cart, wishlist, compare, reviews, account)
+NAV_PATH_RE = re.compile(r"cart|basket|winkelwagen|mandje|warenkorb|panier|login|account|wish|verlanglijst|merkliste|"
+                         r"compare|vergelijk|review|beoordeling|share|delen", re.I)
+
+
 def _generic_tile(page: str, domain: str, set_number: str) -> str | None:
     from .compare import _dom            # small DOM helper (import here: compare imports this module)
 
@@ -440,14 +445,15 @@ def _generic_tile(page: str, domain: str, set_number: str) -> str | None:
                 break
             tile = tile.parent
             paths = {urlparse(x.attrs.get("href", "")).path for x in tile.iter() if x.tag == "a" and x.attrs.get("href")
-                     and not x.attrs["href"].startswith(("#", "javascript:"))}
-            if len(paths - {product}) > 1:
-                break                          # grew into the next product
+                     and not x.attrs["href"].startswith(("#", "javascript:", "mailto:"))}
+            others = {p for p in paths - {product, ""} if not NAV_PATH_RE.search(p)}
+            if others:
+                break                          # grew into another product: its set number is not this link's
             text = tile.all_text() + " " + " ".join(x.attrs.get("alt", "") + " " + x.attrs.get("title", "")
                                                     for x in tile.iter() if x.tag in ("img", "a"))
             if num_re.search(text):
-                if title_check(text if "lego" in text.lower() else f"lego {text}", set_number)[0] == "ok" \
-                        or (num_re.search(text) and "lego" in text.lower() and not accessory_word(text)):
+                # the same rules as a title: LEGO, the set number, no accessory, no other brand
+                if title_check(text if "lego" in text.lower() else f"lego {text}", set_number)[0] == "ok":
                     return url.split("?")[0]
                 break
     return None

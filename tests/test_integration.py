@@ -1204,7 +1204,7 @@ async def test_find_uses_pasted_search_page_and_says_why(hass: HomeAssistant, en
     assert seen == ["https://www.bol.com/nl/nl/s/?searchtext=60510"]
     assert r["error"] == "the shop blocked the search (HTTP 403)"                 # the real reason, not "no product"
     assert "bol" not in c.store["offers"]["60510"]
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError, match="search page"):
         c.set_offer("60510", "bol", "https://www.bol.com/nl/nl/s/?searchtext=60510")   # never saved as a product link
     # a product page pasted by hand becomes the link
     await c.fetch_shop("60510", "bol", "https://www.bol.com/nl/nl/p/lego-city-60510/9300000012345678/")
@@ -1298,3 +1298,49 @@ async def test_logbook_export(hass: HomeAssistant, entry, no_network, hass_ws_cl
     total = r["csv"].split("# Price history in total\n")[1]
     last = list(csv.DictReader(io.StringIO(total)))[-1]
     assert last["sets_with_price"] == "2"
+
+
+
+async def test_pasted_search_page_on_existing_link_keeps_state(hass: HomeAssistant, entry, no_network):
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "60510"}, blocking=True)
+    old = "https://www.bol.com/nl/nl/p/lego-city-60510/9300000012345678/"
+    c.update_offer("60510", "bol", url=old, manual_price="39.99")
+    c.store["offers"]["60510"]["bol"]["history"] = [[1700000000, 45.0]]
+    seen = []
+
+    async def discover(retailer, num, force=False, url=None):
+        seen.append(url)
+        return old                                    # the search page finds the same product
+    with patch.object(c.fetcher, "discover", discover):
+        await c.fetch_shop("60510", "bol", "https://www.bol.com/nl/nl/s/?searchtext=60510")
+    o = c.store["offers"]["60510"]["bol"]
+    assert seen == ["https://www.bol.com/nl/nl/s/?searchtext=60510"]      # searched although a link existed
+    assert o["manual_price"]["price"] == 39.99 and o["history"][0] == [1700000000, 45.0]
+    # a pasted product page on an existing link: same page keeps its history, the manual price stays
+    await c.fetch_shop("60510", "bol", old + "?ref=x")
+    o = c.store["offers"]["60510"]["bol"]
+    assert o["history"][0] == [1700000000, 45.0] and o["manual_price"]["price"] == 39.99
+
+
+def test_tile_search_never_mixes_products_or_accepts_knockoffs():
+    from custom_components.lego_tracker.parsers import _generic_result
+
+    # the review's case: two tiles, only the second names the set -> never the first tile's link
+    two = """<div class="grid">
+      <div class="tile"><a href="/be/p/111"><img alt="Brandweerauto"></a></div>
+      <div class="tile"><a href="/be/p/222"><img alt="LEGO City"></a><span>Artikel 60510</span></div></div>"""
+    assert _generic_result(two, "smythstoys.com", "60510") == "https://www.smythstoys.com/be/p/222"
+    # a cart / wishlist link inside the right tile is not another product
+    nav = two.replace("<span>Artikel 60510</span>", '<a href="/be/cart/add/222">In winkelmandje</a><span>Artikel 60510</span>')
+    assert _generic_result(nav, "smythstoys.com", "60510") == "https://www.smythstoys.com/be/p/222"
+    knock = """<div class="tile"><a href="/be/p/333"><img alt="Bouwset"></a><span>Mould King compatible with LEGO 60510</span></div>"""
+    assert _generic_result(knock, "smythstoys.com", "60510") is None
+
+
+async def test_logbook_export_rejects_bad_priority(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    await _setup(hass, entry)
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/logs/export", "parts": ["history"], "filters": {"priority": "high"}})
+    r = await ws.receive_json()
+    assert not r["success"] and r["error"]["code"] == "invalid"

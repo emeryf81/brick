@@ -299,6 +299,7 @@
 "Invalid list of rules (max 50).": "规则列表无效（最多 50 条）。",
 "Invalid price": "价格无效",
 "Invalid price.": "价格无效。",
+"Invalid priority filter.": "优先级筛选无效。",
 "Invalid set {number} in the backup.": "备份中的套装 {number} 无效。",
 "Job": "任务",
 "Job finished (refresh, link search…)": "任务完成（刷新、查找链接…）",

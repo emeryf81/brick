@@ -299,6 +299,7 @@
 "Invalid list of rules (max 50).": "Liste de règles invalide (max 50).",
 "Invalid price": "Prix invalide",
 "Invalid price.": "Prix invalide.",
+"Invalid priority filter.": "Filtre de priorité invalide.",
 "Invalid set {number} in the backup.": "Set invalide {number} dans la sauvegarde.",
 "Job": "Tâche",
 "Job finished (refresh, link search…)": "Tâche terminée (actualisation, recherche de liens…)",
