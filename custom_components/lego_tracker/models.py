@@ -4,6 +4,9 @@ from __future__ import annotations
 import re
 import time
 from datetime import date, datetime, timezone
+from heapq import heappop, heappush
+from itertools import groupby
+from math import isfinite
 from statistics import median
 from typing import Any
 
@@ -109,13 +112,23 @@ def best_offer(offers: dict[str, dict[str, Any]]) -> tuple[str, dict[str, Any]] 
 
 def combined_history(offers: dict[str, dict[str, Any]]) -> list[list[float]]:
     """Cheapest-of-all-retailers series (forward filled) across all timestamps; suspect links excluded."""
-    offers = trusted(offers)
-    stamps = sorted({t for o in offers.values() for t, _ in o.get("history", [])})
+    # Consume each observation once, including legacy histories beyond MAX_HISTORY.
+    # Stable sorting preserves the last observation at duplicate timestamps.
+    events = sorted(
+        ((t, i, p) for i, o in enumerate(trusted(offers).values()) for t, p in o.get("history", [])),
+        key=lambda event: event[0],
+    )
+    latest: dict[int, float] = {}
+    prices: list[tuple[float, int]] = []
     out: list[list[float]] = []
-    for ts in stamps:
-        prices = [p for o in offers.values() if (p := price_at(o.get("history", []), ts)) is not None]
-        if prices:
-            out.append([ts, min(prices)])
+    for ts, observations in groupby(events, key=lambda event: event[0]):
+        for _, i, price in observations:
+            latest[i] = price
+            heappush(prices, (price, i))
+        # Discard superseded prices lazily: each heap entry is removed at most once.
+        while prices[0][0] != latest[prices[0][1]]:
+            heappop(prices)
+        out.append([ts, prices[0][0]])
     return out
 
 
@@ -589,9 +602,11 @@ def validate_backup(data: Any) -> dict[str, Any]:
             if url is None or (url and not str(url).startswith(("https://", "http://"))):
                 raise LocalizedError("Set {number}/{shop}: invalid URL.", number=num, shop=rid)
             hist = o.get("history", [])
-            if not isinstance(hist, list) or any(
-                not isinstance(h, list) or len(h) != 2 or not all(isinstance(x, (int, float)) for x in h) for h in hist
-            ):
+            if not isinstance(hist, list) or len(hist) > MAX_HISTORY or any(
+                not isinstance(h, list) or len(h) != 2
+                or not all(type(x) in (int, float) and (not isinstance(x, float) or isfinite(x)) for x in h)
+                for h in hist
+            ) or any(a[0] > b[0] for a, b in zip(hist, hist[1:])):
                 raise LocalizedError("Set {number}/{shop}: invalid price history.", number=num, shop=rid)
     for num, e in clean["collection"].items():
         if num not in clean["sets"] or not isinstance(e, dict):
