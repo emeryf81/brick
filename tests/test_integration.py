@@ -1219,6 +1219,28 @@ async def test_relay_fetches_comparison_pages(hass: HomeAssistant, entry, no_net
     assert r["rejected"]
 
 
+@pytest.mark.parametrize("source,url", [
+    ("shoparize", "https://www.shoparize.com/be/q?q=lego+60454"),
+    ("channable", "https://shopping.channable.com/?search=lego+60454"),
+    ("producthero", "https://shopping.producthero.com/nl/product/123"),
+])
+async def test_relay_comparison_page_with_many_priceless_links(hass: HomeAssistant, entry, no_network, hass_client, source, url):
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare": True, "compare_sources": [source]})
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "60454"}, blocking=True)
+    page = '<div>' + '<a href="https://noise.example/item">LEGO 60454</a>' * 2000 + '</div>'
+    page += '<div><a href="https://www.dreamland.be/lego-60454">LEGO 60454</a><b>€ 27,99</b><span class="shop">Dreamland</span></div>'
+    client = await hass_client()
+    response = await client.post("/api/lego_tracker/relay", json={"results": [{
+        "kind": "page", "source": source, "set_number": "60454", "url": url, "status": 200, "html": page,
+    }]})
+    assert response.status == 200
+    result = await response.json()
+    assert result["ok"] == 1 and not result["rejected"]
+    shops = c.store["compare"][source]["60454"]["shops"]
+    assert [(shop["retailer"], shop["price"]) for shop in shops] == [("dreamland_be", 27.99)]
+
+
 async def test_find_uses_pasted_search_page_and_says_why(hass: HomeAssistant, entry, no_network):
     from custom_components.lego_tracker.parsers import _generic_result
 
