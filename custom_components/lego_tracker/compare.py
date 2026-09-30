@@ -128,19 +128,29 @@ class _Builder(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.root = _Node("root", {}, None)
         self.cur = self.root
+        self._open_tags: dict[str, int] = {}
 
     def handle_starttag(self, tag, attrs):
         node = _Node(tag, {k: (v or "") for k, v in attrs}, self.cur)
         self.cur.children.append(node)
         if tag not in VOID:
             self.cur = node
+            self._open_tags[tag] = self._open_tags.get(tag, 0) + 1
 
     def handle_endtag(self, tag):
-        n = self.cur
-        while n is not self.root and n.tag != tag:
-            n = n.parent
-        if n is not self.root:
-            self.cur = n.parent
+        # Unmatched closes must not repeatedly walk the same ancestor chain.
+        if tag not in self._open_tags:
+            return
+        # A matching close removes each visited node from the open chain, so
+        # total ancestor work is bounded by the number of non-void start tags.
+        while self.cur is not self.root:
+            node = self.cur
+            self.cur = node.parent
+            self._open_tags[node.tag] -= 1
+            if not self._open_tags[node.tag]:
+                del self._open_tags[node.tag]
+            if node.tag == tag:
+                break
 
     def handle_data(self, data):
         if data.strip():
