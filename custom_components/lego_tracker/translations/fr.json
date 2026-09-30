@@ -3,20 +3,36 @@
     "step": {
       "user": {
         "title": "LEGO Organizing Tool",
-        "description": "La plupart des paramètres sont aussi disponibles dans le panneau LEGO Organizing Tool sous Gestion → Paramètres.",
+        "description": "La plupart des réglages sont aussi dans le panneau : Gestion → Réglages.",
         "data": {
-          "discount_threshold": "Seuil de remise (%) pour 'forte remise'",
-          "retailers": "Boutiques à contrôler",
-          "language": "Langue (panneau, notifications, userscript)",
-          "refresh_mode": "Contrôles automatiques des prix",
-          "spread_hours": "Cycle réparti : chaque set une fois toutes les … heures",
-          "refresh_times": "Heures fixes (seulement pour 'À heures fixes', p. ex. 07:30, 19:30)",
-          "digest_time": "Heure du résumé quotidien",
-          "min_history_days": "Jours d'historique minimum avant qu'un 'prix le plus bas' compte",
-          "use_impersonation": "Imiter le navigateur Chrome (curl_cffi ; beaucoup moins de blocages)",
-          "notify_service": "Service notify pour les deals (facultatif ; mieux : l'onglet Notifications du panneau)",
-          "brickset_api_key": "Clé API Brickset (facultative, gratuite)",
-          "rebrickable_api_key": "Clé API Rebrickable (facultative, gratuite)"
+          "discount_threshold": "Seuil de remise",
+          "retailers": "Boutiques",
+          "language": "Langue",
+          "refresh_mode": "Contrôles de prix",
+          "spread_hours": "Cycle",
+          "watch_cycle_min": "Cycle liste de suivi",
+          "refresh_times": "Heures fixes",
+          "digest_time": "Résumé quotidien",
+          "min_history_days": "Historique « plus bas »",
+          "use_impersonation": "Imiter Chrome",
+          "notify_service": "Service notify",
+          "brickset_api_key": "Clé Brickset",
+          "rebrickable_api_key": "Clé Rebrickable"
+        },
+        "data_description": {
+          "discount_threshold": "À partir de cette remise, un set est une bonne affaire.",
+          "retailers": "Les boutiques contrôlées.",
+          "language": "Panneau, notifications et userscript.",
+          "refresh_mode": "Réparti : chaque set une fois par cycle, doux pour les boutiques.",
+          "spread_hours": "Chaque set une fois toutes les … heures.",
+          "watch_cycle_min": "Les sets de votre liste de suivi peuvent être contrôlés plus souvent.",
+          "refresh_times": "P. ex. 07:30, 19:30.",
+          "digest_time": "Heure du résumé quotidien.",
+          "min_history_days": "Jours de prix avant que « le plus bas » compte.",
+          "use_impersonation": "curl_cffi : beaucoup moins de blocages.",
+          "notify_service": "Optionnel ; mieux : l'onglet Notifications du panneau.",
+          "brickset_api_key": "Optionnel, gratuit.",
+          "rebrickable_api_key": "Optionnel, gratuit."
         }
       }
     },
@@ -31,20 +47,36 @@
     "step": {
       "init": {
         "title": "LEGO Organizing Tool",
-        "description": "La plupart des paramètres sont aussi disponibles dans le panneau LEGO Organizing Tool sous Gestion → Paramètres.",
+        "description": "La plupart des réglages sont aussi dans le panneau : Gestion → Réglages.",
         "data": {
-          "discount_threshold": "Seuil de remise (%) pour 'forte remise'",
-          "retailers": "Boutiques à contrôler",
-          "language": "Langue (panneau, notifications, userscript)",
-          "refresh_mode": "Contrôles automatiques des prix",
-          "spread_hours": "Cycle réparti : chaque set une fois toutes les … heures",
-          "refresh_times": "Heures fixes (seulement pour 'À heures fixes', p. ex. 07:30, 19:30)",
-          "digest_time": "Heure du résumé quotidien",
-          "min_history_days": "Jours d'historique minimum avant qu'un 'prix le plus bas' compte",
-          "use_impersonation": "Imiter le navigateur Chrome (curl_cffi ; beaucoup moins de blocages)",
-          "notify_service": "Service notify pour les deals (facultatif ; mieux : l'onglet Notifications du panneau)",
-          "brickset_api_key": "Clé API Brickset (facultative, gratuite)",
-          "rebrickable_api_key": "Clé API Rebrickable (facultative, gratuite)"
+          "discount_threshold": "Seuil de remise",
+          "retailers": "Boutiques",
+          "language": "Langue",
+          "refresh_mode": "Contrôles de prix",
+          "spread_hours": "Cycle",
+          "watch_cycle_min": "Cycle liste de suivi",
+          "refresh_times": "Heures fixes",
+          "digest_time": "Résumé quotidien",
+          "min_history_days": "Historique « plus bas »",
+          "use_impersonation": "Imiter Chrome",
+          "notify_service": "Service notify",
+          "brickset_api_key": "Clé Brickset",
+          "rebrickable_api_key": "Clé Rebrickable"
+        },
+        "data_description": {
+          "discount_threshold": "À partir de cette remise, un set est une bonne affaire.",
+          "retailers": "Les boutiques contrôlées.",
+          "language": "Panneau, notifications et userscript.",
+          "refresh_mode": "Réparti : chaque set une fois par cycle, doux pour les boutiques.",
+          "spread_hours": "Chaque set une fois toutes les … heures.",
+          "watch_cycle_min": "Les sets de votre liste de suivi peuvent être contrôlés plus souvent.",
+          "refresh_times": "P. ex. 07:30, 19:30.",
+          "digest_time": "Heure du résumé quotidien.",
+          "min_history_days": "Jours de prix avant que « le plus bas » compte.",
+          "use_impersonation": "curl_cffi : beaucoup moins de blocages.",
+          "notify_service": "Optionnel ; mieux : l'onglet Notifications du panneau.",
+          "brickset_api_key": "Optionnel, gratuit.",
+          "rebrickable_api_key": "Optionnel, gratuit."
         }
       }
     },
@@ -55,9 +87,32 @@
   "selector": {
     "refresh_mode": {
       "options": {
-        "spread": "Réparti sur la journée (chaque set une fois par cycle)",
+        "spread": "Réparti sur la journée",
         "times": "À heures fixes",
-        "off": "Désactivé (manuel uniquement)"
+        "off": "Désactivé"
+      }
+    },
+    "cycle": {
+      "options": {
+        "2": "2 h",
+        "3": "3 h",
+        "4": "4 h",
+        "6": "6 h",
+        "12": "12 h",
+        "24": "24 h"
+      }
+    },
+    "watch_cycle": {
+      "options": {
+        "0": "Comme les autres sets",
+        "30": "30 min",
+        "60": "1 h",
+        "120": "2 h",
+        "180": "3 h",
+        "240": "4 h",
+        "360": "6 h",
+        "720": "12 h",
+        "1440": "24 h"
       }
     }
   },

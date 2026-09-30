@@ -3,20 +3,36 @@
     "step": {
       "user": {
         "title": "LEGO Organizing Tool",
-        "description": "De meeste instellingen vind je ook in het LEGO Organizing Tool-paneel onder Beheer → Instellingen.",
+        "description": "De meeste instellingen staan ook in het paneel: Beheer → Instellingen.",
         "data": {
-          "discount_threshold": "Kortingsdrempel (%) voor 'hoge korting'",
-          "retailers": "Winkels om te controleren",
-          "language": "Taal (paneel, meldingen, userscript)",
-          "refresh_mode": "Automatische prijscontroles",
-          "spread_hours": "Gespreide cyclus: elke set eens per … uur",
-          "refresh_times": "Vaste tijdstippen (alleen bij 'Op vaste tijdstippen', bv. 07:30, 19:30)",
-          "digest_time": "Tijdstip dagelijkse samenvatting",
-          "min_history_days": "Minimaal aantal dagen historiek voor een 'laagste prijs ooit'",
-          "use_impersonation": "Chrome-browser nabootsen (curl_cffi; veel minder blokkades)",
-          "notify_service": "Notify-service voor deals (optioneel; beter: het tabblad Notificaties in het paneel)",
-          "brickset_api_key": "Brickset API-sleutel (optioneel, gratis)",
-          "rebrickable_api_key": "Rebrickable API-sleutel (optioneel, gratis)"
+          "discount_threshold": "Kortingsdrempel",
+          "retailers": "Winkels",
+          "language": "Taal",
+          "refresh_mode": "Prijscontroles",
+          "spread_hours": "Cyclus",
+          "watch_cycle_min": "Cyclus watchlist",
+          "refresh_times": "Vaste tijdstippen",
+          "digest_time": "Dagelijkse samenvatting",
+          "min_history_days": "Historiek 'laagste ooit'",
+          "use_impersonation": "Chrome nabootsen",
+          "notify_service": "Notify-service",
+          "brickset_api_key": "Brickset-sleutel",
+          "rebrickable_api_key": "Rebrickable-sleutel"
+        },
+        "data_description": {
+          "discount_threshold": "Vanaf deze korting is een set een deal.",
+          "retailers": "De winkels die gecontroleerd worden.",
+          "language": "Paneel, meldingen en userscript.",
+          "refresh_mode": "Gespreid: elke set eens per cyclus, zacht voor de winkels.",
+          "spread_hours": "Elke set eens per … uur.",
+          "watch_cycle_min": "Sets op je watchlist mogen vaker gecontroleerd worden.",
+          "refresh_times": "Bv. 07:30, 19:30.",
+          "digest_time": "Tijdstip van de dagelijkse samenvatting.",
+          "min_history_days": "Dagen prijzen voor 'laagste ooit' telt.",
+          "use_impersonation": "curl_cffi: veel minder blokkades.",
+          "notify_service": "Optioneel; beter via het tabblad Meldingen in het paneel.",
+          "brickset_api_key": "Optioneel, gratis.",
+          "rebrickable_api_key": "Optioneel, gratis."
         }
       }
     },
@@ -31,20 +47,36 @@
     "step": {
       "init": {
         "title": "LEGO Organizing Tool",
-        "description": "De meeste instellingen vind je ook in het LEGO Organizing Tool-paneel onder Beheer → Instellingen.",
+        "description": "De meeste instellingen staan ook in het paneel: Beheer → Instellingen.",
         "data": {
-          "discount_threshold": "Kortingsdrempel (%) voor 'hoge korting'",
-          "retailers": "Winkels om te controleren",
-          "language": "Taal (paneel, meldingen, userscript)",
-          "refresh_mode": "Automatische prijscontroles",
-          "spread_hours": "Gespreide cyclus: elke set eens per … uur",
-          "refresh_times": "Vaste tijdstippen (alleen bij 'Op vaste tijdstippen', bv. 07:30, 19:30)",
-          "digest_time": "Tijdstip dagelijkse samenvatting",
-          "min_history_days": "Minimaal aantal dagen historiek voor een 'laagste prijs ooit'",
-          "use_impersonation": "Chrome-browser nabootsen (curl_cffi; veel minder blokkades)",
-          "notify_service": "Notify-service voor deals (optioneel; beter: het tabblad Notificaties in het paneel)",
-          "brickset_api_key": "Brickset API-sleutel (optioneel, gratis)",
-          "rebrickable_api_key": "Rebrickable API-sleutel (optioneel, gratis)"
+          "discount_threshold": "Kortingsdrempel",
+          "retailers": "Winkels",
+          "language": "Taal",
+          "refresh_mode": "Prijscontroles",
+          "spread_hours": "Cyclus",
+          "watch_cycle_min": "Cyclus watchlist",
+          "refresh_times": "Vaste tijdstippen",
+          "digest_time": "Dagelijkse samenvatting",
+          "min_history_days": "Historiek 'laagste ooit'",
+          "use_impersonation": "Chrome nabootsen",
+          "notify_service": "Notify-service",
+          "brickset_api_key": "Brickset-sleutel",
+          "rebrickable_api_key": "Rebrickable-sleutel"
+        },
+        "data_description": {
+          "discount_threshold": "Vanaf deze korting is een set een deal.",
+          "retailers": "De winkels die gecontroleerd worden.",
+          "language": "Paneel, meldingen en userscript.",
+          "refresh_mode": "Gespreid: elke set eens per cyclus, zacht voor de winkels.",
+          "spread_hours": "Elke set eens per … uur.",
+          "watch_cycle_min": "Sets op je watchlist mogen vaker gecontroleerd worden.",
+          "refresh_times": "Bv. 07:30, 19:30.",
+          "digest_time": "Tijdstip van de dagelijkse samenvatting.",
+          "min_history_days": "Dagen prijzen voor 'laagste ooit' telt.",
+          "use_impersonation": "curl_cffi: veel minder blokkades.",
+          "notify_service": "Optioneel; beter via het tabblad Meldingen in het paneel.",
+          "brickset_api_key": "Optioneel, gratis.",
+          "rebrickable_api_key": "Optioneel, gratis."
         }
       }
     },
@@ -55,9 +87,32 @@
   "selector": {
     "refresh_mode": {
       "options": {
-        "spread": "Gespreid over de dag (elke set eens per cyclus)",
+        "spread": "Gespreid over de dag",
         "times": "Op vaste tijdstippen",
-        "off": "Uit (alleen handmatig)"
+        "off": "Uit"
+      }
+    },
+    "cycle": {
+      "options": {
+        "2": "2 u",
+        "3": "3 u",
+        "4": "4 u",
+        "6": "6 u",
+        "12": "12 u",
+        "24": "24 u"
+      }
+    },
+    "watch_cycle": {
+      "options": {
+        "0": "Zoals de andere sets",
+        "30": "30 min",
+        "60": "1 u",
+        "120": "2 u",
+        "180": "3 u",
+        "240": "4 u",
+        "360": "6 u",
+        "720": "12 u",
+        "1440": "24 u"
       }
     }
   },

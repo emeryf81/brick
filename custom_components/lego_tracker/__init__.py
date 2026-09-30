@@ -182,9 +182,12 @@ def _register_services(hass: HomeAssistant) -> None:
                 owned["paid"] = d["paid"]
             if "purchase_date" in d:
                 owned["added"] = d["purchase_date"]
-        await c.add_set(d["set_number"], name=d.get("name"), theme=d.get("theme"), subtheme=d.get("subtheme"),
-                        rrp=d.get("rrp"), pieces=d.get("pieces"),
-                        target_price=d.get("target_price"), owned=owned)
+        try:
+            await c.add_set(d["set_number"], name=d.get("name"), theme=d.get("theme"), subtheme=d.get("subtheme"),
+                            rrp=d.get("rrp"), pieces=d.get("pieces"),
+                            target_price=d.get("target_price"), owned=owned)
+        except ValueError as err:            # e.g. the watchlist is full
+            raise ServiceValidationError(str(err)) from err
 
     async def add_sets(call: ServiceCall) -> dict:
         """Bulk add: numbers separated by spaces, commas or newlines."""
@@ -192,9 +195,14 @@ def _register_services(hass: HomeAssistant) -> None:
         nums = list(dict.fromkeys(re.findall(r"\d{4,7}", call.data["set_numbers"])))
         if not nums:
             raise ServiceValidationError(T("No set numbers found"))
+        added = 0
         for n in nums:
-            await c.add_set(n, theme=call.data.get("theme"), owned={"qty": 1} if call.data["owned"] and n not in c.store["collection"] else None)
-        return {"added": len(nums)}
+            try:
+                await c.add_set(n, theme=call.data.get("theme"), owned={"qty": 1} if call.data["owned"] and n not in c.store["collection"] else None)
+            except ValueError as err:        # the watchlist is full: stop, say how far we got
+                raise ServiceValidationError(f"{err} ({T('{n} of {total} added', n=added, total=len(nums))})") from err
+            added += 1
+        return {"added": added}
 
     async def discover_offers(call: ServiceCall) -> dict:
         c = _coordinator(hass)
@@ -247,7 +255,7 @@ def _register_services(hass: HomeAssistant) -> None:
             res = await c.refresh_set(num, c._live_retailers(call.data["force"]))
             c.push_update()
             return {"started": False, **res}
-        return _job(c.start_refresh, call.data["force"])
+        return _job(c.start_full_refresh, call.data["force"])
 
     async def enrich_sets(call: ServiceCall) -> dict:
         c = _coordinator(hass)

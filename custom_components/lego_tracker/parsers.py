@@ -353,6 +353,16 @@ def title_check(title: str | None, set_number: str) -> tuple[str | None, str]:
     return "ok", T("title contains the set number")
 
 
+def is_search_url(url: str | None) -> bool:
+    """A shop's search results page (not a product page)."""
+    if not url or not url.startswith("http"):
+        return False
+    u = urlparse(url)
+    return bool(re.search(r"/(?:search|zoeken|zoek|suche|recherche|buscar|s)(?:/|$)|/search\b", u.path, re.I)
+                or re.search(r"(?:^|&)(?:q|text|query|searchtext|search|k|keyword|zoekterm)=", u.query, re.I)) \
+        and not re.search(r"/(?:p|dp|product|gp/product)/", u.path)
+
+
 def slug_title(url: str) -> str | None:
     """bol/kruidvat URLs carry the product name in the path; Amazon /dp/ URLs do not."""
     path = urlparse(url).path
@@ -407,7 +417,43 @@ def find_search_result(retailer: str, page: str, set_number: str) -> str | None:
 
 
 def _generic_result(page: str, domain: str, set_number: str) -> str | None:
-    """Any shop: links on the shop's own domain whose link text or URL passes the title check."""
+    """Any shop: links on the shop's own domain whose link text or URL passes the title check;
+    otherwise the product tile around a link that mentions the set number (shops like Smyths Toys
+    link to /p/<their own code> and put the set number elsewhere in the tile)."""
+    return _generic_link(page, domain, set_number) or _generic_tile(page, domain, set_number)
+
+
+def _generic_tile(page: str, domain: str, set_number: str) -> str | None:
+    from .compare import _dom            # small DOM helper (import here: compare imports this module)
+
+    root = _dom(page)
+    num_re = re.compile(rf"(?<!\d){re.escape(set_number)}(?!\d)")
+    for a in (n for n in root.iter() if n.tag == "a" and n.attrs.get("href")):
+        href = a.attrs["href"]
+        url = href if href.startswith("http") else f"https://www.{domain}{href if href.startswith('/') else '/' + href}"
+        low = url.lower()
+        if domain not in urlparse(url).netloc or any(w in low for w in ("search", "zoek", "/cart", "/login", "/c/", "wishlist")):
+            continue
+        tile, product = a, urlparse(url).path
+        for _ in range(5):                 # the smallest block around the link that names the set
+            if tile.parent is None:
+                break
+            tile = tile.parent
+            paths = {urlparse(x.attrs.get("href", "")).path for x in tile.iter() if x.tag == "a" and x.attrs.get("href")
+                     and not x.attrs["href"].startswith(("#", "javascript:"))}
+            if len(paths - {product}) > 1:
+                break                          # grew into the next product
+            text = tile.all_text() + " " + " ".join(x.attrs.get("alt", "") + " " + x.attrs.get("title", "")
+                                                    for x in tile.iter() if x.tag in ("img", "a"))
+            if num_re.search(text):
+                if title_check(text if "lego" in text.lower() else f"lego {text}", set_number)[0] == "ok" \
+                        or (num_re.search(text) and "lego" in text.lower() and not accessory_word(text)):
+                    return url.split("?")[0]
+                break
+    return None
+
+
+def _generic_link(page: str, domain: str, set_number: str) -> str | None:
     for href, text in re.findall(r'<a\b[^>]*href="([^"#]+)"[^>]*>(.*?)</a>', page, re.S | re.I):
         url = href if href.startswith("http") else f"https://www.{domain}{href if href.startswith('/') else '/' + href}"
         if domain not in urlparse(url).netloc or "search" in url.lower() or "zoek" in url.lower():

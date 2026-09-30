@@ -60,6 +60,7 @@ class Fetcher:
         self.no_autopause: set[str] = set()
         self.on_pause = None   # callback(retailer, hours), set by the coordinator
         self.blocked_until: dict[str, float] = {}
+        self.discover_error: dict[str, str | None] = {}   # why the last search found nothing, per shop
 
     @property
     def transport(self) -> str:
@@ -197,19 +198,33 @@ class Fetcher:
             return status, "", T("blocked (HTTP {status})", status=status)
         return status, page, None
 
-    async def discover(self, retailer: str, set_number: str, force: bool = False) -> str | None:
-        url = search_url(retailer, set_number)
+    async def discover(self, retailer: str, set_number: str, force: bool = False, url: str | None = None) -> str | None:
+        """Search the shop for the set (url: a search page to use instead of the shop's search URL).
+        On failure the reason is kept in self.discover_error[retailer] (blocked, HTTP error, results
+        loaded by JavaScript, or really nothing matching), so the panel can say what happened."""
+        self.discover_error[retailer] = None
+        url = url or search_url(retailer, set_number)
         if not url or (not force and self.cooldown_left(retailer) > 0):
+            self.discover_error[retailer] = T("paused after being blocked") if url else T("this shop has no search URL")
             return None
         try:
             status, page = await self._get(retailer, url)
-        except Exception:  # noqa: BLE001
+        except Exception as err:  # noqa: BLE001
+            self.discover_error[retailer] = T("could not reach the shop: {error}", error=str(err)[:100])
             return None
         if status in (403, 429, 503) or (status < 400 and parse_page(retailer, page).blocked):
             self._note_block(retailer)
+            self.discover_error[retailer] = T("the shop blocked the search (HTTP {status})", status=status) if status >= 400 \
+                else T("the shop blocked the search (captcha / bot protection)")
             return None
-        found = find_search_result(retailer, page, set_number) if status < 400 else None
+        if status >= 400:
+            self.discover_error[retailer] = T("search page: HTTP error {status}", status=status)
+            return None
+        found = find_search_result(retailer, page, set_number)
         if found or retailer != "lego_com":
+            if not found:
+                self.discover_error[retailer] = T("no matching product found") if set_number in page else \
+                    T("the search page does not contain {number}: this shop probably loads its results with JavaScript. Paste the product page URL instead.", number=set_number)
             return found
         # LEGO.com search is partly rendered in the browser: try the product URL directly
         try:
@@ -220,6 +235,7 @@ class Fetcher:
             parsed = parse_page(retailer, page)
             if parsed.price or (parsed.title and set_number in (parsed.title + page[:200000])):
                 return lego_product_url(set_number)
+        self.discover_error[retailer] = T("no matching product found")
         return None
 
 

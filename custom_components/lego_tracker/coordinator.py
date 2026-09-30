@@ -19,7 +19,8 @@ from homeassistant.util import dt as dt_util
 
 from .client import Fetcher, lookup_metadata
 from .const import (
-    CONF_COMPARE, CONF_COMPARE_OLD, CONF_BLOCK_WORDS, CONF_ALLOW_WORDS, CONF_COMPARE_SOURCES, COMPARE_FRESH_HOURS, COMPARE_MISSING_HOURS, COMPARE_NET_ERRORS, COMPARE_PAUSE_HOURS,
+    CONF_COMPARE, CONF_COMPARE_OLD, CONF_BLOCK_WORDS, CYCLE_CHOICES, CONF_WATCH_CYCLE, WATCH_CYCLE_CHOICES, WATCH_LIMIT,
+    FULL_REFRESH_GAP, CONF_DEAL_MIN_SCORE, CONF_DEAL_ATL, CONF_DEAL_TARGET, DEFAULT_DEAL_MIN_SCORE, CONF_DEV_FIXED_TIMES, CONF_DEV_FULL_REFRESH, CONF_DEV_FREE_CYCLE, CONF_DEV_WATCH_UNLIMITED, CONF_ALLOW_WORDS, CONF_COMPARE_SOURCES, COMPARE_FRESH_HOURS, COMPARE_MISSING_HOURS, COMPARE_NET_ERRORS, COMPARE_PAUSE_HOURS,
     CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET, CONF_BOL_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS,
     CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_LANGUAGE, CONF_REFRESH_MODE, CONF_SPREAD_HOURS, DEFAULT_REFRESH_MODE, DEFAULT_SPREAD_HOURS, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, CONF_CUSTOM_SHOPS, CONF_DIGEST_TIME, CONF_NO_AUTOPAUSE, CONF_SHOP_SEARCH, CONF_VALUE_SOURCE, DEFAULT_DIGEST_TIME, GENERIC_SHOPS, CONF_DISCOUNT_THRESHOLD, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
     DEFAULT_REFRESH_TIMES, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS, DEFAULT_RETAILERS,
@@ -37,7 +38,7 @@ from . import catalog, compare
 from .shops import all_domains
 from .parsers import Parsed, title_check
 from .shops import SEARCH, valid_search
-from .parsers import BUILTIN_WORDS, KNOCKOFF_RE, accessory_word, set_custom_words, clean_title, normalize_url, retailer_from_url, url_key
+from .parsers import BUILTIN_WORDS, KNOCKOFF_RE, is_search_url, accessory_word, set_custom_words, clean_title, normalize_url, retailer_from_url, url_key
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -167,12 +168,46 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 out.append((int(h), int(m)))
         return sorted(set(out))
 
+    def dev(self, key: str) -> bool:
+        return bool(self.opt(self.entry, key, False))
+
     @property
     def refresh_mode(self) -> str:
         mode = self.opt(self.entry, CONF_REFRESH_MODE, None)
         if mode is None:   # older installs: auto_refresh off = off, else the new spread mode
             mode = DEFAULT_REFRESH_MODE if self.opt(self.entry, CONF_AUTO_REFRESH, True) else "off"
+        if mode == "times" and not self.dev(CONF_DEV_FIXED_TIMES):
+            mode = "spread"            # full rounds at fixed times put too much load on the shops
         return mode if mode in ("spread", "times", "off") else DEFAULT_REFRESH_MODE
+
+    @property
+    def watch_cycle_minutes(self) -> int:
+        try:
+            v = int(self.opt(self.entry, CONF_WATCH_CYCLE, 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+        return v if v in WATCH_CYCLE_CHOICES else 0
+
+    @property
+    def watch_limit(self) -> int | None:
+        return None if self.dev(CONF_DEV_WATCH_UNLIMITED) else WATCH_LIMIT
+
+    @property
+    def deal_rules(self) -> dict[str, Any]:
+        """What counts as a deal (the panel's Deals view and badges)."""
+        try:
+            score = max(0, min(100, int(self.opt(self.entry, CONF_DEAL_MIN_SCORE, DEFAULT_DEAL_MIN_SCORE))))
+        except (TypeError, ValueError):
+            score = DEFAULT_DEAL_MIN_SCORE
+        return {"threshold": self.threshold, "min_score": score, "atl": bool(self.opt(self.entry, CONF_DEAL_ATL, True)),
+                "target": bool(self.opt(self.entry, CONF_DEAL_TARGET, True))}
+
+    def is_watched(self, num: str) -> bool:
+        """On the watchlist: every set you don't own, plus owned sets you also watch (e.g. for a second copy)."""
+        return num not in self.store["collection"] or bool(self.store["sets"].get(num, {}).get("watch"))
+
+    def watched_sets(self) -> list[str]:
+        return [n for n in self.store["sets"] if self.is_watched(n)]
 
     @property
     def auto_refresh(self) -> bool:
@@ -181,9 +216,12 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     @property
     def spread_hours(self) -> float:
         try:
-            return max(1.0, min(168.0, float(self.opt(self.entry, CONF_SPREAD_HOURS, DEFAULT_SPREAD_HOURS))))
+            h = max(1.0, min(168.0, float(self.opt(self.entry, CONF_SPREAD_HOURS, DEFAULT_SPREAD_HOURS))))
         except (TypeError, ValueError):
             return DEFAULT_SPREAD_HOURS
+        if self.dev(CONF_DEV_FREE_CYCLE):
+            return h
+        return float(min(CYCLE_CHOICES, key=lambda c: (abs(c - h), -c)))   # nearest allowed choice
 
     # ------------------------------------------------------------ spread checks
     def _spread_candidates(self) -> list[str]:
@@ -193,10 +231,25 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return [n for n, offers in self.store["offers"].items() if n in self.store["sets"]
                 and any(r in live and o.get("url") for r, o in offers.items())]
 
+    def _watch_hours(self) -> float | None:
+        """Watchlist cycle in hours (never slower than the normal cycle), or None when off."""
+        wc = self.watch_cycle_minutes
+        return min(wc / 60, self.spread_hours) if wc else None
+
+    def check_rates(self) -> dict[str, float]:
+        """Checks per hour: the normal cycle, the watchlist cycle, and together."""
+        cands = set(self._spread_candidates())
+        wh = self._watch_hours()
+        watch = {n for n in cands if self.is_watched(n)} if wh else set()
+        main = len(cands - watch) / self.spread_hours
+        fast = len(watch) / wh if wh else 0.0
+        return {"main": main, "watch": fast, "total": main + fast, "sets": len(cands - watch), "watched": len(watch)}
+
     def spread_interval(self) -> float:
-        """Seconds between two set checks: cycle / number of sets (each set once per cycle)."""
-        n = len(self.store["sets"]) if self.compare_enabled else len([n for n, o in self.store["offers"].items() if n in self.store["sets"] and o])
-        return max(20.0, self.spread_hours * 3600 / max(1, n))
+        """Seconds between two set checks, so every set is checked once per cycle (watchlist sets
+        once per watchlist cycle)."""
+        rate = self.check_rates()["total"]
+        return max(20.0, 3600 / rate) if rate else 3600.0
 
     def start_spread(self, delay: float = 60) -> None:
         from homeassistant.helpers.event import async_call_later
@@ -216,8 +269,15 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         cands = self._spread_candidates()
         if not cands:
             return None
-        num = min(cands, key=lambda n: self.store["sets"][n].get("checked", 0))
-        if time.time() - self.store["sets"][num].get("checked", 0) < self.spread_hours * 3600 * 0.5:
+        checked = lambda n: self.store["sets"][n].get("checked", 0)   # noqa: E731
+        now = time.time()
+        if (wh := self._watch_hours()):            # watchlist sets that are due go first
+            due = [n for n in cands if self.is_watched(n) and now - checked(n) >= wh * 3600]
+            if due:
+                return min(due, key=checked)
+            cands = [n for n in cands if not self.is_watched(n)] or cands
+        num = min(cands, key=checked)
+        if now - checked(num) < self.spread_hours * 3600 * 0.5:
             return None        # everything was checked recently (e.g. after a full manual round)
         return num
 
@@ -254,6 +314,9 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self.refresh_mode == "spread":
             interval = self.spread_interval()
             day = time.time() - 86400
+            rates = self.check_rates()
+            info.update(watch_cycle_min=self.watch_cycle_minutes,
+                        rates={k: round(v, 1) if isinstance(v, float) else v for k, v in rates.items()})
             info.update(cycle_hours=self.spread_hours, interval=round(interval), per_hour=round(3600 / interval, 1),
                         next=getattr(self, "_spread_next", None), next_set=self.next_spread_set(),
                         last=getattr(self, "_spread_last", None),
@@ -376,7 +439,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return p
         return found[0] if found else None
 
-    async def _discover(self, rid: str, num: str, force: bool = False) -> str | None:
+    async def _discover(self, rid: str, num: str, force: bool = False, url: str | None = None) -> str | None:
         if rid == "bol" and self.bol_api:
             try:
                 match = await self._bol_match(num)
@@ -387,7 +450,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return None
             self._bol_found[num] = match
             return match.get("url") or f"https://www.bol.com/{'be' if self.bol_country == 'BE' else 'nl'}/nl/s/?searchtext={match['ean']}"
-        return await self.fetcher.discover(rid, num, force=force)
+        return await self.fetcher.discover(rid, num, force=force, url=url)
 
     async def _fetch(self, rid: str, offer: dict[str, Any], num: str, force: bool = False) -> tuple[Any, str | None]:
         if compare.is_compare_url(offer.get("url")):
@@ -688,6 +751,18 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return [r for r in self.retailers if self.fetcher.cooldown_left(r) <= 0]
 
     # ------------------------------------------------------------------- refresh
+    def start_full_refresh(self, force: bool = False) -> dict[str, Any]:
+        """'Refresh all prices' by hand or by service: off unless enabled in developer mode (a full round
+        puts a lot of load on the shops), and then at most once a minute."""
+        if not self.dev(CONF_DEV_FULL_REFRESH):
+            raise LocalizedError("Switched off: fetching every set at once puts too much load on the shops. Prices are checked set by set in the background; use ↻ in a set to fetch one set now.")
+        wait = FULL_REFRESH_GAP - (time.time() - getattr(self, "_last_full_refresh", 0))
+        if wait > 0:
+            raise LocalizedError("A full price round can start at most once a minute: try again in {s} s.", s=int(wait) + 1)
+        job = self.start_refresh(force)
+        self._last_full_refresh = time.time()
+        return job
+
     def start_refresh(self, force: bool = False) -> dict[str, Any]:
         live = self._live_retailers(force)
         nums = list(self.store["sets"]) if self.compare_enabled else [
@@ -778,9 +853,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._fire_events(num, before, after)
         return counts
 
-    async def fetch_shop(self, set_number: str, retailer: str) -> dict[str, Any]:
+    async def fetch_shop(self, set_number: str, retailer: str, url: str | None = None) -> dict[str, Any]:
         """Panel button per shop: fetch this shop for this set now, also when the shop is paused.
-        Without a link the shop is searched first. LEGO.com also fills in image, RRP and name."""
+        Without a link the shop is searched first. LEGO.com also fills in image, RRP and name.
+        url: what you pasted — a product page (becomes the link) or a search page of the shop (searched)."""
         num = normalize_set_number(set_number)
         if num not in self.store["sets"]:
             raise LocalizedError("Set {number} is not tracked.", number=num)
@@ -788,11 +864,18 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise LocalizedError("Unknown shop {shop}.", shop=retailer)
         offers = self.store["offers"].setdefault(num, {})
         found = False
+        search_page = None
+        if url and (url := url.strip()):
+            if is_search_url(url):
+                search_page = url if url.startswith("http") else None
+            else:
+                self.set_offer(num, retailer, url)            # a product page or ASIN: that is the link
         if not (offers.get(retailer) or {}).get("url"):
-            url = await self._discover(retailer, num, force=True)
+            url = await self._discover(retailer, num, force=True, url=search_page)
             rejected = set(self.store.setdefault("rejected", {}).get(num, []))
             if not url or url_key(retailer, url) in rejected:
-                reason = T("found a link you rejected earlier; not linked again") if url else T("no matching product found")
+                reason = T("found a link you rejected earlier; not linked again") if url else \
+                    (self.fetcher.discover_error.get(retailer) or T("no matching product found"))
                 self.log("warning", "discover", reason, set_number=num, retailer=retailer, url=url, source="panel")
                 self.push_update()
                 return {"ok": False, "found": False, "error": reason}
@@ -1090,7 +1173,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "keys": {k: {"set": bool(o.get(k)), "masked": mask(o.get(k) or "")} for k in self.SECRET_KEYS},
             "shops": shops, "transport": self.fetcher.transport,
             "lego_locale": o.get(CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE),
-            "refresh_mode": self.refresh_mode, "spread_hours": self.spread_hours,
+            "refresh_mode": self.refresh_mode, "spread_hours": self.spread_hours, "watch_cycle_min": self.watch_cycle_minutes,
+            "deal_min_score": self.deal_rules["min_score"], "deal_atl": self.deal_rules["atl"], "deal_target": self.deal_rules["target"],
+            "cycle_choices": list(CYCLE_CHOICES), "watch_cycle_choices": list(WATCH_CYCLE_CHOICES), "watch_limit": self.watch_limit,
+            "dev": {k: self.dev(k) for k in (CONF_DEV_FIXED_TIMES, CONF_DEV_FULL_REFRESH, CONF_DEV_FREE_CYCLE, CONF_DEV_WATCH_UNLIMITED)},
             "language": o.get(CONF_LANGUAGE, DEFAULT_LANGUAGE), "languages": LANGUAGES,
             "bol_country": o.get(CONF_BOL_COUNTRY, "auto"), "bol_api": bool(self.bol_api),
             "browser_relay": bool(o.get(CONF_RELAY, True)), "compare": self.compare_enabled,
@@ -1117,7 +1203,13 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             num("discount_threshold", 1, 90)
         if "min_history_days" in fields:
             num("min_history_days", 0, 90)
-        for key in ("auto_refresh", "use_impersonation", CONF_RELAY, CONF_COMPARE):
+        if CONF_DEAL_MIN_SCORE in fields:
+            num(CONF_DEAL_MIN_SCORE, 1, 100)
+        for key in (CONF_DEAL_ATL, CONF_DEAL_TARGET):
+            if key in fields:
+                opts[key] = bool(fields[key])
+        for key in ("auto_refresh", "use_impersonation", CONF_RELAY, CONF_COMPARE, CONF_DEV_FIXED_TIMES, CONF_DEV_FULL_REFRESH,
+                    CONF_DEV_FREE_CYCLE, CONF_DEV_WATCH_UNLIMITED):
             if key in fields:
                 opts[key] = bool(fields[key])
         if CONF_COMPARE in fields:
@@ -1190,6 +1282,23 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     continue                     # default: don't store, so future default fixes still apply
                 searches[rid] = tpl
             opts[CONF_SHOP_SEARCH] = searches
+        if CONF_WATCH_CYCLE in fields:
+            try:
+                wc = int(fields[CONF_WATCH_CYCLE] or 0)
+            except (TypeError, ValueError) as err:
+                raise LocalizedError("{field}: not a valid choice", field=CONF_WATCH_CYCLE) from err
+            if wc not in WATCH_CYCLE_CHOICES:
+                raise LocalizedError("{field}: not a valid choice", field=CONF_WATCH_CYCLE)
+            opts[CONF_WATCH_CYCLE] = wc
+        if fields.get("refresh_mode") == "times" and not (fields.get(CONF_DEV_FIXED_TIMES) or self.dev(CONF_DEV_FIXED_TIMES)):
+            raise LocalizedError("Checking at fixed times is switched off: a full round at once puts too much load on the shops.")
+        if "spread_hours" in fields and not (fields.get(CONF_DEV_FREE_CYCLE) or self.dev(CONF_DEV_FREE_CYCLE)):
+            try:
+                ok = float(fields["spread_hours"]) in CYCLE_CHOICES
+            except (TypeError, ValueError):
+                ok = False
+            if not ok:
+                raise LocalizedError("Cycle: choose {choices} hours", choices="/".join(map(str, CYCLE_CHOICES)))
         if "refresh_mode" in fields:
             if fields["refresh_mode"] not in ("spread", "times", "off"):
                 raise LocalizedError("Unknown refresh mode")
@@ -1307,6 +1416,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     del offers[retailer]
                 manual_price = self._UNSET
             else:
+                if is_search_url(str(url)):
+                    raise LocalizedError("This is a search page, not a product page. Use 🔎 Find to search it, or paste the page of the product itself.")
                 new = normalize_url(retailer, str(url))
                 rej = self.store.setdefault("rejected", {}).get(num, [])
                 if url_key(retailer, new) in rej:          # chosen by hand: no longer blocked
@@ -1396,6 +1507,9 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                       subtheme: str | None = None, rrp: float | None = None, pieces: int | None = None, target_price: float | None = None,
                       owned: dict | None = None, discover: bool = True) -> str:
         num = normalize_set_number(set_number)
+        if owned is None and num not in self.store["sets"] and (limit := self.watch_limit) is not None \
+                and len(self.watched_sets()) >= limit:
+            raise LocalizedError("The watchlist is full ({n} sets): remove a set or move one to your collection first.", n=limit)
         s = self.store["sets"].setdefault(num, {"set_number": num})
         known = catalog.apply(num, s, self.store["offers"].setdefault(num, {}))   # built-in catalogue first
         if known and catalog.complete(s):
@@ -1437,6 +1551,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise LocalizedError("Set {number} is not tracked yet; add it first.", number=num)
         if retailer not in RETAILERS:
             raise LocalizedError("Unknown shop {shop}.", shop=retailer)
+        if is_search_url(url):
+            raise LocalizedError("This is a search page, not a product page. Use 🔎 Find to search it, or paste the page of the product itself.")
         url = normalize_url(retailer, url)
         rej = self.store.setdefault("rejected", {}).get(num, [])
         if url_key(retailer, url) in rej:
@@ -1448,10 +1564,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     SET_FIELDS = {"name": str, "theme": str, "subtheme": str, "rrp": float, "pieces": int, "year": int,
                   "image": str, "target_price": float, "notes": str, "priority": int, "retiring": bool,
-                  "exit_date": str}
+                  "exit_date": str, "watch": bool}
     COLL_FIELDS = {"qty": int, "paid": float, "current_value": float, "added": str, "condition": str,
                    "location": str}
-    CLEARABLE = {"target_price", "notes", "priority", "retiring", "exit_date", "subtheme",
+    CLEARABLE = {"target_price", "notes", "priority", "retiring", "exit_date", "subtheme", "watch",
                  "name", "theme", "rrp", "pieces", "year", "image"}      # cleared = automatic again
     SOURCE_KEYS = {"name": "name_source", "rrp": "rrp_source", "image": "image_source", "retiring": "retiring_source",
                    "exit_date": "exit_date_source"}
@@ -1505,6 +1621,9 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 continue
             target = clean_set if key in self.SET_FIELDS else clean_coll
             target[key] = self._coerce(key, typ, value)
+        if clean_set.get("watch") and not self.is_watched(num) and (limit := self.watch_limit) is not None \
+                and len(self.watched_sets()) >= limit:
+            raise LocalizedError("The watchlist is full ({n} sets): remove a set or move one to your collection first.", n=limit)
         s.update(clean_set)
         if clean_set or clean_coll or "owned" in fields:
             self.log("info", "user", T("details edited: {fields}", fields=", ".join(sorted(set(clean_set) | set(clean_coll) | ({"owned"} if "owned" in fields else set())))),

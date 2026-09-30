@@ -3,20 +3,36 @@
     "step": {
       "user": {
         "title": "LEGO Organizing Tool",
-        "description": "Most settings are also available in the LEGO Organizing Tool panel under Manage → Settings.",
+        "description": "Most settings are also in the panel: Manage → Settings.",
         "data": {
-          "discount_threshold": "Discount threshold (%) for 'high discount'",
-          "retailers": "Shops to check",
-          "language": "Language (panel, notifications, userscript)",
-          "refresh_mode": "Automatic price checks",
-          "spread_hours": "Spread cycle: every set once every … hours",
-          "refresh_times": "Fixed times (only for 'At fixed times', e.g. 07:30, 19:30)",
-          "digest_time": "Daily digest time",
-          "min_history_days": "Minimum days of history before a 'record low' counts",
-          "use_impersonation": "Imitate a Chrome browser (curl_cffi; far fewer blocks)",
-          "notify_service": "Notify service for deals (optional; better: the Notifications tab in the panel)",
-          "brickset_api_key": "Brickset API key (optional, free)",
-          "rebrickable_api_key": "Rebrickable API key (optional, free)"
+          "discount_threshold": "Discount threshold",
+          "retailers": "Shops",
+          "language": "Language",
+          "refresh_mode": "Price checks",
+          "spread_hours": "Cycle",
+          "watch_cycle_min": "Watchlist cycle",
+          "refresh_times": "Fixed times",
+          "digest_time": "Daily digest",
+          "min_history_days": "History for 'lowest ever'",
+          "use_impersonation": "Imitate Chrome",
+          "notify_service": "Notify service",
+          "brickset_api_key": "Brickset key",
+          "rebrickable_api_key": "Rebrickable key"
+        },
+        "data_description": {
+          "discount_threshold": "From this discount a set counts as a deal.",
+          "retailers": "The shops that are checked.",
+          "language": "Panel, notifications and userscript.",
+          "refresh_mode": "Spread: every set once per cycle, gentle on the shops.",
+          "spread_hours": "Every set once every … hours.",
+          "watch_cycle_min": "Sets on your watchlist can be checked more often.",
+          "refresh_times": "E.g. 07:30, 19:30.",
+          "digest_time": "Time of the daily summary.",
+          "min_history_days": "Days of prices before 'lowest ever' counts.",
+          "use_impersonation": "curl_cffi: far fewer blocks.",
+          "notify_service": "Optional; the Notifications tab in the panel is better.",
+          "brickset_api_key": "Optional, free.",
+          "rebrickable_api_key": "Optional, free."
         }
       }
     },
@@ -31,20 +47,36 @@
     "step": {
       "init": {
         "title": "LEGO Organizing Tool",
-        "description": "Most settings are also available in the LEGO Organizing Tool panel under Manage → Settings.",
+        "description": "Most settings are also in the panel: Manage → Settings.",
         "data": {
-          "discount_threshold": "Discount threshold (%) for 'high discount'",
-          "retailers": "Shops to check",
-          "language": "Language (panel, notifications, userscript)",
-          "refresh_mode": "Automatic price checks",
-          "spread_hours": "Spread cycle: every set once every … hours",
-          "refresh_times": "Fixed times (only for 'At fixed times', e.g. 07:30, 19:30)",
-          "digest_time": "Daily digest time",
-          "min_history_days": "Minimum days of history before a 'record low' counts",
-          "use_impersonation": "Imitate a Chrome browser (curl_cffi; far fewer blocks)",
-          "notify_service": "Notify service for deals (optional; better: the Notifications tab in the panel)",
-          "brickset_api_key": "Brickset API key (optional, free)",
-          "rebrickable_api_key": "Rebrickable API key (optional, free)"
+          "discount_threshold": "Discount threshold",
+          "retailers": "Shops",
+          "language": "Language",
+          "refresh_mode": "Price checks",
+          "spread_hours": "Cycle",
+          "watch_cycle_min": "Watchlist cycle",
+          "refresh_times": "Fixed times",
+          "digest_time": "Daily digest",
+          "min_history_days": "History for 'lowest ever'",
+          "use_impersonation": "Imitate Chrome",
+          "notify_service": "Notify service",
+          "brickset_api_key": "Brickset key",
+          "rebrickable_api_key": "Rebrickable key"
+        },
+        "data_description": {
+          "discount_threshold": "From this discount a set counts as a deal.",
+          "retailers": "The shops that are checked.",
+          "language": "Panel, notifications and userscript.",
+          "refresh_mode": "Spread: every set once per cycle, gentle on the shops.",
+          "spread_hours": "Every set once every … hours.",
+          "watch_cycle_min": "Sets on your watchlist can be checked more often.",
+          "refresh_times": "E.g. 07:30, 19:30.",
+          "digest_time": "Time of the daily summary.",
+          "min_history_days": "Days of prices before 'lowest ever' counts.",
+          "use_impersonation": "curl_cffi: far fewer blocks.",
+          "notify_service": "Optional; the Notifications tab in the panel is better.",
+          "brickset_api_key": "Optional, free.",
+          "rebrickable_api_key": "Optional, free."
         }
       }
     },
@@ -55,9 +87,32 @@
   "selector": {
     "refresh_mode": {
       "options": {
-        "spread": "Spread over the day (every set once per cycle)",
+        "spread": "Spread over the day",
         "times": "At fixed times",
-        "off": "Off (manual only)"
+        "off": "Off"
+      }
+    },
+    "cycle": {
+      "options": {
+        "2": "2 h",
+        "3": "3 h",
+        "4": "4 h",
+        "6": "6 h",
+        "12": "12 h",
+        "24": "24 h"
+      }
+    },
+    "watch_cycle": {
+      "options": {
+        "0": "Like the other sets",
+        "30": "30 min",
+        "60": "1 h",
+        "120": "2 h",
+        "180": "3 h",
+        "240": "4 h",
+        "360": "6 h",
+        "720": "12 h",
+        "1440": "24 h"
       }
     }
   },

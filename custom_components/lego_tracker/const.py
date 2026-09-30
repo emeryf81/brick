@@ -39,6 +39,20 @@ CONF_REFRESH_MODE = "refresh_mode"          # spread | times | off
 CONF_SPREAD_HOURS = "spread_hours"
 DEFAULT_REFRESH_MODE = "spread"
 DEFAULT_SPREAD_HOURS = 24
+CONF_DEAL_MIN_SCORE = "deal_min_score"                   # a deal: deal score at least … (0-100)
+CONF_DEAL_ATL = "deal_atl"                               # … or the lowest price ever counts as a deal
+CONF_DEAL_TARGET = "deal_target"                         # … or your target price reached counts as a deal
+DEFAULT_DEAL_MIN_SCORE = 70
+CYCLE_CHOICES = (2, 3, 4, 6, 12, 24)                     # every set once per … hours
+CONF_WATCH_CYCLE = "watch_cycle_min"                     # watchlist sets once per … minutes (0 = like the others)
+WATCH_CYCLE_CHOICES = (0, 30, 60, 120, 180, 240, 360, 720, 1440)
+WATCH_LIMIT = 100                                        # sets on the watchlist
+FULL_REFRESH_GAP = 60                                    # seconds between two full price rounds
+# developer mode (not in the regular settings)
+CONF_DEV_FIXED_TIMES = "dev_fixed_times"                 # allow full rounds at fixed times
+CONF_DEV_FULL_REFRESH = "dev_full_refresh"               # allow "refresh all prices" by hand / service
+CONF_DEV_FREE_CYCLE = "dev_free_cycle"                   # any cycle 1–168 h instead of the choices
+CONF_DEV_WATCH_UNLIMITED = "dev_watch_unlimited"         # no limit on the watchlist
 CONF_LANGUAGE = "language"
 DEFAULT_REFRESH_TIMES = "07:30, 19:30"
 
