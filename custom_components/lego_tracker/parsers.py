@@ -424,8 +424,11 @@ def _generic_result(page: str, domain: str, set_number: str) -> str | None:
 
 
 # links inside a product tile that are not another product (cart, wishlist, compare, reviews, account)
-NAV_PATH_RE = re.compile(r"cart|basket|winkelwagen|mandje|warenkorb|panier|login|account|wish|verlanglijst|merkliste|"
-                         r"compare|vergelijk|review|beoordeling|share|delen", re.I)
+# a whole path segment (optionally with an extension), e.g. /cart/add, /wishlist, /account/login.jsp;
+# a product slug that merely contains such a word (/products/cart-111) is still another product
+NAV_PATH_RE = re.compile(r"/(?:(?:add-?to-?)?cart|basket|winkelwagen|winkelmand(?:je)?|mandje|warenkorb|panier|login|logout|(?:my-?)?account|"
+                         r"wish-?list|wishlist|verlanglijst(?:je)?|merkliste|compare|vergelijk(?:en)?|reviews?|"
+                         r"beoordelingen|share|delen)(?:\.\w+)?(?:/|$)", re.I)
 
 
 def _generic_tile(page: str, domain: str, set_number: str) -> str | None:

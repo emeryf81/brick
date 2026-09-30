@@ -1321,6 +1321,23 @@ async def test_pasted_search_page_on_existing_link_keeps_state(hass: HomeAssista
     await c.fetch_shop("60510", "bol", old + "?ref=x")
     o = c.store["offers"]["60510"]["bol"]
     assert o["history"][0] == [1700000000, 45.0] and o["manual_price"]["price"] == 39.99
+    assert o["manual_url"] and o["link_status"] == "confirmed"
+    # a search that finds the same page: history and manual price stay, it is no longer "set by hand"
+    with patch.object(c.fetcher, "discover", discover):
+        await c.fetch_shop("60510", "bol", "https://www.bol.com/nl/nl/s/?searchtext=60510")
+    o = c.store["offers"]["60510"]["bol"]
+    assert o["history"][0] == [1700000000, 45.0] and o["manual_price"]["price"] == 39.99
+    assert not o.get("manual_url") and o.get("link_reason") != "set by hand"
+    # a search that finds another page: new history, the manual price stays, not confirmed by hand
+    other = "https://www.bol.com/nl/nl/p/lego-city-60510-b/9300000099999999/"
+
+    async def discover_other(retailer, num, force=False, url=None):
+        return other
+    with patch.object(c.fetcher, "discover", discover_other):
+        await c.fetch_shop("60510", "bol", "https://www.bol.com/nl/nl/s/?searchtext=60510")
+    o = c.store["offers"]["60510"]["bol"]
+    assert o["url"] == other and not any(ts == 1700000000 for ts, _ in o["history"])
+    assert o["manual_price"]["price"] == 39.99 and not o.get("manual_url")
 
 
 def test_tile_search_never_mixes_products_or_accepts_knockoffs():
@@ -1334,6 +1351,13 @@ def test_tile_search_never_mixes_products_or_accepts_knockoffs():
     # a cart / wishlist link inside the right tile is not another product
     nav = two.replace("<span>Artikel 60510</span>", '<a href="/be/cart/add/222">In winkelmandje</a><span>Artikel 60510</span>')
     assert _generic_result(nav, "smythstoys.com", "60510") == "https://www.smythstoys.com/be/p/222"
+    # a neighbouring product whose slug contains a navigation word is still another product
+    slug = """<div class="grid"><div><a href="/products/lego-222"><img alt="LEGO City"></a></div>
+      <div><a href="/products/cart-111"><img alt="Bolderkar"></a></div><span>Artikel 60510</span></div>"""
+    assert _generic_result(slug, "smythstoys.com", "60510") is None      # the number is not in lego-222's own tile
+    grid = """<div class="grid"><div><a href="/products/lego-222"><img alt="LEGO City"></a></div>
+      <div><a href="/products/review-kit-333"><img alt="Review kit"></a></div><span>Artikel 60510</span></div>"""
+    assert _generic_result(grid, "smythstoys.com", "60510") is None      # the number sits outside both tiles
     knock = """<div class="tile"><a href="/be/p/333"><img alt="Bouwset"></a><span>Mould King compatible with LEGO 60510</span></div>"""
     assert _generic_result(knock, "smythstoys.com", "60510") is None
 
@@ -1344,3 +1368,9 @@ async def test_logbook_export_rejects_bad_priority(hass: HomeAssistant, entry, n
     await ws.send_json({"id": 1, "type": "lego_tracker/logs/export", "parts": ["history"], "filters": {"priority": "high"}})
     r = await ws.receive_json()
     assert not r["success"] and r["error"]["code"] == "invalid"
+    for i, prio in enumerate((2.5, "1.5", True, 4), start=2):
+        await ws.send_json({"id": i, "type": "lego_tracker/logs/export", "parts": ["history"], "filters": {"priority": prio}})
+        r = await ws.receive_json()
+        assert not r["success"] and r["error"]["code"] == "invalid", prio
+    await ws.send_json({"id": 9, "type": "lego_tracker/logs/export", "parts": ["history"], "filters": {"priority": "2.0"}})
+    assert (await ws.receive_json())["success"]

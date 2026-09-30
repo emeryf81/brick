@@ -504,7 +504,7 @@ def ws_logs_export(hass, connection, msg):
     prio = (msg.get("filters") or {}).get("priority")
     if prio not in (None, "", 0):
         try:
-            if not 1 <= int(prio) <= 3:
+            if isinstance(prio, bool) or float(prio) != int(float(prio)) or not 1 <= int(float(prio)) <= 3:
                 raise ValueError
         except (TypeError, ValueError):
             connection.send_error(msg["id"], "invalid", tr("Invalid priority filter."))
