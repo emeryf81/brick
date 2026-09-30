@@ -1,5 +1,6 @@
 """Smoke tests against a real Home Assistant core (needs pytest-homeassistant-custom-component)."""
 import time
+import copy
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -8,7 +9,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.lego_tracker.const import DOMAIN
+from custom_components.lego_tracker.const import DOMAIN, MAX_HISTORY
 from custom_components.lego_tracker.parsers import Parsed
 
 CSV = "Number;Name;Theme;Qty;Paid;Value\n10281-1;Bonsai;Botanicals;1;40;50\n42143;Ferrari;Technic;1;350;400\n"
@@ -179,6 +180,41 @@ async def test_bulk_target_notify_export_and_backup(hass: HomeAssistant, entry, 
     assert out["sets"] == 3
     with pytest.raises(ServiceValidationError):
         await hass.services.async_call(DOMAIN, "import_data", {"data": {"bogus": 1}}, blocking=True, return_response=True)
+
+
+@pytest.mark.parametrize("merge", [False, True])
+async def test_backup_history_validation_is_atomic(hass: HomeAssistant, entry, merge):
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    coord = hass.data[DOMAIN][entry.entry_id]
+    before = copy.deepcopy(coord.store)
+    for history in ([[i, 50] for i in range(MAX_HISTORY + 1)], [[2, 50], [1, 40]]):
+        data = {"sets": {"10281": {}}, "offers": {"10281": {"bol": {"history": history}}}}
+        with patch.object(coord, "push_update") as push:
+            with pytest.raises(ServiceValidationError, match="invalid price history"):
+                await hass.services.async_call(DOMAIN, "import_data", {"data": data, "merge": merge}, blocking=True)
+            push.assert_not_called()
+        assert coord.store == before
+
+
+@pytest.mark.parametrize("merge", [False, True])
+async def test_backup_history_limit_and_overview(hass: HomeAssistant, entry, hass_ws_client, merge):
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    history = [[1_700_000_000 + i, 50 + i % 2] for i in range(MAX_HISTORY)]
+    data = {"sets": {"10281": {"set_number": "10281"}},
+            "offers": {"10281": {"bol": {"history": history, "available": True, "last_price": 51}}}}
+    await hass.services.async_call(DOMAIN, "import_data", {"data": data, "merge": merge}, blocking=True)
+    coord = hass.data[DOMAIN][entry.entry_id]
+    assert coord.store["offers"]["10281"]["bol"]["history"] == history
+    assert coord.store["offers"]["10281"]["bol"]["history"] is not history
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/overview"})
+    card = (await ws.receive_json())["result"]["sets"][0]
+    assert card["all_time_low"] == 50
+    assert card["spark"] == [p for _, p in history][-60:]
+    await ws.send_json({"id": 2, "type": "lego_tracker/set", "set_number": "10281"})
+    assert (await ws.receive_json())["result"]["history"]["bol"] == history
 
 
 async def test_diagnostics_and_health_sensor(hass: HomeAssistant, entry, no_network):
@@ -1183,6 +1219,28 @@ async def test_relay_fetches_comparison_pages(hass: HomeAssistant, entry, no_net
     assert r["rejected"]
 
 
+@pytest.mark.parametrize("source,url", [
+    ("shoparize", "https://www.shoparize.com/be/q?q=lego+60454"),
+    ("channable", "https://shopping.channable.com/?search=lego+60454"),
+    ("producthero", "https://shopping.producthero.com/nl/product/123"),
+])
+async def test_relay_comparison_page_with_many_priceless_links(hass: HomeAssistant, entry, no_network, hass_client, source, url):
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare": True, "compare_sources": [source]})
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "60454"}, blocking=True)
+    page = '<div>' + '<a href="https://noise.example/item">LEGO 60454</a>' * 2000 + '</div>'
+    page += '<div><a href="https://www.dreamland.be/lego-60454">LEGO 60454</a><b>€ 27,99</b><span class="shop">Dreamland</span></div>'
+    client = await hass_client()
+    response = await client.post("/api/lego_tracker/relay", json={"results": [{
+        "kind": "page", "source": source, "set_number": "60454", "url": url, "status": 200, "html": page,
+    }]})
+    assert response.status == 200
+    result = await response.json()
+    assert result["ok"] == 1 and not result["rejected"]
+    shops = c.store["compare"][source]["60454"]["shops"]
+    assert [(shop["retailer"], shop["price"]) for shop in shops] == [("dreamland_be", 27.99)]
+
+
 async def test_find_uses_pasted_search_page_and_says_why(hass: HomeAssistant, entry, no_network):
     from custom_components.lego_tracker.parsers import _generic_result
 
@@ -1374,3 +1432,45 @@ async def test_logbook_export_rejects_bad_priority(hass: HomeAssistant, entry, n
         assert not r["success"] and r["error"]["code"] == "invalid", prio
     await ws.send_json({"id": 9, "type": "lego_tracker/logs/export", "parts": ["history"], "filters": {"priority": "2.0"}})
     assert (await ws.receive_json())["success"]
+
+
+def test_producthero_reads_inertia_shop_prices():
+    import json as _json
+
+    from custom_components.lego_tracker import compare
+
+    def shop(name, price, sale, cur="EUR", title="LEGO Icons Chrysant 10368"):
+        return {"title": name, "product_price": price, "product_sale_price": sale, "currency_code_google": cur,
+                "product_title": title, "checkout_link": f"https://shopping.producthero.com/nl/clickout?stitle={name}"}
+    data = {"component": "Shopping/Product", "props": {"product": {"data": {
+        "eancode": "05702017719689", "title": "LEGO Botanical Collection Chrysant 10368", "images": ["https://img/x.jpg"],
+        "shops": [shop("coolblue.be", 27.99, 0), shop("Wehkamp", 29.99, 23.99), shop("carturesti.ro", 159.99, 0, "RON"),
+                  shop("lampjes.nl", 19.99, 0, title="LED verlichting voor LEGO 10368")]}}}}
+    page = ('<html><title>Producthero Shopping</title><div id="app"></div>'
+            f'<script data-page="app" type="application/json">{_json.dumps(data)}</script></html>')
+    r = compare.parse("producthero", page, "10368", "https://shopping.producthero.com/nl/product/05702017719689",
+                      {"coolblue": "coolblue.be"})
+    assert r.kind == "offers" and r.ean == "5702017719689" and "Chrysant" in r.name
+    assert [(s["name"], s["price"]) for s in r.shops] == [("Wehkamp", 23.99), ("coolblue.be", 27.99)]   # sale price; no RON, no LED kit
+    assert r.shops[1]["retailer"] == "coolblue"
+    other = page.replace("10368", "10369")
+    assert compare.parse("producthero", other, "10368", "https://shopping.producthero.com/nl/product/1", {}).kind == "missing"
+
+
+async def test_watch_on_and_off_for_owned_and_not_owned_sets(hass: HomeAssistant, entry, no_network):
+    c = await _setup(hass, entry)
+    for n in ("10281", "10311"):
+        await hass.services.async_call(DOMAIN, "add_set", {"set_number": n}, blocking=True)
+    c.update_set("10311", {"owned": True})
+    assert c.is_watched("10281") and not c.is_watched("10311")
+    assert c.compute()["wishlist"]["sets"] == 1
+    c.update_set("10311", {"watch": True})               # owned, and on the watchlist too: counted
+    assert c.is_watched("10311") and c.compute()["wishlist"]["sets"] == 2
+    c.update_set("10281", {"watch": False})              # −W on a set you don't own
+    assert not c.is_watched("10281") and c.compute()["wishlist"]["sets"] == 1
+    assert "10281" not in c.watched_sets()
+    c.update_set("10281", {"watch": None})               # back to the default: not owned = watched
+    assert c.is_watched("10281")
+    c.update_set("10281", {"watch": False})
+    await c.add_set("10281", discover=False)             # added to the watchlist again
+    assert c.is_watched("10281")

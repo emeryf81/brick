@@ -207,7 +207,7 @@ class Notifier:
         sc = rule["scope"]
         owned = num in self.store["collection"]
         s = self.store["sets"].get(num, {})
-        return {"all": True, "watchlist": not owned, "collection": owned,
+        return {"all": True, "watchlist": self.coord.is_watched(num), "collection": owned,
                 "themes": s.get("theme") in sc.get("themes", []), "sets": num in sc.get("sets", [])}[sc["type"]]
 
     def _cooled(self, key: str, hours: float) -> bool:

@@ -93,7 +93,7 @@ const lastAt = (pts, t) => { let r = null; for (const p of pts) { if (p[0] <= t)
 
 // ------------------------------------------------------------------ charts (inline SVG)
 const CHARTS = {}; let CHART_N = 0;
-function lineChart(series, { height = 240, money = true, area = true } = {}) {
+function lineChart(series, { height = 240, money = true, area = true, zoom = null } = {}) {
   const W = 760, H = height, P = { l: 56, r: 14, t: 14, b: 26 };
   const all = series.flatMap((s) => s.points);
   if (all.length < 2) return `<div class="empty small">📈 ${t("Not enough data points for a chart yet. The price history appears here after a few refreshes.")}</div>`;
@@ -126,9 +126,9 @@ function lineChart(series, { height = 240, money = true, area = true } = {}) {
     return `${fill}<polyline class="ln${s.dashed ? " dash" : ""}" pathLength="1" fill="none" stroke="${s.color}" stroke-width="${s.dashed ? 1.5 : 2.5}" stroke-linejoin="round" stroke-linecap="round" points="${pts.join(" ")}"/>` +
       `<circle class="dot" cx="${sx(last[0])}" cy="${sy(last[1])}" r="4" fill="${s.color}"/>`;
   }).join("");
-  CHARTS[id] = { W, H, P, x0, x1, series, money, sx };
+  CHARTS[id] = { W, H, P, x0, x1, series, money, sx, zoom };
   const legend = series.map((s) => `<span class="lg"><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join("");
-  return `<div class="chartbox"><svg viewBox="0 0 ${W} ${H}" class="chart" data-id="${id}" role="img">${defs}${g}${lines}<line class="hv" y1="${P.t}" y2="${H - P.b}" style="display:none"/></svg><div class="tip" style="display:none"></div></div><div class="legend">${legend}</div>`;
+  return `<div class="chartbox"><svg viewBox="0 0 ${W} ${H}" class="chart${zoom ? " zoomable" : ""}" data-id="${id}" role="img">${defs}${g}${lines}<line class="hv" y1="${P.t}" y2="${H - P.b}" style="display:none"/>${zoom ? `<rect class="zsel" y="${P.t}" height="${H - P.t - P.b}" x="0" width="0" style="display:none"/>` : ""}</svg><div class="tip" style="display:none"></div></div><div class="legend">${legend}</div>`;
 }
 
 function donut(items, { size = 170, label = "" } = {}) {
@@ -249,7 +249,7 @@ h2.sec{font-size:16px;margin:18px 0 10px;display:flex;align-items:center;gap:8px
 .addtile .plus{font-size:54px;line-height:1;font-weight:300}.addtile:hover{background:color-mix(in srgb,var(--lt-accent) 16%,var(--lt-card))}
 .card .img{position:relative}.cbtns{position:absolute;right:4px;bottom:4px;display:flex;gap:4px}
 .cbtn{width:28px;height:28px;border-radius:50%;border:0;background:var(--lt-accent);color:var(--lt-on-accent);font-weight:700;font-size:15px;line-height:1;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.35);display:grid;place-items:center;padding:0}
-.cbtn:hover{transform:scale(1.1)}.prefill{display:flex;gap:12px;align-items:center;padding:10px;margin:0 0 12px;border-radius:12px;background:var(--lt-soft)}
+.cbtn:hover{transform:scale(1.1)}.tlx li.tlr{display:flex;gap:10px;align-items:flex-start}.tlx .tthumb{position:relative;flex:0 0 72px;width:72px;height:72px;border-radius:10px;overflow:hidden;background:var(--lt-soft)}.tlx .tthumb img{width:100%;height:100%;object-fit:contain}.tlx .tthumb .ph{display:grid;place-items:center;width:100%;height:100%;font-size:28px}.tlx .tthumb .cbtns{right:2px;bottom:2px;gap:2px}.tlx .tthumb .cbtn{width:22px;height:22px;font-size:11px}.tlx .tthumb .cbtn.off{min-width:22px;padding:0 4px;font-size:10px}.tlx .tbody{min-width:0;flex:1}.tlx a{color:var(--lt-accent)}.cbtn.off{width:auto;min-width:28px;padding:0 7px;border-radius:14px;background:var(--lt-card,#fff);color:var(--lt-accent);font-size:13px}.prefill{display:flex;gap:12px;align-items:center;padding:10px;margin:0 0 12px;border-radius:12px;background:var(--lt-soft)}
 .prefill .img{width:72px;height:72px;display:grid;place-items:center}.prefill .img img{max-width:72px;max-height:72px;object-fit:contain}.prefill>div:nth-child(2){flex:1}
 .radio label.dis{opacity:.5;cursor:not-allowed}.radio label.dis input{cursor:not-allowed}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:14px}
@@ -287,7 +287,7 @@ h2.sec{font-size:16px;margin:18px 0 10px;display:flex;align-items:center;gap:8px
 .tbl td{padding:8px;border-bottom:1px solid var(--lt-line);vertical-align:top}.tbl tr.click{cursor:pointer;transition:background .15s}.tbl tr.click:hover{background:var(--lt-soft)}
 .tbl .num{text-align:right;font-variant-numeric:tabular-nums}.tscroll{overflow-x:auto}
 /* charts */
-.chartbox{position:relative}.chart{width:100%;height:auto;display:block}.gl{stroke:var(--lt-line)}.axis{font-size:11px;fill:var(--lt-muted)}.hv{stroke:var(--lt-muted);stroke-dasharray:3 3}
+.chartbox{position:relative}.chart.zoomable{cursor:crosshair;touch-action:pan-y;user-select:none;-webkit-user-select:none}.zsel{fill:var(--lt-accent);fill-opacity:.15;stroke:var(--lt-accent);stroke-opacity:.5}.zbar{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;margin:0 0 8px}.zbar input[type=date]{font:inherit;padding:3px 6px;border-radius:8px;border:1px solid var(--lt-line);background:var(--lt-card);color:var(--lt-text)}.pstats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-top:10px}.pstats .stat{padding:8px 10px;border-radius:10px;background:var(--lt-soft)}.pstats small{display:block;color:var(--lt-muted);font-size:11px}.pstats b{font-size:15px}.tbl td.num{text-align:right;white-space:nowrap}.chart{width:100%;height:auto;display:block}.gl{stroke:var(--lt-line)}.axis{font-size:11px;fill:var(--lt-muted)}.hv{stroke:var(--lt-muted);stroke-dasharray:3 3}
 .ln{stroke-dasharray:1;stroke-dashoffset:1;animation:draw 1.1s cubic-bezier(.4,0,.2,1) forwards}.ln.dash{stroke-dasharray:.012 .01;stroke-dashoffset:0;animation:fade .8s both}
 .area{animation:fade 1s .4s both}.dot{animation:pop .4s .9s both;transform-box:fill-box;transform-origin:center}
 .tip{position:absolute;top:8px;left:60px;background:var(--lt-card);border:1px solid var(--lt-line);border-radius:10px;padding:8px 10px;font-size:12px;pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.15);white-space:nowrap;z-index:2}
@@ -372,7 +372,7 @@ class LegoTrackerPanel extends HTMLElement {
     this.state = {
       section: "deals", sub: { deals: "today", collection: "overview", log: "all", manage: "add" },
       f: { q: "", theme: null, subtheme: null, sort: "score", cond: null }, threshold: null,
-      cview: "grid", csort: { key: "value", dir: -1 }, range: 90, addMode: "watch",
+      cview: "grid", csort: { key: "value", dir: -1 }, range: 90, cz: { preset: 0, from: null, to: null }, addMode: "watch",
       imp: { text: "", name: "", analysis: null, only: false, replace: false, track: true, update: true },
       links: { status: "suspect", scope: "owned", edit: null },
       errs: { type: "all", scope: "all", shop: "", open: null, showIgnored: false },
@@ -663,11 +663,12 @@ class LegoTrackerPanel extends HTMLElement {
       s.owned ? `<span class="badge blue">${t("Owned")}${s.collection && s.collection.qty > 1 ? ` ×${s.collection.qty}` : ""}</span>` : "",
     ].join("");
   }
-  /** Small buttons on a card image: + = add to my collection, W = add to the watchlist. */
+  /** Small buttons on a card image: + = add to my collection, W = add to the watchlist, −W = take it off. */
   cornerBtns(s) {
-    const own = !s.owned ? `<button class="cbtn" data-stop data-cown="${esc(s.set_number)}" title="${esc(t("Add to my collection"))}" aria-label="${esc(t("Add to my collection"))}">＋</button>` : "";
-    const watch = !s.watched ? `<button class="cbtn" data-stop data-cwatch="${esc(s.set_number)}" title="${esc(t("Add to watchlist"))}" aria-label="${esc(t("Add to watchlist"))}">W</button>` : "";
-    return own || watch ? `<div class="cbtns">${watch}${own}</div>` : "";
+    const n = esc(s.set_number), btn = (attr, label, text, cls = "") => `<button class="cbtn${cls}" data-stop ${attr} title="${esc(label)}" aria-label="${esc(label)}">${text}</button>`;
+    const watch = s.watched ? btn(`data-cwatch="${n}" data-on="0"`, t("Remove from watchlist"), "−W", " off") : btn(`data-cwatch="${n}" data-on="1"`, t("Add to watchlist"), "W");
+    const own = !s.owned ? btn(`data-cown="${n}"`, t("Add to my collection"), "＋") : "";
+    return `<div class="cbtns">${watch}${own}</div>`;
   }
   /** Go to Manage → Add, in watchlist or collection mode, optionally for a given set (number + picture). */
   goAdd(mode, set = null) {
@@ -739,9 +740,20 @@ class LegoTrackerPanel extends HTMLElement {
     return `<div class="panel"><h3>🎚️ ${t("When is it a deal?")}</h3><p>${t("Discount vs. RRP of at least {pct}, or lowest price ever, target price reached, or deal score ≥ 70.", { pct: `<b id="thrv">${this.state.threshold}%</b>` })}</p><input id="thr" type="range" min="5" max="70" step="5" value="${this.state.threshold}" style="width:100%"><p style="margin-top:8px;font-size:12px">${t("The default threshold is set under Manage → Settings (now {pct}%).", { pct: this.state.data.threshold })}</p></div>`;
   }
   timeline() {
-    const ev = this.state.data.events || [];
+    const ev = this.state.data.events || [], bySet = Object.fromEntries(this.sets.map((x) => [x.set_number, x]));
     const ic = { is_all_time_low: ["🔻", "lowest price ever"], high_discount: ["🏷️", "high discount"], target_hit: ["🎯", "target price reached"] };
-    return `<div class="panel"><h3>🕒 ${t("Recent deals")}</h3>${ev.length ? `<ul class="tl">${ev.slice(0, 12).map((e) => { const [i, lbl] = ic[e.kind] || ["•", e.kind]; return `<li data-set="${esc(e.set_number)}"><span class="ic">${i}</span><div><b>${esc(e.name || e.set_number)}</b><div>${t(lbl)} · ${EUR(e.price)}${e.retailer ? ` · ${esc(this.state.data.retailers[e.retailer] || e.retailer)}` : ""}</div><div class="t">${DATE(e.ts, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div></div></li>`; }).join("")}</ul>` : `<p>${t("Nothing reported yet. New lowest prices, high discounts and reached target prices appear here.")}</p>`}</div>`;
+    const row = (e) => {
+      const [i, lbl] = ic[e.kind] || ["•", e.kind], s = bySet[e.set_number] || { set_number: e.set_number, name: e.name };
+      const price = e.price != null ? e.price : s.best_price, shop = e.retailer || s.best_retailer;
+      const url = e.url || (shop && s.offers && s.offers[shop] && s.offers[shop].url) || s.best_url;
+      const shopName = shop ? esc(this.state.data.retailers[shop] || shop) : "";
+      const now = s.best_price != null && price != null && Math.abs(s.best_price - price) >= 0.01 ? ` <span class="t">(${t("now {price}", { price: EUR(s.best_price) })})</span>` : "";
+      return `<li class="tlr" data-set="${esc(e.set_number)}"><div class="tthumb img">${this.img(s)}${bySet[e.set_number] ? this.cornerBtns(s) : ""}</div><div class="tbody"><b><span class="ic">${i}</span> ${esc(s.name || e.name || e.set_number)}</b>
+        <div>${t(lbl)} · <b>${EUR(price)}</b>${now}${shopName ? ` · ${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" data-stop>${shopName} ↗</a>` : shopName}` : ""}</div>
+        <div class="t">${esc(e.set_number)} · ${DATE(e.ts, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div></div></li>`;
+    };
+    return `<div class="panel"><h3>🕒 ${t("Recent deals")}</h3>${ev.length ? `<ul class="tl tlx">${ev.slice(0, 12).map(row).join("")}</ul>` : `<p>${t("Nothing reported yet. New lowest prices, high discounts and reached target prices appear here.")}</p>`}</div>`;
+    return `<div class="panel"><h3>🕒 ${t("Recent deals")}</h3>${ev.length ? `<ul class="tl">${ev.slice(0, 12).map((e) => { const [i, lbl] = ic[e.kind] || ["•", e.kind]; return `<li data-set="${esc(e.set_number)}"><span class="ic">${i}</span><div><b>${esc(e.name || e.set_number)}</b><div>${esc(t(lbl))} · ${EUR(e.price)}${e.retailer ? ` · ${esc(this.state.data.retailers[e.retailer] || e.retailer)}` : ""}</div><div class="t">${DATE(e.ts, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div></div></li>`; }).join("")}</ul>` : `<p>${t("Nothing reported yet. New lowest prices, high discounts and reached target prices appear here.")}</p>`}</div>`;
   }
   vWatch() {
     const list = this.sets.filter((s) => s.watched);
@@ -763,17 +775,93 @@ class LegoTrackerPanel extends HTMLElement {
     if (!sum.sets) return this.emptyState("📦", t("Your collection is still empty. Import a CSV (BrickEconomy, Brickset, Rebrickable or your own sheet) or mark sets as ‘owned’."), `<button class="btn" data-goto="manage/import">⇪ ${t("Import collection")}</button>`);
     const growth = sum.cost ? sum.growth_pct : null;
     const kpis = `<div class="kpis">${this.kpi(t("Collection value"), sum.value, { fmt: "eur", icon: "💎", color: "var(--lt-accent)" })}${this.kpi(t("Purchase cost"), sum.cost, { fmt: "eur", icon: "🧾" })}${this.kpi(t("Growth"), growth, { fmt: "pct", icon: "📈", color: growth >= 0 ? "var(--lt-green)" : "var(--lt-red)", sub: sum.cost ? `<span class="${sum.growth >= 0 ? "up" : "down"}">${sum.growth >= 0 ? "+" : ""}${EUR0(sum.growth)}</span>` : "" })}${this.kpi(t("Sets"), sum.sets, { icon: "🧱", sub: t("{n} pieces", { n: INT(sum.pieces) }) })}${this.kpi(t("Paid per piece"), a.avg_paid_per_piece != null ? a.avg_paid_per_piece * 100 : null, { icon: "🔢", sub: t("cents, average") })}</div>`;
-    const ser = c.series || [];
-    const chart = lineChart([{ name: t("Value"), color: COLORS[1], points: ser.map((p) => [p.ts, p.value]) }, { name: t("Purchase cost"), color: COLORS[0], points: ser.map((p) => [p.ts, p.cost]), dashed: true }]);
+    const ser = c.series || [], [from, to] = this.collWindow(ser);
+    const cut = (pts) => { const keep = pts.filter((p) => p[0] >= from && p[0] <= to), prev = lastAt(pts, from); return prev && (!keep.length || keep[0][0] > from) ? [[from, prev[1]], ...keep] : keep; };
+    const vPts = cut(ser.map((p) => [p.ts, p.value])), cPts = cut(ser.map((p) => [p.ts, p.cost]));
+    const chart = lineChart([{ name: t("Value"), color: COLORS[1], points: vPts }, { name: t("Purchase cost"), color: COLORS[0], points: cPts, dashed: true }],
+      { zoom: (a, b) => { this.state.cz = { preset: -1, from: a, to: b }; this.renderContent(); } });
     const themes = Object.entries(a.by_theme || {}); const topT = themes.slice(0, 7), rest = themes.slice(7).reduce((x, [, v]) => x + v.value, 0);
     const donutItems = topT.map(([k, v]) => ({ label: `${k} (${v.count})`, value: v.value })).concat(rest ? [{ label: t("Other"), value: rest, color: "#9aa0a6" }] : []);
     const years = Object.entries(a.by_year || {}).map(([k, v]) => ({ label: k, value: v.count }));
     const mv = (list, cls) => list.length ? `<table class="tbl">${list.map((m) => `<tr class="click" data-set="${esc(m.set_number)}"><td>${esc(m.name || m.set_number)}<div class="muted" style="font-size:12px">${EUR(m.paid)} → ${EUR(m.value)}</div></td><td class="num ${cls}"><b>${signPct(m.pct)}</b></td></tr>`).join("")}</table>` : `<p>${t("No data yet (purchase price needed).")}</p>`;
     const conds = Object.entries(a.by_condition || {});
-    return `${kpis}<div class="panel"><h3>📈 ${t("Collection growth")}<span class="hsp"></span><span class="muted" style="font-size:12px;font-weight:400">${t("value = lowest new price × quantity")}</span></h3>${chart}</div>
+    return `${kpis}<div class="panel"><h3>📈 ${t("Collection growth")}<span class="hsp"></span><span class="muted" style="font-size:12px;font-weight:400">${t("value = lowest new price × quantity")}</span></h3>${this.zoomBar(from, to)}${chart}${this.periodStats(vPts, cPts, from, to)}</div>
+      ${this.collStats()}
       <div class="two"><div class="panel"><h3>🎨 ${t("Value per theme")}</h3>${donut(donutItems, { label: t("total") })}</div><div class="panel"><h3>📅 ${t("Sets per release year")}</h3>${years.length > 1 ? bars(years) : `<p>${t("Year unknown for most sets; add a Brickset or Rebrickable key under Settings to fill this in.")}</p>`}</div></div>
       <div class="two"><div class="panel"><h3>🚀 ${t("Biggest risers")}</h3>${mv(a.top_gainers || [], "up")}</div><div class="panel"><h3>📉 ${t("Below purchase price")}</h3>${mv(a.top_losers || [], "down")}</div></div>
       ${conds.length ? `<div class="panel"><h3>📦 ${t("Condition of your sets")}</h3><div class="chips">${conds.map(([k, v]) => `<span class="chip">${esc(t(k))} <b>${v}</b></span>`).join("")}</div></div>` : ""}`;
+  }
+  /** The period shown in the collection chart: a preset (days back, "ytd"), a dragged / typed range, or everything. */
+  collWindow(ser) {
+    const z = this.state.cz || { preset: 0 }, now = Date.now() / 1000, first = ser.length ? ser[0].ts : now;
+    if (z.preset === -1 && z.from != null) return [z.from, z.to ?? now];
+    if (z.preset === "ytd") return [new Date(new Date().getFullYear(), 0, 1).getTime() / 1000, now];
+    if (z.preset > 0) return [now - z.preset * 86400, now];
+    return [first, now];
+  }
+  zoomBar(from, to) {
+    const z = this.state.cz || { preset: 0 }, iso = (ts) => new Date(ts * 1000 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    const chips = [[30, t("{n} d", { n: 30 })], [90, t("{n} d", { n: 90 })], [180, t("{n} d", { n: 180 })], ["ytd", t("This year")], [365, t("1 year")], [0, t("All")]];
+    return `<div class="zbar"><div class="chips" style="margin:0">${chips.map(([d, l]) => `<span class="chip sm ${z.preset === d ? "on" : ""}" data-cz="${d}">${l}</span>`).join("")}</div>
+      <label class="muted" style="font-size:12px" title="${esc(t("Or drag across the chart to zoom in on a period."))}">${t("From")} <input type="date" id="cz_from" value="${iso(from)}"></label><label class="muted" style="font-size:12px">${t("to")} <input type="date" id="cz_to" value="${iso(to)}"></label>
+      ${z.preset === -1 ? `<button class="btn ghost sm" data-cz="0">↺ ${t("Reset zoom")}</button>` : `<span class="muted" style="font-size:12px">${t("Tip: drag across the chart to zoom in.")}</span>`}</div>`;
+  }
+  /** What changed in the chosen period: value, cost, sets bought and money spent. */
+  periodStats(vPts, cPts, from, to) {
+    if (!vPts.length) return "";
+    const v0 = vPts[0][1], v1 = vPts[vPts.length - 1][1], c0 = cPts.length ? cPts[0][1] : 0, c1 = cPts.length ? cPts[cPts.length - 1][1] : 0;
+    const peak = vPts.reduce((a, p) => (p[1] > a[1] ? p : a), vPts[0]), low = vPts.reduce((a, p) => (p[1] < a[1] ? p : a), vPts[0]);
+    const f = new Date(from * 1000).toISOString().slice(0, 10), tt = new Date(to * 1000).toISOString().slice(0, 10);
+    let bought = 0, spent = 0;
+    for (const x of this.sets) { const c = x.collection; if (x.owned && c && c.added && c.added >= f && c.added <= tt) { bought += c.qty || 1; spent += (c.paid || 0) * (c.qty || 1); } }
+    const own = v1 - v0 - (c1 - c0), stat = (l, v, cls = "") => `<div class="stat"><small>${l}</small><b class="${cls}">${v}</b></div>`;
+    return `<div class="pstats">${stat(t("Value change"), `${v1 - v0 >= 0 ? "+" : ""}${EUR0(v1 - v0)}`, v1 >= v0 ? "up" : "down")}${stat(t("Value change %"), v0 ? signPct(Math.round(((v1 - v0) / v0) * 1000) / 10) : "–", v1 >= v0 ? "up" : "down")}
+      ${stat(t("Growth without purchases"), `${own >= 0 ? "+" : ""}${EUR0(own)}`, own >= 0 ? "up" : "down")}${stat(t("Highest value"), `${EUR0(peak[1])} <span class="muted" style="font-size:11px">${DATE(peak[0])}</span>`)}
+      ${stat(t("Lowest value"), `${EUR0(low[1])} <span class="muted" style="font-size:11px">${DATE(low[0])}</span>`)}${stat(t("Sets bought"), INT(bought))}${stat(t("Spent"), EUR0(spent))}</div>`;
+  }
+  /** Many more numbers about the collection, all worked out from the sets you own. */
+  collStats() {
+    const own = this.sets.filter((x) => x.owned); if (!own.length) return "";
+    const rows = own.map((x) => { const c = x.collection || {}, q = c.qty || 1, u = this.unitValue(x); return { s: x, c, q, u, v: (u || 0) * q, paid: c.paid ? c.paid * q : null, rrp: x.rrp ? x.rrp * q : null }; });
+    const sum = (f) => rows.reduce((a, r) => a + (f(r) || 0), 0), copies = sum((r) => r.q), value = sum((r) => r.v);
+    const paidRows = rows.filter((r) => r.paid), paid = sum((r) => r.paid), paidValue = paidRows.reduce((a, r) => a + r.v, 0);
+    const rrpRows = rows.filter((r) => r.rrp), rrp = sum((r) => r.rrp), rrpValue = rrpRows.reduce((a, r) => a + r.v, 0);
+    const pieces = sum((r) => (r.s.pieces || 0) * r.q), years = rows.filter((r) => r.s.year).map((r) => r.s.year), yr = new Date().getFullYear();
+    const retired = rows.filter((r) => r.s.retired), retiring = rows.filter((r) => r.s.retiring_soon), sealed = rows.filter((r) => r.c.condition === "Sealed");
+    const top = (arr, key, n = 5) => [...arr].sort((a, b) => key(b) - key(a)).slice(0, n);
+    const stat = (l, v, sub = "") => `<div class="stat"><small>${l}</small><b>${v}</b>${sub ? `<div class="muted" style="font-size:11px">${sub}</div>` : ""}</div>`;
+    const pct = (a, b) => (b ? signPct(Math.round(((a - b) / b) * 1000) / 10) : "–");
+    const biggest = top(rows, (r) => r.v)[0], largest = top(rows.filter((r) => r.s.pieces), (r) => r.s.pieces)[0];
+    const oldest = rows.filter((r) => r.s.year).sort((a, b) => a.s.year - b.s.year)[0];
+    const general = `<div class="pstats">
+      ${stat(t("Unique sets"), INT(own.length), t("{n} copies", { n: INT(copies) }))}${stat(t("Pieces"), INT(pieces), pieces && value ? t("{n} ct per piece (value)", { n: ((value / pieces) * 100).toFixed(1) }) : "")}
+      ${stat(t("Average value per set"), EUR0(value / copies))}${stat(t("Average paid per set"), paidRows.length ? EUR0(paid / paidRows.reduce((a, r) => a + r.q, 0)) : "–")}
+      ${stat(t("Value vs. purchase price"), pct(paidValue, paid), t("{n} sets with a purchase price", { n: paidRows.length }))}${stat(t("Value vs. RRP"), pct(rrpValue, rrp), t("RRP total {amount}", { amount: EUR0(rrp) }))}
+      ${stat(t("Retired sets"), INT(retired.length), EUR0(retired.reduce((a, r) => a + r.v, 0)))}${stat(t("Retiring soon"), INT(retiring.length), EUR0(retiring.reduce((a, r) => a + r.v, 0)))}
+      ${stat(t("Sealed"), own.length ? `${Math.round((sealed.length / own.length) * 100)}%` : "–", t("{n} sets", { n: sealed.length }))}${stat(t("Average age"), years.length ? t("{n} years", { n: (years.reduce((a, y) => a + (yr - y), 0) / years.length).toFixed(1) }) : "–")}
+      ${stat(t("Most valuable set"), biggest ? EUR0(biggest.v) : "–", biggest ? esc(biggest.s.name || biggest.s.set_number) : "")}${stat(t("Largest set"), largest ? INT(largest.s.pieces) : "–", largest ? esc(largest.s.name || largest.s.set_number) : "")}
+      ${stat(t("Oldest set"), oldest ? oldest.s.year : "–", oldest ? esc(oldest.s.name || oldest.s.set_number) : "")}${stat(t("Without purchase price"), INT(rows.length - paidRows.length))}
+      ${stat(t("Themes"), INT(new Set(own.map((x) => x.theme).filter(Boolean)).size))}${stat(t("Locations"), INT(new Set(rows.map((r) => r.c.location).filter(Boolean)).size))}</div>`;
+    // per theme: sets, paid, value, growth
+    const th = {};
+    for (const r of rows) { const k = r.s.theme || t("Unknown"), o = th[k] || (th[k] = { n: 0, v: 0, paid: 0, pv: 0, pieces: 0 }); o.n += r.q; o.v += r.v; o.pieces += (r.s.pieces || 0) * r.q; if (r.paid) { o.paid += r.paid; o.pv += r.v; } }
+    const thRows = Object.entries(th).sort((a, b) => b[1].v - a[1].v);
+    const themeTbl = `<table class="tbl"><tr><th>${t("Theme")}</th><th class="num">${t("Sets")}</th><th class="num">${t("Value")}</th><th class="num">${t("Share")}</th><th class="num">${t("Growth")}</th></tr>${thRows.map(([k, o]) => `<tr><td>${esc(k)}</td><td class="num">${o.n}</td><td class="num">${EUR0(o.v)}</td><td class="num">${value ? Math.round((o.v / value) * 100) : 0}%</td><td class="num ${o.pv >= o.paid ? "up" : "down"}">${o.paid ? pct(o.pv, o.paid) : "–"}</td></tr>`).join("")}</table>`;
+    // bought and spent per year (purchase date)
+    const by = {};
+    for (const r of rows) { const y = (r.c.added || "").slice(0, 4); if (!y) continue; const o = by[y] || (by[y] = { n: 0, spent: 0 }); o.n += r.q; o.spent += r.paid || 0; }
+    const byY = Object.entries(by).sort((a, b) => a[0].localeCompare(b[0]));
+    const loc = {}; for (const r of rows) { const k = r.c.location; if (k) loc[k] = (loc[k] || 0) + r.q; }
+    const roi = top(paidRows, (r) => (r.v - r.paid) / r.paid), gainEur = top(paidRows, (r) => r.v - r.paid);
+    const list = (arr, f) => arr.length ? `<table class="tbl">${arr.map((r) => `<tr class="click" data-set="${esc(r.s.set_number)}"><td>${esc(r.s.name || r.s.set_number)}<div class="muted" style="font-size:12px">${esc(r.s.set_number)}</div></td><td class="num">${f(r)}</td></tr>`).join("")}</table>` : `<p>${t("No data yet (purchase price needed).")}</p>`;
+    return `<div class="panel"><h3>📊 ${t("Collection statistics")}</h3>${general}</div>
+      <div class="panel"><h3>🎨 ${t("Per theme")}</h3>${themeTbl}</div>
+      <div class="two"><div class="panel"><h3>🛍️ ${t("Bought per year")}</h3>${byY.length ? bars(byY.map(([y, o]) => ({ label: y, value: o.n }))) : `<p>${t("No purchase dates yet.")}</p>`}</div>
+        <div class="panel"><h3>💶 ${t("Spent per year")}</h3>${byY.length ? bars(byY.map(([y, o]) => ({ label: y, value: o.spent })), { fmt: EUR0 }) : `<p>${t("No purchase dates yet.")}</p>`}</div></div>
+      <div class="two"><div class="panel"><h3>💎 ${t("Most valuable sets")}</h3>${list(top(rows, (r) => r.v), (r) => `<b>${EUR0(r.v)}</b>`)}</div>
+        <div class="panel"><h3>💰 ${t("Biggest gain in euro")}</h3>${list(gainEur, (r) => `<b class="${r.v >= r.paid ? "up" : "down"}">${r.v - r.paid >= 0 ? "+" : ""}${EUR0(r.v - r.paid)}</b>`)}</div></div>
+      <div class="two"><div class="panel"><h3>📈 ${t("Best return")}</h3>${list(roi, (r) => `<b class="${r.v >= r.paid ? "up" : "down"}">${pct(r.v, r.paid)}</b>`)}</div>
+        <div class="panel"><h3>📍 ${t("Sets per location")}</h3>${Object.keys(loc).length ? `<div class="chips">${Object.entries(loc).sort((a, b) => b[1] - a[1]).map(([k, n]) => `<span class="chip">${esc(k)} <b>${n}</b></span>`).join("")}</div>` : `<p>${t("No locations filled in yet.")}</p>`}</div></div>`;
   }
   vCollSets() {
     const list = this.sets.filter((s) => s.owned);
@@ -1140,7 +1228,7 @@ class LegoTrackerPanel extends HTMLElement {
     const hours = Array.from({ length: 24 }, (_, h) => [`${String(h).padStart(2, "0")}:00`, `${String(h).padStart(2, "0")}:00`]);
     return `<div data-nf="1"><div class="panel"><h3>${N.idx == null ? "＋ " + t("New rule") : "✎ " + t("Edit rule")}<span class="hsp"></span><button class="btn ghost sm" id="n_cancel">← ${t("Back")}</button></h3>
       <div class="form"><label style="grid-column:span 2">${t("Name")}<input id="n_name" value="${esc(r.name)}" maxlength="60"></label><label class="chk" style="align-self:end"><input type="checkbox" id="n_enabled" ${r.enabled ? "checked" : ""}> ${t("rule is on")}</label></div></div>
-      <div class="panel"><h3>1 · ${t("For which sets?")}</h3><div class="fbar"><select id="n_scope">${opt([["all", t("All tracked sets")], ["watchlist", "👀 " + t("My watchlist (not owned)")], ["collection", "📦 " + t("My collection")], ["themes", "🎨 " + t("Certain themes")], ["sets", "🧱 " + t("Certain sets")]], r.scope.type)}</select></div>${scopeBox}</div>
+      <div class="panel"><h3>1 · ${t("For which sets?")}</h3><div class="fbar"><select id="n_scope">${opt([["all", t("All tracked sets")], ["watchlist", "👀 " + t("My watchlist")], ["collection", "📦 " + t("My collection")], ["themes", "🎨 " + t("Certain themes")], ["sets", "🧱 " + t("Certain sets")]], r.scope.type)}</select></div>${scopeBox}</div>
       <div class="panel"><h3>2 · ${t("When?")}</h3><p style="margin-bottom:4px">${t("Per set:")}</p>${perSet.map(trigRow).join("")}<p style="margin:12px 0 4px">${t("General:")}</p>${general.map(trigRow).join("")}
         <div class="fbar" style="margin-top:10px"><span class="muted">${t("In which shops?")}</span><select id="n_shop_add">${opt(Object.entries(o.retailers).filter(([k]) => !r.shops.includes(k)), "", r.shops.length ? "＋ " + t("add a shop") : t("All shops (or choose…)"))}</select>
         ${r.shops.map((k) => `<span class="chip on" data-rmshop="${k}">${esc(o.retailers[k] || k)} ✕</span>`).join("")}</div></div>
@@ -1407,10 +1495,17 @@ class LegoTrackerPanel extends HTMLElement {
     on("[data-addtile]", "keydown", (e) => { if (e.key === "Enter") this.goAdd(e.currentTarget.dataset.addtile); });
     on("[data-cown]", "click", (e) => { e.stopPropagation(); this.goAdd("own", this.sets.find((x) => x.set_number === e.currentTarget.dataset.cown)); });
     on("[data-cwatch]", "click", (e) => { e.stopPropagation(); const b = e.currentTarget; this.busy(b, "", async () => {
-      await this._hass.callWS({ type: "lego_tracker/update_set", set_number: b.dataset.cwatch, fields: { watch: true } });
-      await this.load(); this.toast(t("{set} is on your watchlist", { set: b.dataset.cwatch }), "ok");
+      const on = b.dataset.on === "1";
+      await this._hass.callWS({ type: "lego_tracker/update_set", set_number: b.dataset.cwatch, fields: { watch: on } });
+      await this.load(); this.toast(t(on ? "{set} is on your watchlist" : "{set} is off your watchlist", { set: b.dataset.cwatch }), "ok");
     }); });
     on("#a_clearpre", "click", () => { s.addPrefill = null; this.renderContent(); });
+    on("[data-cz]", "click", (e) => { const v = e.currentTarget.dataset.cz; s.cz = { preset: v === "ytd" ? "ytd" : +v, from: null, to: null }; this.renderContent(); });
+    for (const id of ["cz_from", "cz_to"]) { const el = $(id); if (el) el.addEventListener("change", () => {
+      const a = $("cz_from").value, b = $("cz_to").value; if (!a || !b) return;
+      const f = new Date(a + "T00:00:00").getTime() / 1000, tt = new Date(b + "T23:59:59").getTime() / 1000;
+      if (f < tt) { s.cz = { preset: -1, from: f, to: tt }; this.renderContent(); }
+    }); }
     on("[data-cview]", "click", (e) => { s.cview = e.currentTarget.dataset.cview; this.persist(); this.renderContent(); });
     const thr = $("thr"); if (thr) { thr.addEventListener("input", (e) => { const v = $("thrv"); if (v) v.textContent = e.target.value + "%"; }); thr.addEventListener("change", (e) => { s.threshold = +e.target.value; this.render(); }); }
     // add
@@ -1608,6 +1703,14 @@ class LegoTrackerPanel extends HTMLElement {
         tip.innerHTML = `<div class="muted" style="margin-bottom:3px">${DATE(t, { day: "numeric", month: "short", year: "numeric" })}</div>${rows}`;
         tip.style.display = ""; tip.style.left = Math.min(box.width - 200, Math.max(40, clientX - box.left + 14)) + "px";
       };
+      if (m.zoom) {             // drag across the chart to zoom in on that period
+        const sel = svg.querySelector(".zsel"), tAt = (clientX) => { const box = svg.getBoundingClientRect(), x = Math.min(m.W - m.P.r, Math.max(m.P.l, ((clientX - box.left) / box.width) * m.W)); return [x, m.x0 + ((x - m.P.l) / (m.W - m.P.l - m.P.r)) * (m.x1 - m.x0)]; };
+        let start = null;
+        svg.addEventListener("pointerdown", (e) => { if (e.button > 0) return; start = tAt(e.clientX); try { svg.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ } });
+        svg.addEventListener("pointermove", (e) => { if (!start) return; const [x] = tAt(e.clientX); sel.setAttribute("x", Math.min(x, start[0])); sel.setAttribute("width", Math.abs(x - start[0])); sel.style.display = ""; });
+        const end = (e) => { if (!start) return; const [x, t1] = tAt(e.clientX), [x0, t0] = start; start = null; sel.style.display = "none"; if (Math.abs(x - x0) > 12) m.zoom(Math.min(t0, t1), Math.max(t0, t1)); };
+        svg.addEventListener("pointerup", end); svg.addEventListener("pointercancel", () => { start = null; sel.style.display = "none"; });
+      }
       svg.addEventListener("mousemove", (e) => move(e.clientX));
       svg.addEventListener("touchmove", (e) => move(e.touches[0].clientX), { passive: true });
       svg.addEventListener("mouseleave", () => { tip.style.display = "none"; hv.style.display = "none"; });

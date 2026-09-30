@@ -166,26 +166,47 @@ def _dom(page: str) -> _Node:
     return b.root
 
 
-def _prices(node: _Node) -> list[float]:
-    """Euro prices in a block, skipping struck-through / 'old' / RRP / shipping prices."""
-    out: list[float] = []
-    stack: list[tuple[Any, bool]] = [(node, False)]
+def _offer_summary(node: _Node, host: str, cache: dict[_Node, tuple[set[float], int]]) -> tuple[set[float], int]:
+    """Cache subtree prices and outgoing-link counts once per extraction.
+
+    Four distinct prices or three outgoing links already disqualify a row, so
+    summaries stay constant-sized even for deeply nested or price-heavy pages.
+    Prices are relative to each node: an old-price parent suppresses its children
+    when merged, without changing their independently usable summaries.
+    """
+    stack = [(node, False)]
     while stack:
-        n, old = stack.pop()
-        if isinstance(n, str):
-            if not old:
-                for m in PRICE_RE.finditer(n):
+        n, ready = stack.pop()
+        if n in cache:
+            continue
+        if not ready:
+            stack.append((n, True))
+            stack.extend((c, False) for c in reversed(n.children) if isinstance(c, _Node) and c not in cache)
+            continue
+        prices: set[float] = set()
+        links = int(_out(n, host))
+        old = n.tag in ("script", "style", "s", "del", "strike") or bool(
+            OLD_PRICE.search(n.attrs.get("class", "") + " " + n.attrs.get("data-test", "")))
+        for child in n.children:
+            if isinstance(child, _Node):
+                child_prices, child_links = cache[child]
+                links = min(3, links + child_links)
+                if not old:
+                    for price in child_prices:
+                        if len(prices) == 4:
+                            break
+                        prices.add(price)
+            elif not old and len(prices) < 4:
+                for m in PRICE_RE.finditer(child):
                     raw = (m.group(1) or m.group(2) or m.group(3) or "").replace(" ", "")
                     if raw.endswith(",-") or raw.endswith(".-"):
                         raw = raw[:-2]
                     if (p := parse_price(raw)) is not None and 0.5 <= p <= 10000:
-                        out.append(p)
-            continue
-        if n.tag in ("script", "style"):
-            continue
-        is_old = old or n.tag in ("s", "del", "strike") or bool(OLD_PRICE.search(n.attrs.get("class", "") + " " + n.attrs.get("data-test", "")))
-        stack.extend((c, is_old) for c in reversed(n.children))
-    return out
+                        prices.add(p)
+                        if len(prices) == 4:
+                            break
+        cache[n] = prices, links
+    return cache[node]
 
 
 def shop_retailer(name: str, href: str | None, domains: dict[str, str]) -> str | None:
@@ -389,18 +410,21 @@ def _dom_offers(root: _Node, page_url: str, search: bool) -> list[dict[str, Any]
     host = urlparse(page_url).netloc.lower()
     out: list[dict[str, Any]] = []
     seen: set[int] = set()
+    summaries: dict[_Node, tuple[set[float], int]] = {}
     for link in (n for n in root.iter() if n.tag == "a" and n.attrs.get("href")):
         href = link.attrs["href"]
         if not search and not _out(link, host):
             continue
         row, depth = link, 0
-        while row.parent is not None and depth < 6 and not _prices(row):
+        while row.parent is not None and depth < 6 and not _offer_summary(row, host, summaries)[0]:
             row, depth = row.parent, depth + 1
-        prices = _prices(row) if row.tag not in ("root", "body", "html", "main") else []
+        if row.tag in ("root", "body", "html", "main"):
+            continue
+        prices, links = _offer_summary(row, host, summaries)
         if not prices or id(row) in seen:
             continue
         # a block with several offers is a whole list, not one offer
-        if sum(1 for n in row.iter() if _out(n, host)) > 2 or len(set(prices)) > 3:
+        if links > 2 or len(prices) > 3:
             continue
         seen.add(id(row))
         text = row.all_text()
@@ -512,6 +536,38 @@ def _finish(info: dict[str, Any], offers: list[dict[str, Any]], page: str, num: 
                   rrp=rrp, ean=info.get("ean"), shops=sorted(shops.values(), key=lambda s: s["price"]))
 
 
+def _producthero(page: str, num: str, domains: dict[str, str], page_url: str) -> Result | None:
+    """Producthero renders with Inertia: the product and its shops sit in <script data-page="app">.
+    Per shop the sale price counts when there is one (0 = none); only euro offers."""
+    m = re.search(r'<script[^>]*data-page=["\']app["\'][^>]*>(.*?)</script>', page, re.S | re.I)
+    if not m:
+        return None
+    try:
+        data = ((json.loads(m.group(1)).get("props") or {}).get("product") or {}).get("data") or {}
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(data, dict) or not data.get("shops"):
+        return None
+    title = str(data.get("title") or "")
+    if title and not has_number(title, num) and not any(has_number(str(x.get("product_title") or ""), num)
+                                                        for x in data["shops"] if isinstance(x, dict)):
+        return Result("missing")                       # another product
+    offers = []
+    for x in data["shops"]:
+        if not isinstance(x, dict) or (x.get("currency_code_google") or "EUR") != "EUR":
+            continue
+        base, sale = _num(x.get("product_price")), _num(x.get("product_sale_price"))
+        price = sale if sale and (base is None or sale <= base) else base
+        if price is None:
+            continue
+        offers.append({"name": str(x.get("title") or x.get("shop_alias") or "?").strip(), "price": price,
+                       "url": x.get("checkout_link"), "title": x.get("product_title") or title})
+    images = data.get("images") or []
+    info = {"name": title or None, "image": images[0] if images and isinstance(images[0], str) else None,
+            "ean": str(data["eancode"]).strip().lstrip("0").zfill(13) if str(data.get("eancode") or "").strip().isdigit() else None}
+    return _finish(info, offers, page, num, domains, False, page_url)
+
+
 def parse(source: str, page: str, num: str, page_url: str, domains: dict[str, str], step: int = 0) -> Result:
     """What one fetched page of a source gives: offers, a URL to follow, or 'not there'."""
     if source == "brickeconomy":
@@ -535,6 +591,8 @@ def parse(source: str, page: str, num: str, page_url: str, domains: dict[str, st
         info, offers = _collect(page, page_url, False, root)
         return _finish(info, offers, page, num, domains, False, page_url)
     if source == "producthero":
+        if (res := _producthero(page, num, domains, page_url)) is not None:
+            return res
         head = _h1(page) + " " + _page_title(page)
         if is_accessory(head):
             return Result("missing", note="only accessories")
