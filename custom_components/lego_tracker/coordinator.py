@@ -28,7 +28,7 @@ from .const import (
     STORAGE_VERSION,
 )
 from .models import (
-    add_activity, add_event, clean_history, collection_analytics, link_check, collection_rows, collection_series, is_suspicious_price, collection_summary, COLLECTION_COLUMNS, rows_to_csv, validate_backup, wishlist_summary, compute_set_status, new_store, normalize_set_number,
+    add_activity, add_event, clean_history, collection_analytics, link_check, collection_rows, collection_series, is_suspicious_price, collection_summary, COLLECTION_COLUMNS, rows_to_csv, validate_backup, wishlist_summary, is_watched, compute_set_status, new_store, normalize_set_number,
     offer_price, record_price, today_iso,
 )
 from .i18n import DEFAULT_LANGUAGE, LANGUAGES, LocalizedError, T, resolve, set_language
@@ -204,7 +204,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def is_watched(self, num: str) -> bool:
         """On the watchlist: every set you don't own, plus owned sets you also watch (e.g. for a second copy)."""
-        return num not in self.store["collection"] or bool(self.store["sets"].get(num, {}).get("watch"))
+        return is_watched(self.store, num)
 
     def watched_sets(self) -> list[str]:
         return [n for n in self.store["sets"] if self.is_watched(n)]
@@ -1511,7 +1511,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if after.get(flag) and not before.get(flag) and key not in self._alerted:
                 self._alerted.add(key)
                 self.hass.bus.async_fire(event, payload)
-                add_event(self.store, flag, {k: payload[k] for k in ("set_number", "name", "price", "retailer")}
+                add_event(self.store, flag, {k: payload[k] for k in ("set_number", "name", "price", "retailer", "url")}
                           | {"discount": payload["discount"]})
         if before.get("best_price") != after.get("best_price") or any(
                 before.get(k) != after.get(k) for k in ("is_all_time_low", "target_hit", "retiring_soon", "deal_score")):
@@ -1522,10 +1522,12 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                       subtheme: str | None = None, rrp: float | None = None, pieces: int | None = None, target_price: float | None = None,
                       owned: dict | None = None, discover: bool = True) -> str:
         num = normalize_set_number(set_number)
-        if owned is None and num not in self.store["sets"] and (limit := self.watch_limit) is not None \
+        if owned is None and not (num in self.store["sets"] and self.is_watched(num)) and (limit := self.watch_limit) is not None \
                 and len(self.watched_sets()) >= limit:
             raise LocalizedError("The watchlist is full ({n} sets): remove a set or move one to your collection first.", n=limit)
         s = self.store["sets"].setdefault(num, {"set_number": num})
+        if owned is None and s.get("watch") is False:
+            s.pop("watch")                                    # added to the watchlist again
         known = catalog.apply(num, s, self.store["offers"].setdefault(num, {}))   # built-in catalogue first
         if known and catalog.complete(s):
             meta, source = {}, "LEGO.com"                     # nothing to look up online
@@ -1625,6 +1627,9 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for key, value in fields.items():
             typ = self.SET_FIELDS.get(key) or self.COLL_FIELDS.get(key)
             if typ is None:
+                continue
+            if key == "watch" and value is False:
+                clean_set["watch"] = False                   # off the watchlist (also a set you don't own)
                 continue
             if value in ("", None) or (value == 0 and key in self.CLEARABLE):
                 if key in self.CLEARABLE:
