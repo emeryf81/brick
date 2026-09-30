@@ -869,8 +869,9 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if is_search_url(url):
                 search_page = url if url.startswith("http") else None
             else:
-                self.set_offer(num, retailer, url)            # a product page or ASIN: that is the link
-        if not (offers.get(retailer) or {}).get("url"):
+                # a product page or ASIN is the link; the same page keeps its history, a manual price stays
+                self.update_offer(num, retailer, url=url)
+        if search_page or not (offers.get(retailer) or {}).get("url"):
             url = await self._discover(retailer, num, force=True, url=search_page)
             rejected = set(self.store.setdefault("rejected", {}).get(num, []))
             if not url or url_key(retailer, url) in rejected:
@@ -879,7 +880,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.log("warning", "discover", reason, set_number=num, retailer=retailer, url=url, source="panel")
                 self.push_update()
                 return {"ok": False, "found": False, "error": reason}
-            offers[retailer] = {"url": url, "history": [], "found": time.time()}
+            self._set_discovered(offers, retailer, url)
             if retailer == "bol" and num in self._bol_found:
                 offers[retailer]["ean"] = self._bol_found[num]["ean"]
             found = True
@@ -1395,6 +1396,20 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.push_update()
 
     _UNSET: Any = object()
+
+    @staticmethod
+    def _set_discovered(offers: dict[str, Any], retailer: str, url: str) -> None:
+        """A link found by searching (not chosen by hand): the same page keeps its history, a manual
+        price always stays; a hand-set confirmation or an earlier link verdict no longer applies."""
+        old = offers.get(retailer) or {}
+        if old.get("url") and url_key(retailer, old["url"]) == url_key(retailer, url):
+            o = old
+            o["url"] = url
+        else:
+            o = offers[retailer] = {"url": url, "history": [], "found": time.time(),
+                                    **({"manual_price": old["manual_price"]} if old.get("manual_price") else {})}
+        for key in ("manual_url", "link_status", "link_reason", "error"):
+            o.pop(key, None)
 
     def update_offer(self, set_number: str, retailer: str, url: Any = _UNSET, manual_price: Any = _UNSET) -> None:
         """Manual link / manual price for one shop. Manual always wins over automatic and is never

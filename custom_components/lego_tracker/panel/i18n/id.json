@@ -299,6 +299,7 @@
 "Invalid list of rules (max 50).": "Daftar aturan tidak valid (maks 50).",
 "Invalid price": "Harga tidak valid",
 "Invalid price.": "Harga tidak valid.",
+"Invalid priority filter.": "Filter prioritas tidak valid.",
 "Invalid set {number} in the backup.": "Set tidak valid {number} di cadangan.",
 "Job": "Tugas",
 "Job finished (refresh, link search…)": "Tugas selesai (penyegaran, pencarian tautan…)",

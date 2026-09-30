@@ -41,7 +41,7 @@ def select_sets(store: dict[str, Any], f: dict[str, Any], is_watched: Callable[[
             continue
         if f.get("condition") and (coll is None or (coll.get("condition") or "Unknown") != f["condition"]):
             continue
-        if f.get("priority") and int(s.get("priority") or 0) != int(f["priority"]):
+        if f.get("priority") and int(s.get("priority") or 0) != int(float(f["priority"])):   # validated by the websocket
             continue
         if f.get("retiring") and not retiring(s):
             continue
