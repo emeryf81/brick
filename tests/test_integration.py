@@ -1,5 +1,6 @@
 """Smoke tests against a real Home Assistant core (needs pytest-homeassistant-custom-component)."""
 import time
+import copy
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -8,7 +9,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.lego_tracker.const import DOMAIN
+from custom_components.lego_tracker.const import DOMAIN, MAX_HISTORY
 from custom_components.lego_tracker.parsers import Parsed
 
 CSV = "Number;Name;Theme;Qty;Paid;Value\n10281-1;Bonsai;Botanicals;1;40;50\n42143;Ferrari;Technic;1;350;400\n"
@@ -179,6 +180,41 @@ async def test_bulk_target_notify_export_and_backup(hass: HomeAssistant, entry, 
     assert out["sets"] == 3
     with pytest.raises(ServiceValidationError):
         await hass.services.async_call(DOMAIN, "import_data", {"data": {"bogus": 1}}, blocking=True, return_response=True)
+
+
+@pytest.mark.parametrize("merge", [False, True])
+async def test_backup_history_validation_is_atomic(hass: HomeAssistant, entry, merge):
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    coord = hass.data[DOMAIN][entry.entry_id]
+    before = copy.deepcopy(coord.store)
+    for history in ([[i, 50] for i in range(MAX_HISTORY + 1)], [[2, 50], [1, 40]]):
+        data = {"sets": {"10281": {}}, "offers": {"10281": {"bol": {"history": history}}}}
+        with patch.object(coord, "push_update") as push:
+            with pytest.raises(ServiceValidationError, match="invalid price history"):
+                await hass.services.async_call(DOMAIN, "import_data", {"data": data, "merge": merge}, blocking=True)
+            push.assert_not_called()
+        assert coord.store == before
+
+
+@pytest.mark.parametrize("merge", [False, True])
+async def test_backup_history_limit_and_overview(hass: HomeAssistant, entry, hass_ws_client, merge):
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    history = [[1_700_000_000 + i, 50 + i % 2] for i in range(MAX_HISTORY)]
+    data = {"sets": {"10281": {"set_number": "10281"}},
+            "offers": {"10281": {"bol": {"history": history, "available": True, "last_price": 51}}}}
+    await hass.services.async_call(DOMAIN, "import_data", {"data": data, "merge": merge}, blocking=True)
+    coord = hass.data[DOMAIN][entry.entry_id]
+    assert coord.store["offers"]["10281"]["bol"]["history"] == history
+    assert coord.store["offers"]["10281"]["bol"]["history"] is not history
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/overview"})
+    card = (await ws.receive_json())["result"]["sets"][0]
+    assert card["all_time_low"] == 50
+    assert card["spark"] == [p for _, p in history][-60:]
+    await ws.send_json({"id": 2, "type": "lego_tracker/set", "set_number": "10281"})
+    assert (await ws.receive_json())["result"]["history"]["bol"] == history
 
 
 async def test_diagnostics_and_health_sensor(hass: HomeAssistant, entry, no_network):
@@ -1181,6 +1217,28 @@ async def test_relay_fetches_comparison_pages(hass: HomeAssistant, entry, no_net
     # only pages of comparison sites for tracked sets
     r = await (await client.post("/api/lego_tracker/relay", json={"results": [{**it, "url": "https://evil.example/", "status": 200, "html": ""}]})).json()
     assert r["rejected"]
+
+
+@pytest.mark.parametrize("source,url", [
+    ("shoparize", "https://www.shoparize.com/be/q?q=lego+60454"),
+    ("channable", "https://shopping.channable.com/?search=lego+60454"),
+    ("producthero", "https://shopping.producthero.com/nl/product/123"),
+])
+async def test_relay_comparison_page_with_many_priceless_links(hass: HomeAssistant, entry, no_network, hass_client, source, url):
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare": True, "compare_sources": [source]})
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "60454"}, blocking=True)
+    page = '<div>' + '<a href="https://noise.example/item">LEGO 60454</a>' * 2000 + '</div>'
+    page += '<div><a href="https://www.dreamland.be/lego-60454">LEGO 60454</a><b>€ 27,99</b><span class="shop">Dreamland</span></div>'
+    client = await hass_client()
+    response = await client.post("/api/lego_tracker/relay", json={"results": [{
+        "kind": "page", "source": source, "set_number": "60454", "url": url, "status": 200, "html": page,
+    }]})
+    assert response.status == 200
+    result = await response.json()
+    assert result["ok"] == 1 and not result["rejected"]
+    shops = c.store["compare"][source]["60454"]["shops"]
+    assert [(shop["retailer"], shop["price"]) for shop in shops] == [("dreamland_be", 27.99)]
 
 
 async def test_find_uses_pasted_search_page_and_says_why(hass: HomeAssistant, entry, no_network):

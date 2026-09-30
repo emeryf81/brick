@@ -1789,7 +1789,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return {"version": 1, "exported": today_iso(), **copy.deepcopy(self.store)}
 
     def import_backup(self, data: Any, merge: bool = False) -> dict[str, int]:
-        clean = validate_backup(copy.deepcopy(data))
+        clean = copy.deepcopy(validate_backup(data))
         if merge:
             for num, s in clean["sets"].items():
                 self.store["sets"].setdefault(num, s)

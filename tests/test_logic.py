@@ -40,6 +40,37 @@ def test_history_dedupes_and_overwrites_same_day():
     assert o["available"] is False and o["error"] == "blocked"
 
 
+def test_combined_history_forward_fill_and_duplicate_timestamps():
+    offers = {
+        "a": {"history": [[1, 50], [3, 20], [3, 60], [5, 10], [6, 50]]},
+        "b": {"history": [[2, 40], [3, 30], [4, 70], [6, 80]], "available": False},
+        "empty": {},
+        "suspect": {"history": [[0, 1]], "link_status": "suspect"},
+        "manual": {"history": [[7, 45]], "link_status": "suspect", "manual_price": {"price": 99}},
+    }
+    assert models.combined_history(offers) == [
+        [1, 50], [2, 40], [3, 30], [4, 60], [5, 10], [6, 50], [7, 45],
+    ]
+    assert models.combined_history({}) == []
+    assert models.combined_history({"empty": {}, "suspect": offers["suspect"]}) == []
+
+
+@pytest.mark.parametrize("shops,points", [(1, 8000), (64, 64)])
+def test_combined_history_does_not_rescan_observations(shops, points):
+    class CountingHistory(list):
+        visits = 0
+
+        def __iter__(self):
+            for observation in super().__iter__():
+                type(self).visits += 1
+                yield observation
+
+    offers = {str(i): {"history": CountingHistory([[j * shops + i, 50] for j in range(points)])}
+              for i in range(shops)}
+    assert models.combined_history(offers) == [[t, 50] for t in range(shops * points)]
+    assert CountingHistory.visits <= 2 * shops * points
+
+
 def test_all_time_low_and_discount():
     now = time.time()
     offers = {"bol": _offer([100, 90, 80, 70], now=now)}
@@ -336,6 +367,22 @@ def test_backup_validation_rejects_bad_offers():
         models.validate_backup(base)
     with pytest.raises(ValueError, match="unknown set"):
         models.validate_backup({"sets": {}, "offers": {"1": {}}})
+
+
+@pytest.mark.parametrize("history", [
+    [[i, 50] for i in range(models.MAX_HISTORY + 1)],
+    [[2, 50], [1, 40]], [[float("nan"), 50]], [[1, float("inf")]],
+    [[float("-inf"), 50]], [[True, 50]], [[1, False]],
+])
+def test_backup_validation_rejects_unsafe_histories(history):
+    with pytest.raises(ValueError, match="invalid price history"):
+        models.validate_backup({"sets": {"10281": {}}, "offers": {"10281": {"bol": {"history": history}}}})
+
+
+def test_backup_validation_accepts_history_limit_and_duplicate_timestamps():
+    history = [[i // 2, 50] for i in range(models.MAX_HISTORY)]
+    data = {"sets": {"10281": {}}, "offers": {"10281": {"bol": {"history": history}}}}
+    assert models.validate_backup(data)["offers"]["10281"]["bol"]["history"] == history
 
 
 # ---------------------------------------------------------------- 0.6.0

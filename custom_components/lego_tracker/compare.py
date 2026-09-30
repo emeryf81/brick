@@ -156,26 +156,47 @@ def _dom(page: str) -> _Node:
     return b.root
 
 
-def _prices(node: _Node) -> list[float]:
-    """Euro prices in a block, skipping struck-through / 'old' / RRP / shipping prices."""
-    out: list[float] = []
-    stack: list[tuple[Any, bool]] = [(node, False)]
+def _offer_summary(node: _Node, host: str, cache: dict[_Node, tuple[set[float], int]]) -> tuple[set[float], int]:
+    """Cache subtree prices and outgoing-link counts once per extraction.
+
+    Four distinct prices or three outgoing links already disqualify a row, so
+    summaries stay constant-sized even for deeply nested or price-heavy pages.
+    Prices are relative to each node: an old-price parent suppresses its children
+    when merged, without changing their independently usable summaries.
+    """
+    stack = [(node, False)]
     while stack:
-        n, old = stack.pop()
-        if isinstance(n, str):
-            if not old:
-                for m in PRICE_RE.finditer(n):
+        n, ready = stack.pop()
+        if n in cache:
+            continue
+        if not ready:
+            stack.append((n, True))
+            stack.extend((c, False) for c in reversed(n.children) if isinstance(c, _Node) and c not in cache)
+            continue
+        prices: set[float] = set()
+        links = int(_out(n, host))
+        old = n.tag in ("script", "style", "s", "del", "strike") or bool(
+            OLD_PRICE.search(n.attrs.get("class", "") + " " + n.attrs.get("data-test", "")))
+        for child in n.children:
+            if isinstance(child, _Node):
+                child_prices, child_links = cache[child]
+                links = min(3, links + child_links)
+                if not old:
+                    for price in child_prices:
+                        if len(prices) == 4:
+                            break
+                        prices.add(price)
+            elif not old and len(prices) < 4:
+                for m in PRICE_RE.finditer(child):
                     raw = (m.group(1) or m.group(2) or m.group(3) or "").replace(" ", "")
                     if raw.endswith(",-") or raw.endswith(".-"):
                         raw = raw[:-2]
                     if (p := parse_price(raw)) is not None and 0.5 <= p <= 10000:
-                        out.append(p)
-            continue
-        if n.tag in ("script", "style"):
-            continue
-        is_old = old or n.tag in ("s", "del", "strike") or bool(OLD_PRICE.search(n.attrs.get("class", "") + " " + n.attrs.get("data-test", "")))
-        stack.extend((c, is_old) for c in reversed(n.children))
-    return out
+                        prices.add(p)
+                        if len(prices) == 4:
+                            break
+        cache[n] = prices, links
+    return cache[node]
 
 
 def shop_retailer(name: str, href: str | None, domains: dict[str, str]) -> str | None:
@@ -379,18 +400,21 @@ def _dom_offers(root: _Node, page_url: str, search: bool) -> list[dict[str, Any]
     host = urlparse(page_url).netloc.lower()
     out: list[dict[str, Any]] = []
     seen: set[int] = set()
+    summaries: dict[_Node, tuple[set[float], int]] = {}
     for link in (n for n in root.iter() if n.tag == "a" and n.attrs.get("href")):
         href = link.attrs["href"]
         if not search and not _out(link, host):
             continue
         row, depth = link, 0
-        while row.parent is not None and depth < 6 and not _prices(row):
+        while row.parent is not None and depth < 6 and not _offer_summary(row, host, summaries)[0]:
             row, depth = row.parent, depth + 1
-        prices = _prices(row) if row.tag not in ("root", "body", "html", "main") else []
+        if row.tag in ("root", "body", "html", "main"):
+            continue
+        prices, links = _offer_summary(row, host, summaries)
         if not prices or id(row) in seen:
             continue
         # a block with several offers is a whole list, not one offer
-        if sum(1 for n in row.iter() if _out(n, host)) > 2 or len(set(prices)) > 3:
+        if links > 2 or len(prices) > 3:
             continue
         seen.add(id(row))
         text = row.all_text()

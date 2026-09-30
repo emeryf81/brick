@@ -753,6 +753,7 @@ class LegoTrackerPanel extends HTMLElement {
         <div class="t">${esc(e.set_number)} · ${DATE(e.ts, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div></div></li>`;
     };
     return `<div class="panel"><h3>🕒 ${t("Recent deals")}</h3>${ev.length ? `<ul class="tl tlx">${ev.slice(0, 12).map(row).join("")}</ul>` : `<p>${t("Nothing reported yet. New lowest prices, high discounts and reached target prices appear here.")}</p>`}</div>`;
+    return `<div class="panel"><h3>🕒 ${t("Recent deals")}</h3>${ev.length ? `<ul class="tl">${ev.slice(0, 12).map((e) => { const [i, lbl] = ic[e.kind] || ["•", e.kind]; return `<li data-set="${esc(e.set_number)}"><span class="ic">${i}</span><div><b>${esc(e.name || e.set_number)}</b><div>${esc(t(lbl))} · ${EUR(e.price)}${e.retailer ? ` · ${esc(this.state.data.retailers[e.retailer] || e.retailer)}` : ""}</div><div class="t">${DATE(e.ts, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div></div></li>`; }).join("")}</ul>` : `<p>${t("Nothing reported yet. New lowest prices, high discounts and reached target prices appear here.")}</p>`}</div>`;
   }
   vWatch() {
     const list = this.sets.filter((s) => s.watched);
