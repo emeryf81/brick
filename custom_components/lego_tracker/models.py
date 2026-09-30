@@ -527,12 +527,19 @@ def today_iso(now: float | None = None) -> str:
     return date.fromtimestamp(now or time.time()).isoformat()
 
 
+def is_watched(store: dict[str, Any], num: str) -> bool:
+    """On the watchlist: every set you don't own, plus owned sets you also watch (e.g. for a second copy);
+    watch = False takes any set off it."""
+    w = store["sets"].get(num, {}).get("watch")
+    return bool(w) if w is not None else num not in store["collection"]
+
+
 def wishlist_summary(store: dict[str, Any], statuses: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    """Sets that are tracked but not owned: what they cost now vs. list price."""
+    """The watchlist (sets not owned, and owned sets you put on it): what they cost now vs. list price."""
     cost = rrp = 0.0
     priced = count = 0
     for num, s in store["sets"].items():
-        if num in store["collection"]:
+        if not is_watched(store, num):
             continue
         count += 1
         price = statuses.get(num, {}).get("best_price")

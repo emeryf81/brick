@@ -526,6 +526,38 @@ def _finish(info: dict[str, Any], offers: list[dict[str, Any]], page: str, num: 
                   rrp=rrp, ean=info.get("ean"), shops=sorted(shops.values(), key=lambda s: s["price"]))
 
 
+def _producthero(page: str, num: str, domains: dict[str, str], page_url: str) -> Result | None:
+    """Producthero renders with Inertia: the product and its shops sit in <script data-page="app">.
+    Per shop the sale price counts when there is one (0 = none); only euro offers."""
+    m = re.search(r'<script[^>]*data-page=["\']app["\'][^>]*>(.*?)</script>', page, re.S | re.I)
+    if not m:
+        return None
+    try:
+        data = ((json.loads(m.group(1)).get("props") or {}).get("product") or {}).get("data") or {}
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(data, dict) or not data.get("shops"):
+        return None
+    title = str(data.get("title") or "")
+    if title and not has_number(title, num) and not any(has_number(str(x.get("product_title") or ""), num)
+                                                        for x in data["shops"] if isinstance(x, dict)):
+        return Result("missing")                       # another product
+    offers = []
+    for x in data["shops"]:
+        if not isinstance(x, dict) or (x.get("currency_code_google") or "EUR") != "EUR":
+            continue
+        base, sale = _num(x.get("product_price")), _num(x.get("product_sale_price"))
+        price = sale if sale and (base is None or sale <= base) else base
+        if price is None:
+            continue
+        offers.append({"name": str(x.get("title") or x.get("shop_alias") or "?").strip(), "price": price,
+                       "url": x.get("checkout_link"), "title": x.get("product_title") or title})
+    images = data.get("images") or []
+    info = {"name": title or None, "image": images[0] if images and isinstance(images[0], str) else None,
+            "ean": str(data["eancode"]).strip().lstrip("0").zfill(13) if str(data.get("eancode") or "").strip().isdigit() else None}
+    return _finish(info, offers, page, num, domains, False, page_url)
+
+
 def parse(source: str, page: str, num: str, page_url: str, domains: dict[str, str], step: int = 0) -> Result:
     """What one fetched page of a source gives: offers, a URL to follow, or 'not there'."""
     if source == "brickeconomy":
@@ -549,6 +581,8 @@ def parse(source: str, page: str, num: str, page_url: str, domains: dict[str, st
         info, offers = _collect(page, page_url, False, root)
         return _finish(info, offers, page, num, domains, False, page_url)
     if source == "producthero":
+        if (res := _producthero(page, num, domains, page_url)) is not None:
+            return res
         head = _h1(page) + " " + _page_title(page)
         if is_accessory(head):
             return Result("missing", note="only accessories")

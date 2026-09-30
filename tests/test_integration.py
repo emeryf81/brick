@@ -1432,3 +1432,45 @@ async def test_logbook_export_rejects_bad_priority(hass: HomeAssistant, entry, n
         assert not r["success"] and r["error"]["code"] == "invalid", prio
     await ws.send_json({"id": 9, "type": "lego_tracker/logs/export", "parts": ["history"], "filters": {"priority": "2.0"}})
     assert (await ws.receive_json())["success"]
+
+
+def test_producthero_reads_inertia_shop_prices():
+    import json as _json
+
+    from custom_components.lego_tracker import compare
+
+    def shop(name, price, sale, cur="EUR", title="LEGO Icons Chrysant 10368"):
+        return {"title": name, "product_price": price, "product_sale_price": sale, "currency_code_google": cur,
+                "product_title": title, "checkout_link": f"https://shopping.producthero.com/nl/clickout?stitle={name}"}
+    data = {"component": "Shopping/Product", "props": {"product": {"data": {
+        "eancode": "05702017719689", "title": "LEGO Botanical Collection Chrysant 10368", "images": ["https://img/x.jpg"],
+        "shops": [shop("coolblue.be", 27.99, 0), shop("Wehkamp", 29.99, 23.99), shop("carturesti.ro", 159.99, 0, "RON"),
+                  shop("lampjes.nl", 19.99, 0, title="LED verlichting voor LEGO 10368")]}}}}
+    page = ('<html><title>Producthero Shopping</title><div id="app"></div>'
+            f'<script data-page="app" type="application/json">{_json.dumps(data)}</script></html>')
+    r = compare.parse("producthero", page, "10368", "https://shopping.producthero.com/nl/product/05702017719689",
+                      {"coolblue": "coolblue.be"})
+    assert r.kind == "offers" and r.ean == "5702017719689" and "Chrysant" in r.name
+    assert [(s["name"], s["price"]) for s in r.shops] == [("Wehkamp", 23.99), ("coolblue.be", 27.99)]   # sale price; no RON, no LED kit
+    assert r.shops[1]["retailer"] == "coolblue"
+    other = page.replace("10368", "10369")
+    assert compare.parse("producthero", other, "10368", "https://shopping.producthero.com/nl/product/1", {}).kind == "missing"
+
+
+async def test_watch_on_and_off_for_owned_and_not_owned_sets(hass: HomeAssistant, entry, no_network):
+    c = await _setup(hass, entry)
+    for n in ("10281", "10311"):
+        await hass.services.async_call(DOMAIN, "add_set", {"set_number": n}, blocking=True)
+    c.update_set("10311", {"owned": True})
+    assert c.is_watched("10281") and not c.is_watched("10311")
+    assert c.compute()["wishlist"]["sets"] == 1
+    c.update_set("10311", {"watch": True})               # owned, and on the watchlist too: counted
+    assert c.is_watched("10311") and c.compute()["wishlist"]["sets"] == 2
+    c.update_set("10281", {"watch": False})              # −W on a set you don't own
+    assert not c.is_watched("10281") and c.compute()["wishlist"]["sets"] == 1
+    assert "10281" not in c.watched_sets()
+    c.update_set("10281", {"watch": None})               # back to the default: not owned = watched
+    assert c.is_watched("10281")
+    c.update_set("10281", {"watch": False})
+    await c.add_set("10281", discover=False)             # added to the watchlist again
+    assert c.is_watched("10281")
