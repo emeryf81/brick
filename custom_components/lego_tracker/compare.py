@@ -22,11 +22,10 @@ from typing import Any
 from urllib.parse import quote_plus, urljoin, urlparse
 
 from .models import parse_price
-from .parsers import ACCESSORY_RE, KNOCKOFF_RE
+from .parsers import KNOCKOFF_RE, accessory_word
 
 # id -> (display name, host); order = order in which the sources are tried
 SOURCES: dict[str, tuple[str, str]] = {
-    "brickwatch": ("Brickwatch", "www.brickwatch.net"),
     "kieskeurig": ("Kieskeurig", "www.kieskeurig.be"),
     "shoparize": ("Shoparize", "www.shoparize.com"),
     "channable": ("Channable Shopping", "shopping.channable.com"),
@@ -34,12 +33,10 @@ SOURCES: dict[str, tuple[str, str]] = {
     "brickeconomy": ("BrickEconomy", "www.brickeconomy.com"),     # market value + retirement, not shop prices
 }
 FRESH_HOURS = {"brickeconomy": 24}          # market values move slowly: once a day is enough
-HOSTS = {"www.brickeconomy.com", "www.brickwatch.net", "www.kieskeurig.be", "www.kieskeurig.nl", "www.shoparize.com",
+HOSTS = {"www.brickeconomy.com", "www.kieskeurig.be", "www.kieskeurig.nl", "www.shoparize.com",
          "shopping.channable.com", "shopping.producthero.com"}
 MAX_STEPS = 3
 
-BW_LOCALES = {"nl-be": "nl-BE", "fr-be": "fr-BE", "en-be": "en-BE", "nl-nl": "nl-NL", "en-nl": "en-NL", "fr-fr": "fr-FR",
-              "en-gb": "en-GB", "de-de": "de-DE", "en-de": "en-DE"}
 PRICE_RE = re.compile(r"(?:€\s*(\d{1,4}(?:[.\s]\d{3})*(?:[.,]\d{1,2})?|\d{1,4}[.,]-)|(\d{1,4}(?:[.\s]\d{3})*(?:[.,]\d{1,2})?)\s*€"
                       r"|EUR\s*(\d{1,4}(?:[.,]\d{1,2})?))")
 # class words of struck-through / old / advisory / shipping prices (whole words: 'font-bold' is not 'old')
@@ -47,8 +44,6 @@ OLD_PRICE = re.compile(r"(?:^|[\s_:-])(?:old|strike|strikethrough|line-through|w
                        r"original|crossed|uvp|shipping|verzend|verzendkosten|delivery)(?:$|[\s_:-])", re.I)
 RRP_RE = re.compile(r"(?:adviesprijs|winkelprijs|verkoopprijs lego|rrp|prix conseillé|prix public|uvp|retail price)[^€\d]{0,60}"
                     r"(?:€\s*([\d.,]+)|([\d.,]+)\s*€)", re.I)
-# not the set itself: LED / lighting kits and other accessories, knock-offs
-NOT_THE_SET = re.compile(r"\bLEDs?\b|led[- ]?(?:verlichting|licht|light|beleuchtung|set|kit)", re.I)
 # shop name / domain -> our retailer id (custom shops are matched by their domain)
 SHOP_ALIASES = (
     ("amazon.com.be", "amazon_be"), ("amazon.be", "amazon_be"), ("amazon be", "amazon_be"), ("amazon belgi", "amazon_be"),
@@ -61,7 +56,7 @@ SHOP_ALIASES = (
 
 def is_accessory(text: str | None) -> bool:
     """True when a title / description is not the LEGO set itself (e.g. an LED kit for that set)."""
-    return bool(text and (NOT_THE_SET.search(text) or ACCESSORY_RE.search(text) or KNOCKOFF_RE.search(text)))
+    return bool(text and (accessory_word(text) or KNOCKOFF_RE.search(text)))
 
 
 def has_number(text: str | None, num: str) -> bool:
@@ -79,20 +74,10 @@ def _country(lego_locale: str | None) -> tuple[str, str]:
     return parts[0], (parts[1] if len(parts) > 1 else "be").upper()
 
 
-def locale_for(lego_locale: str | None) -> str:
-    return BW_LOCALES.get((lego_locale or "nl-be").lower(), "nl-BE")
-
-
-def brickwatch_url(num: str, lego_locale: str | None = None) -> str:
-    return f"https://www.brickwatch.net/{locale_for(lego_locale)}/set/{num}/"
-
-
 def first_url(source: str, num: str, lego_locale: str | None = None, ean: str | None = None) -> str | None:
     """Where a source starts for a set; None when the source does not cover this country (or needs an EAN)."""
     lang, cc = _country(lego_locale)
     q = quote_plus(f"lego {num}")
-    if source == "brickwatch":
-        return brickwatch_url(num, lego_locale)
     if source == "kieskeurig":
         host = {"BE": "www.kieskeurig.be", "NL": "www.kieskeurig.nl"}.get(cc)
         return f"https://{host}/search?q={q}" if host else None
@@ -412,6 +397,8 @@ def _dom_offers(root: _Node, page_url: str, search: bool) -> list[dict[str, Any]
         name = _shop_name(row, link)
         if not search and CTA_RE.search(name):
             continue                                  # "Naar goedkoopste shop": a button, not a shop
+        if is_accessory(text) or is_accessory(link.attrs.get("title")):
+            continue                                  # an LED kit / display case offer: take the next one
         out.append({"name": name, "price": min(prices), "url": urljoin(page_url, htmllib.unescape(href)),
                     "title": text[:300] if search else None})
     return out
@@ -521,27 +508,6 @@ def parse(source: str, page: str, num: str, page_url: str, domains: dict[str, st
         return parse_brickeconomy(page, num)
     root = _dom(page)
     path = urlparse(page_url).path
-    if source == "brickwatch":
-        search = "/search" in path or "q=" in page_url
-        head = " ".join(filter(None, (_h1(page), _page_title(page), _meta(page, "og:title"), _meta(page, "description"),
-                                      _meta(page, "og:description"))))
-        info, offers = _jsonld(page)
-        head += " " + str(info.get("name") or "") + " " + str(info.get("description") or "")
-        if search or is_accessory(head):
-            # an LED kit (or other accessory) page for this number, or a search page: look further on the site
-            links = _links(root, page_url, r"/set/", num)
-            if links and step < MAX_STEPS - 1:
-                return Result("follow", url=links[0], note="accessory page" if not search else None)
-            if not search and step < MAX_STEPS - 1:
-                loc = path.strip("/").split("/")[0] or "nl-BE"
-                return Result("follow", url=f"https://www.brickwatch.net/{loc}/search/?q={quote_plus(num)}", note="accessory page")
-            return Result("missing", note="only accessories")
-        if not offers:
-            offers = _embedded(page) or _dom_offers(root, page_url, False)
-        res = _finish(info, offers, page, num, domains, False, page_url)
-        if not res.shops and not has_number(head, num):
-            return Result("missing")                 # e.g. the home page after a redirect
-        return res
     if source == "kieskeurig":
         if "/product/" not in path:
             links = _links(root, page_url, r"/product/\d+", num)

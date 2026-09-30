@@ -19,7 +19,7 @@ from homeassistant.util import dt as dt_util
 
 from .client import Fetcher, lookup_metadata
 from .const import (
-    CONF_BRICKWATCH, CONF_COMPARE_SOURCES, COMPARE_FRESH_HOURS, COMPARE_MISSING_HOURS, COMPARE_NET_ERRORS, COMPARE_PAUSE_HOURS,
+    CONF_COMPARE, CONF_COMPARE_OLD, CONF_BLOCK_WORDS, CONF_ALLOW_WORDS, CONF_COMPARE_SOURCES, COMPARE_FRESH_HOURS, COMPARE_MISSING_HOURS, COMPARE_NET_ERRORS, COMPARE_PAUSE_HOURS,
     CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET, CONF_BOL_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS,
     CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_LANGUAGE, CONF_REFRESH_MODE, CONF_SPREAD_HOURS, DEFAULT_REFRESH_MODE, DEFAULT_SPREAD_HOURS, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, CONF_CUSTOM_SHOPS, CONF_DIGEST_TIME, CONF_NO_AUTOPAUSE, CONF_SHOP_SEARCH, CONF_VALUE_SOURCE, DEFAULT_DIGEST_TIME, GENERIC_SHOPS, CONF_DISCOUNT_THRESHOLD, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
     DEFAULT_REFRESH_TIMES, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS, DEFAULT_RETAILERS,
@@ -33,11 +33,11 @@ from .models import (
 from .i18n import DEFAULT_LANGUAGE, LANGUAGES, LocalizedError, T, resolve, set_language
 from .notifications import Notifier, default_rules
 from .bol_api import BolApi, BolApiError
-from . import compare
+from . import catalog, compare
 from .shops import all_domains
 from .parsers import Parsed, title_check
 from .shops import SEARCH, valid_search
-from .parsers import ACCESSORY_RE, KNOCKOFF_RE, clean_title, normalize_url, retailer_from_url, url_key
+from .parsers import BUILTIN_WORDS, KNOCKOFF_RE, accessory_word, set_custom_words, clean_title, normalize_url, retailer_from_url, url_key
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -95,12 +95,15 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return resolve(self.opt(self.entry, CONF_LANGUAGE, DEFAULT_LANGUAGE), self.hass.config.language)
 
     async def async_load(self) -> None:
+        await self.hass.async_add_executor_job(catalog.load)
         set_language(self.language)
+        set_custom_words(self.opt(self.entry, CONF_BLOCK_WORDS, []), self.opt(self.entry, CONF_ALLOW_WORDS, []))
         await self.fetcher.async_setup()
         if (data := await self._store.async_load()):
             self.store = {**new_store(), **data}
-        if "brickwatch" in self.store:                         # 0.9.4: Brickwatch was the only comparison site
-            self.store.setdefault("compare", {}).setdefault("brickwatch", self.store.pop("brickwatch") or {})
+        self._drop_old_source_links()
+        for num, st in self.store["sets"].items():            # fill gaps from the built-in catalogue (no network)
+            catalog.apply(num, st, self.store["offers"].setdefault(num, {}))
         from .csv_import import LEGACY_CONDITIONS
         for e in self.store["collection"].values():
             if e.get("condition") in LEGACY_CONDITIONS:
@@ -184,7 +187,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     # ------------------------------------------------------------ spread checks
     def _spread_candidates(self) -> list[str]:
-        if self.brickwatch_enabled:          # Brickwatch can also find prices for sets without links
+        if self.compare_enabled:          # comparison sites can also find prices for sets without links
             return list(self.store["sets"])
         live = set(self._live_retailers(False))
         return [n for n, offers in self.store["offers"].items() if n in self.store["sets"]
@@ -192,7 +195,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def spread_interval(self) -> float:
         """Seconds between two set checks: cycle / number of sets (each set once per cycle)."""
-        n = len(self.store["sets"]) if self.brickwatch_enabled else len([n for n, o in self.store["offers"].items() if n in self.store["sets"] and o])
+        n = len(self.store["sets"]) if self.compare_enabled else len([n for n, o in self.store["offers"].items() if n in self.store["sets"] and o])
         return max(20.0, self.spread_hours * 3600 / max(1, n))
 
     def start_spread(self, delay: float = 60) -> None:
@@ -408,9 +411,30 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     # ------------------------------------------------------------ price-comparison sites (hidden option)
     @property
-    def brickwatch_enabled(self) -> bool:
-        """The hidden option: price-comparison sites (Brickwatch and others) as extra price sources."""
-        return bool(self.opt(self.entry, CONF_BRICKWATCH, False))
+    def compare_enabled(self) -> bool:
+        """The hidden option: price-comparison sites as extra price sources."""
+        return bool(self.opt(self.entry, CONF_COMPARE, self.opt(self.entry, CONF_COMPARE_OLD, False)))
+
+    OLD_SOURCE_HOSTS = ("brickwatch.net",)       # sources that were removed: keep their data, drop every link
+
+    def _drop_old_source_links(self) -> None:
+        """Brickwatch was removed in 0.9.10: its prices and history stay, but no link to it remains
+        (shop links that point to comparison pages of it are removed; real shop links stay)."""
+        old = self.store.pop("brickwatch", None)                  # 0.9.4 layout
+        bw = self.store.setdefault("compare", {}).setdefault("brickwatch", old or {}) if old else \
+            (self.store.get("compare") or {}).get("brickwatch")
+        gone = lambda url: bool(url) and any(h in url for h in self.OLD_SOURCE_HOSTS)   # noqa: E731
+        for entry in (bw or {}).values():
+            if gone(entry.get("url")):
+                entry.pop("url", None)
+            for shop in entry.get("shops", []):
+                if gone(shop.get("url")):
+                    shop.pop("url", None)
+        for offers in self.store["offers"].values():
+            for o in offers.values():
+                if gone(o.get("url")):                            # price history stays, the link goes
+                    o.pop("url", None)
+                    o.pop("link_status", None)
 
     @property
     def compare_sources(self) -> list[str]:
@@ -622,7 +646,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 n += 1
         return n
 
-    def start_brickwatch(self, nums: list[str] | None = None) -> dict[str, Any]:
+    def start_compare(self, nums: list[str] | None = None) -> dict[str, Any]:
         """Job: every comparison site for every set. When all sites are paused (e.g. 5 network errors in a row)
         the job stops and continues with the remaining sets an hour later."""
         items = [n for n in (nums or list(self.store["sets"])) if n in self.store["sets"]]
@@ -636,7 +660,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return {"skipped": 1}
             got = await self.compare_refresh(num, refresh=True, sources=live)
             return {"updated": self._compare_apply_prices(num)} if got else {"skipped": 1}
-        return self.start_job("brickwatch", T("Fetching prices from comparison sites"), items, work)
+        return self.start_job("compare", T("Fetching prices from comparison sites"), items, work)
 
     def _compare_retry(self, rest: list[str]) -> None:
         from homeassistant.helpers.event import async_call_later
@@ -649,13 +673,13 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         def _go(_now: Any) -> None:
             self._compare_retry_unsub = None
-            if not self.brickwatch_enabled:
+            if not self.compare_enabled:
                 return
             if self.job_running:
                 self._compare_retry_unsub = async_call_later(self.hass, 600, _go)
                 return
             self._job_source = "auto"
-            self.start_brickwatch(rest)
+            self.start_compare(rest)
         self._compare_retry_unsub = async_call_later(self.hass, wait + 30, _go)
 
     def _live_retailers(self, force: bool) -> list[str]:
@@ -666,7 +690,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # ------------------------------------------------------------------- refresh
     def start_refresh(self, force: bool = False) -> dict[str, Any]:
         live = self._live_retailers(force)
-        nums = list(self.store["sets"]) if self.brickwatch_enabled else [
+        nums = list(self.store["sets"]) if self.compare_enabled else [
             n for n, offers in self.store["offers"].items()
             if n in self.store["sets"] and any(r in live and o.get("url") for r, o in offers.items())]
         paused = [RETAILERS[r][0] for r in self.retailers if r not in live]
@@ -683,7 +707,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         live = retailers if retailers is not None else self._live_retailers(False)
         s = self.store["sets"][num]
         bw_prices: dict[str, dict[str, Any]] = {}
-        if self.brickwatch_enabled:
+        if self.compare_enabled:
             try:
                 await self.compare_refresh(num, force=force)
                 bw_prices = self.compare_prices(num)
@@ -851,7 +875,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     last = o.get("last_ok") or 0
                     if o.get("error") or last < day:
                         items.append((last, {"set_number": num, "retailer": rid, "shop": RETAILERS[rid][0], "url": o["url"]}))
-            if self.brickwatch_enabled:
+            if self.compare_enabled:
                 # comparison sites the server can't reach (paused / errors): the browser fetches the page,
                 # the server reads it with the same parser
                 locale = self.opt(self.entry, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE)
@@ -939,7 +963,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if src in ("user", "import") or (src and src[0].isupper() or src == "brickset.com" or "+" in (src or "")):
             return False
         # names from older versions: replace the ones that look like a shop title
-        return bool(re.search(r"\blego\b", name, re.I) or ACCESSORY_RE.search(name) or KNOCKOFF_RE.search(name)
+        return bool(re.search(r"\blego\b", name, re.I) or accessory_word(name) or KNOCKOFF_RE.search(name)
                     or len(name) > 70)
 
     def needs_enrich(self, num: str) -> bool:
@@ -1069,8 +1093,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "refresh_mode": self.refresh_mode, "spread_hours": self.spread_hours,
             "language": o.get(CONF_LANGUAGE, DEFAULT_LANGUAGE), "languages": LANGUAGES,
             "bol_country": o.get(CONF_BOL_COUNTRY, "auto"), "bol_api": bool(self.bol_api),
-            "browser_relay": bool(o.get(CONF_RELAY, True)), "brickwatch": bool(o.get(CONF_BRICKWATCH, False)),
-            "compare_sources": self.compare_sources, "relay_hours": int(o.get(CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS)),
+            "browser_relay": bool(o.get(CONF_RELAY, True)), "compare": self.compare_enabled,
+            "compare_sources": self.compare_sources,
+            "block_words": list(o.get(CONF_BLOCK_WORDS, [])), "allow_words": list(o.get(CONF_ALLOW_WORDS, [])),
+            "builtin_words": list(BUILTIN_WORDS), "relay_hours": int(o.get(CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS)),
         }
 
     def settings_validate(self, fields: dict[str, Any]) -> dict[str, Any]:
@@ -1091,9 +1117,29 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             num("discount_threshold", 1, 90)
         if "min_history_days" in fields:
             num("min_history_days", 0, 90)
-        for key in ("auto_refresh", "use_impersonation", CONF_RELAY, CONF_BRICKWATCH):
+        for key in ("auto_refresh", "use_impersonation", CONF_RELAY, CONF_COMPARE):
             if key in fields:
                 opts[key] = bool(fields[key])
+        if CONF_COMPARE in fields:
+            opts.pop(CONF_COMPARE_OLD, None)
+        for key in (CONF_BLOCK_WORDS, CONF_ALLOW_WORDS):
+            if key in fields:
+                raw = fields[key]
+                items = re.split(r"[\n,;]+", raw) if isinstance(raw, str) else raw if isinstance(raw, list) else None
+                if items is None:
+                    raise LocalizedError("{field}: not a valid choice", field=key)
+                words: list[str] = []
+                for w in items:
+                    w = re.sub(r"\s+", " ", str(w)).strip()
+                    if not w:
+                        continue
+                    if not 2 <= len(w.rstrip("*")) <= 60 or "*" in w.rstrip("*"):
+                        raise LocalizedError("Word list: “{word}” must be 2 to 60 characters (a * only at the end)", word=w[:60])
+                    if w.lower() not in (x.lower() for x in words):
+                        words.append(w)
+                if len(words) > 300:
+                    raise LocalizedError("Word list: at most 300 words")
+                opts[key] = words
         if CONF_COMPARE_SOURCES in fields:
             sel = fields[CONF_COMPARE_SOURCES]
             if not isinstance(sel, list) or any(src not in compare.SOURCES for src in sel):
@@ -1351,9 +1397,14 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                       owned: dict | None = None, discover: bool = True) -> str:
         num = normalize_set_number(set_number)
         s = self.store["sets"].setdefault(num, {"set_number": num})
-        meta, source = await lookup_metadata(async_get_clientsession(self.hass),
-                                             self.opt(self.entry, CONF_BRICKSET_KEY, ""),
-                                             self.opt(self.entry, CONF_REBRICKABLE_KEY, ""), num)
+        known = catalog.apply(num, s, self.store["offers"].setdefault(num, {}))   # built-in catalogue first
+        if known and catalog.complete(s):
+            meta, source = {}, "LEGO.com"                     # nothing to look up online
+            self.log("info", "enrich", T("set data from the built-in catalogue"), set_number=num, source="catalog")
+        else:
+            meta, source = await lookup_metadata(async_get_clientsession(self.hass),
+                                                 self.opt(self.entry, CONF_BRICKSET_KEY, ""),
+                                                 self.opt(self.entry, CONF_REBRICKABLE_KEY, ""), num)
         if name:
             s["name_source"] = "user"
         elif meta.get("name") and self._name_replaceable(s):
