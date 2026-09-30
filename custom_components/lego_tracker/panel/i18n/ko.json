@@ -547,6 +547,7 @@
 "Show and fix": "보기 및 수정",
 "Show errors": "오류 보기",
 "Show failed checks": "실패한 확인 보기",
+"Show {n} more ({total} left)": "{n}개 더 보기 ({total}개 남음)",
 "Site": "사이트",
 "Size": "크기",
 "Sort": "정렬",

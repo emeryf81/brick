@@ -547,6 +547,7 @@
 "Show and fix": "Anzeigen und beheben",
 "Show errors": "Fehler anzeigen",
 "Show failed checks": "Fehlgeschlagene Prüfungen anzeigen",
+"Show {n} more ({total} left)": "{n} weitere anzeigen (noch {total})",
 "Site": "Seite",
 "Size": "Größe",
 "Sort": "Sortieren",

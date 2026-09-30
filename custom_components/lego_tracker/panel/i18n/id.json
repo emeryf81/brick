@@ -547,6 +547,7 @@
 "Show and fix": "Tampilkan dan perbaiki",
 "Show errors": "Tampilkan kesalahan",
 "Show failed checks": "Tampilkan pemeriksaan gagal",
+"Show {n} more ({total} left)": "Tampilkan {n} lagi ({total} tersisa)",
 "Site": "Situs",
 "Size": "Ukuran",
 "Sort": "Urutkan",

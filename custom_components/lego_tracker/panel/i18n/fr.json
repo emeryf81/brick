@@ -547,6 +547,7 @@
 "Show and fix": "Voir et corriger",
 "Show errors": "Voir les erreurs",
 "Show failed checks": "Voir les contrôles échoués",
+"Show {n} more ({total} left)": "Afficher {n} de plus ({total} restants)",
 "Site": "Site",
 "Size": "Taille",
 "Sort": "Trier",

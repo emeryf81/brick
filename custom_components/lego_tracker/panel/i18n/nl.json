@@ -547,6 +547,7 @@
 "Show and fix": "Tonen en rechtzetten",
 "Show errors": "Fouten tonen",
 "Show failed checks": "Mislukte controles tonen",
+"Show {n} more ({total} left)": "Toon {n} meer (nog {total})",
 "Site": "Site",
 "Size": "Grootte",
 "Sort": "Sorteren",
