@@ -3,20 +3,36 @@
     "step": {
       "user": {
         "title": "LEGO Organizing Tool",
-        "description": "Sebagian besar pengaturan juga tersedia di panel LEGO Organizing Tool pada Kelola → Pengaturan.",
+        "description": "Sebagian besar pengaturan juga ada di panel: Kelola → Pengaturan.",
         "data": {
-          "discount_threshold": "Ambang diskon (%) untuk 'diskon besar'",
-          "retailers": "Toko yang diperiksa",
-          "language": "Bahasa (panel, notifikasi, userscript)",
-          "refresh_mode": "Pemeriksaan harga otomatis",
-          "spread_hours": "Siklus tersebar: setiap set sekali tiap … jam",
-          "refresh_times": "Waktu tetap (hanya untuk 'Pada waktu tetap', mis. 07:30, 19:30)",
-          "digest_time": "Waktu ringkasan harian",
-          "min_history_days": "Minimal hari riwayat sebelum 'harga terendah' dihitung",
-          "use_impersonation": "Tiru browser Chrome (curl_cffi; jauh lebih sedikit pemblokiran)",
-          "notify_service": "Layanan notify untuk promo (opsional; lebih baik: tab Notifikasi di panel)",
-          "brickset_api_key": "Kunci API Brickset (opsional, gratis)",
-          "rebrickable_api_key": "Kunci API Rebrickable (opsional, gratis)"
+          "discount_threshold": "Ambang diskon",
+          "retailers": "Toko",
+          "language": "Bahasa",
+          "refresh_mode": "Cek harga",
+          "spread_hours": "Siklus",
+          "watch_cycle_min": "Siklus daftar pantau",
+          "refresh_times": "Waktu tetap",
+          "digest_time": "Ringkasan harian",
+          "min_history_days": "Riwayat 'terendah'",
+          "use_impersonation": "Tiru Chrome",
+          "notify_service": "Layanan notify",
+          "brickset_api_key": "Kunci Brickset",
+          "rebrickable_api_key": "Kunci Rebrickable"
+        },
+        "data_description": {
+          "discount_threshold": "Mulai diskon ini sebuah set dianggap penawaran.",
+          "retailers": "Toko yang dicek.",
+          "language": "Panel, notifikasi, dan userscript.",
+          "refresh_mode": "Tersebar: setiap set sekali per siklus, ringan bagi toko.",
+          "spread_hours": "Setiap set sekali tiap … jam.",
+          "watch_cycle_min": "Set di daftar pantau boleh dicek lebih sering.",
+          "refresh_times": "Mis. 07:30, 19:30.",
+          "digest_time": "Waktu ringkasan harian.",
+          "min_history_days": "Hari harga sebelum 'terendah' dihitung.",
+          "use_impersonation": "curl_cffi: jauh lebih sedikit blokir.",
+          "notify_service": "Opsional; lebih baik: tab Notifikasi di panel.",
+          "brickset_api_key": "Opsional, gratis.",
+          "rebrickable_api_key": "Opsional, gratis."
         }
       }
     },
@@ -31,20 +47,36 @@
     "step": {
       "init": {
         "title": "LEGO Organizing Tool",
-        "description": "Sebagian besar pengaturan juga tersedia di panel LEGO Organizing Tool pada Kelola → Pengaturan.",
+        "description": "Sebagian besar pengaturan juga ada di panel: Kelola → Pengaturan.",
         "data": {
-          "discount_threshold": "Ambang diskon (%) untuk 'diskon besar'",
-          "retailers": "Toko yang diperiksa",
-          "language": "Bahasa (panel, notifikasi, userscript)",
-          "refresh_mode": "Pemeriksaan harga otomatis",
-          "spread_hours": "Siklus tersebar: setiap set sekali tiap … jam",
-          "refresh_times": "Waktu tetap (hanya untuk 'Pada waktu tetap', mis. 07:30, 19:30)",
-          "digest_time": "Waktu ringkasan harian",
-          "min_history_days": "Minimal hari riwayat sebelum 'harga terendah' dihitung",
-          "use_impersonation": "Tiru browser Chrome (curl_cffi; jauh lebih sedikit pemblokiran)",
-          "notify_service": "Layanan notify untuk promo (opsional; lebih baik: tab Notifikasi di panel)",
-          "brickset_api_key": "Kunci API Brickset (opsional, gratis)",
-          "rebrickable_api_key": "Kunci API Rebrickable (opsional, gratis)"
+          "discount_threshold": "Ambang diskon",
+          "retailers": "Toko",
+          "language": "Bahasa",
+          "refresh_mode": "Cek harga",
+          "spread_hours": "Siklus",
+          "watch_cycle_min": "Siklus daftar pantau",
+          "refresh_times": "Waktu tetap",
+          "digest_time": "Ringkasan harian",
+          "min_history_days": "Riwayat 'terendah'",
+          "use_impersonation": "Tiru Chrome",
+          "notify_service": "Layanan notify",
+          "brickset_api_key": "Kunci Brickset",
+          "rebrickable_api_key": "Kunci Rebrickable"
+        },
+        "data_description": {
+          "discount_threshold": "Mulai diskon ini sebuah set dianggap penawaran.",
+          "retailers": "Toko yang dicek.",
+          "language": "Panel, notifikasi, dan userscript.",
+          "refresh_mode": "Tersebar: setiap set sekali per siklus, ringan bagi toko.",
+          "spread_hours": "Setiap set sekali tiap … jam.",
+          "watch_cycle_min": "Set di daftar pantau boleh dicek lebih sering.",
+          "refresh_times": "Mis. 07:30, 19:30.",
+          "digest_time": "Waktu ringkasan harian.",
+          "min_history_days": "Hari harga sebelum 'terendah' dihitung.",
+          "use_impersonation": "curl_cffi: jauh lebih sedikit blokir.",
+          "notify_service": "Opsional; lebih baik: tab Notifikasi di panel.",
+          "brickset_api_key": "Opsional, gratis.",
+          "rebrickable_api_key": "Opsional, gratis."
         }
       }
     },
@@ -55,9 +87,32 @@
   "selector": {
     "refresh_mode": {
       "options": {
-        "spread": "Tersebar sepanjang hari (setiap set sekali per siklus)",
+        "spread": "Tersebar sepanjang hari",
         "times": "Pada waktu tetap",
-        "off": "Nonaktif (hanya manual)"
+        "off": "Mati"
+      }
+    },
+    "cycle": {
+      "options": {
+        "2": "2 jam",
+        "3": "3 jam",
+        "4": "4 jam",
+        "6": "6 jam",
+        "12": "12 jam",
+        "24": "24 jam"
+      }
+    },
+    "watch_cycle": {
+      "options": {
+        "0": "Sama seperti set lain",
+        "30": "30 mnt",
+        "60": "1 jam",
+        "120": "2 jam",
+        "180": "3 jam",
+        "240": "4 jam",
+        "360": "6 jam",
+        "720": "12 jam",
+        "1440": "24 jam"
       }
     }
   },

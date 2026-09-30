@@ -17,9 +17,17 @@ CSV = "Number;Name;Theme;Qty;Paid;Value\n10281-1;Bonsai;Botanicals;1;40;50\n4214
 @pytest.fixture
 def entry(hass):
     e = MockConfigEntry(domain=DOMAIN, data={}, options={"discount_threshold": 25, "retailers": ["bol", "amazon_nl"],
-                                                          "digest_time": "08:00:00", "min_history_days": 0})
+                                                          "digest_time": "08:00:00", "min_history_days": 0,
+                                                          # most tests run full rounds (off by default, see test_full_refresh_*)
+                                                          "dev_full_refresh": True, "dev_fixed_times": True, "dev_free_cycle": True})
     e.add_to_hass(hass)
     return e
+
+
+@pytest.fixture(autouse=True)
+def no_refresh_gap():
+    with patch("custom_components.lego_tracker.coordinator.FULL_REFRESH_GAP", 0):
+        yield
 
 
 @pytest.fixture(autouse=True)
@@ -97,17 +105,24 @@ async def test_options_flow_and_reload(hass: HomeAssistant, entry):
 async def test_config_flow(hass: HomeAssistant):
     r = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
     assert r["type"] == "form"
+    keys = {str(k) for k in r["data_schema"].schema}
+    assert "refresh_times" not in keys and "watch_cycle_min" in keys          # fixed times only in developer mode
     r = await hass.config_entries.flow.async_configure(r["flow_id"], {
         "discount_threshold": 30, "retailers": ["bol", "kruidvat_be"], "digest_time": "08:00:00", "min_history_days": 3,
-        "refresh_mode": "times", "refresh_times": "nooit"})
-    assert r["type"] == "form" and r["errors"] == {"refresh_times": "invalid_times"}
-    r = await hass.config_entries.flow.async_configure(r["flow_id"], {
-        "discount_threshold": 30, "retailers": ["bol", "kruidvat_be"], "digest_time": "08:00:00", "min_history_days": 3,
-        "refresh_mode": "spread", "refresh_times": "19:30, 7:30"})
+        "refresh_mode": "spread", "spread_hours": "12", "watch_cycle_min": "60"})
     assert r["type"] == "create_entry" and r["options"]["discount_threshold"] == 30
     assert r["options"]["refresh_mode"] == "spread" and r["options"]["language"] == "en" and r["options"]["auto_refresh"]
-    assert r["options"]["refresh_times"] == "07:30, 19:30"
+    assert r["options"]["spread_hours"] == 12 and r["options"]["watch_cycle_min"] == 60
 
+
+async def test_config_flow_fixed_times_in_developer_mode(hass: HomeAssistant):
+    from custom_components.lego_tracker.config_flow import InvalidTimes, _clean, _schema
+
+    keys = {str(k) for k in _schema({"dev_fixed_times": True}).schema}
+    assert "refresh_times" in keys
+    with pytest.raises(InvalidTimes):
+        _clean({"refresh_mode": "times", "refresh_times": "nooit"})
+    assert _clean({"refresh_mode": "times", "refresh_times": "19:30, 7:30"})["refresh_times"] == "07:30, 19:30"
 
 
 async def test_report_price_by_url_and_manual(hass: HomeAssistant, entry):
@@ -273,7 +288,7 @@ async def test_link_check_confirm_remove_and_block(hass: HomeAssistant, entry, h
     await hass.services.async_call(DOMAIN, "remove_offer", {"set_number": "21028", "retailer": "amazon_nl"}, blocking=True)
     assert "amazon_nl" not in c.store["offers"]["21028"] and "name" not in c.store["sets"]["21028"]
     with patch("custom_components.lego_tracker.client.Fetcher.discover",
-               AsyncMock(side_effect=lambda r, n, force=False: "https://www.amazon.nl/dp/B0LEDLEDLE" if r == "amazon_nl" else None)):
+               AsyncMock(side_effect=lambda r, n, force=False, url=None: "https://www.amazon.nl/dp/B0LEDLEDLE" if r == "amazon_nl" else None)):
         found = await hass.services.async_call(DOMAIN, "discover_offers", {"set_number": "21028"}, blocking=True, return_response=True)
     assert found["found"] == 0                                             # rejected page is not re-added
     # manual link is trusted immediately
@@ -1166,3 +1181,120 @@ async def test_relay_fetches_comparison_pages(hass: HomeAssistant, entry, no_net
     # only pages of comparison sites for tracked sets
     r = await (await client.post("/api/lego_tracker/relay", json={"results": [{**it, "url": "https://evil.example/", "status": 200, "html": ""}]})).json()
     assert r["rejected"]
+
+
+async def test_find_uses_pasted_search_page_and_says_why(hass: HomeAssistant, entry, no_network):
+    from custom_components.lego_tracker.parsers import _generic_result
+
+    tile = """<div class="grid"><div class="tile"><a href="/be/nl-be/speelgoed/lego/p/192811"><img alt="LEGO City Brandweerkazerne"></a>
+      <span>Artikelnummer: 60510</span><span>€ 49,99</span></div>
+      <div class="tile"><a href="/be/nl-be/speelgoed/lego/p/200001">LED-verlichting voor LEGO 60510</a></div></div>"""
+    assert _generic_result(tile, "smythstoys.com", "60510") == "https://www.smythstoys.com/be/nl-be/speelgoed/lego/p/192811"
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "60510"}, blocking=True)
+    # a search page pasted by hand is searched, not saved as the link
+    seen = []
+
+    async def discover(retailer, num, force=False, url=None):
+        seen.append(url)
+        c.fetcher.discover_error[retailer] = "the shop blocked the search (HTTP 403)"
+        return None
+    with patch.object(c.fetcher, "discover", discover):
+        r = await c.fetch_shop("60510", "bol", "https://www.bol.com/nl/nl/s/?searchtext=60510")
+    assert seen == ["https://www.bol.com/nl/nl/s/?searchtext=60510"]
+    assert r["error"] == "the shop blocked the search (HTTP 403)"                 # the real reason, not "no product"
+    assert "bol" not in c.store["offers"]["60510"]
+    with pytest.raises(Exception):
+        c.set_offer("60510", "bol", "https://www.bol.com/nl/nl/s/?searchtext=60510")   # never saved as a product link
+    # a product page pasted by hand becomes the link
+    await c.fetch_shop("60510", "bol", "https://www.bol.com/nl/nl/p/lego-city-60510/9300000012345678/")
+    assert c.store["offers"]["60510"]["bol"]["url"].startswith("https://www.bol.com/nl/nl/p/")
+
+
+async def test_full_refresh_off_by_default_and_once_a_minute(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    opts = {k: v for k, v in entry.options.items() if not k.startswith("dev_")}
+    hass.config_entries.async_update_entry(entry, options={**opts, "refresh_mode": "times", "spread_hours": 5})
+    c = await _setup(hass, entry)
+    assert c.refresh_mode == "spread"                        # fixed times only in developer mode
+    assert c.spread_hours == 6                               # nearest allowed cycle (2/3/4/6/12/24)
+    with pytest.raises(ServiceValidationError, match="Switched off"):
+        await hass.services.async_call(DOMAIN, "refresh", {}, blocking=True, return_response=True)
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/settings/set", "fields": {"spread_hours": 5}})
+    assert not (await ws.receive_json())["success"]          # only the choices
+    await ws.send_json({"id": 2, "type": "lego_tracker/settings/set", "fields": {"refresh_mode": "times"}})
+    assert not (await ws.receive_json())["success"]
+    await ws.send_json({"id": 3, "type": "lego_tracker/settings/set", "fields": {"spread_hours": 12, "watch_cycle_min": 30}})
+    assert (await ws.receive_json())["success"]
+    await hass.async_block_till_done()
+    # developer mode: a full round is possible, but at most once a minute
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "dev_full_refresh": True})
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][entry.entry_id]
+    with patch("custom_components.lego_tracker.coordinator.FULL_REFRESH_GAP", 60):
+        c.start_full_refresh()
+        await c._job_task
+        with pytest.raises(ValueError, match="once a minute"):
+            c.start_full_refresh()
+
+
+async def test_watchlist_cycle_and_limit(hass: HomeAssistant, entry, no_network):
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "dev_free_cycle": False, "spread_hours": 24,
+                                                           "watch_cycle_min": 60})
+    c = await _setup(hass, entry)
+    for n in ("10281", "42143", "21028", "10300"):
+        await hass.services.async_call(DOMAIN, "add_set", {"set_number": n}, blocking=True)
+        await hass.services.async_call(DOMAIN, "set_offer", {"set_number": n, "retailer": "bol",
+                                                             "url": f"https://www.bol.com/nl/nl/p/x/{n}00/"}, blocking=True)
+    c.store["collection"]["10300"] = {"qty": 1}              # 3 on the watchlist, 1 owned
+    rates = c.check_rates()
+    assert rates["watched"] == 3 and rates["watch"] == 3.0 and abs(rates["main"] - 1 / 24) < 1e-9
+    assert abs(c.spread_interval() - 3600 / (3 + 1 / 24)) < 1e-6
+    now = time.time()
+    for n, age in (("10281", 30), ("42143", 90), ("21028", 70), ("10300", 3000)):
+        c.store["sets"][n]["checked"] = now - age * 60
+    assert c.next_spread_set() == "42143"                     # due watchlist set first (oldest)
+    c.store["sets"]["42143"]["checked"] = c.store["sets"]["21028"]["checked"] = now
+    assert c.next_spread_set() == "10300"                     # then the normal cycle
+    # the watchlist holds at most 100 sets (owned sets don't count)
+    with patch("custom_components.lego_tracker.coordinator.WATCH_LIMIT", 3):
+        hass.config_entries.async_update_entry(entry, options={**entry.options})
+        with pytest.raises(ServiceValidationError, match="full"):
+            await hass.services.async_call(DOMAIN, "add_set", {"set_number": "75192"}, blocking=True)
+        await hass.services.async_call(DOMAIN, "add_set", {"set_number": "75192", "owned": True}, blocking=True)
+
+
+async def test_logbook_export(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    import csv
+    import io
+
+    c = await _setup(hass, entry)
+    for n in ("10281", "42143"):
+        await hass.services.async_call(DOMAIN, "add_set", {"set_number": n, "theme": "Icons" if n == "10281" else "Technic"}, blocking=True)
+        await hass.services.async_call(DOMAIN, "set_offer", {"set_number": n, "retailer": "bol",
+                                                             "url": f"https://www.bol.com/nl/nl/p/x/{n}00/"}, blocking=True)
+    c.store["collection"]["42143"] = {"qty": 1, "condition": "Sealed", "location": "Zolder kast 2"}
+    now = time.time()
+    c.store["offers"]["10281"]["bol"]["history"] = [[now - 3 * 86400, 40.0], [now - 86400, 36.0]]
+    c.store["offers"]["42143"]["bol"]["history"] = [[now - 2 * 86400, 300.0]]
+    await c.refresh_set("10281")                                       # one check entry (bol: ok)
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/logs/export", "parts": ["checks"], "filters": {"shops": ["bol"], "status": "ok"}})
+    r = (await ws.receive_json())["result"]
+    rows = list(csv.DictReader(io.StringIO(r["csv"])))
+    assert r["counts"]["checks"] >= 1 and all(x["shop"] == "bol.com" and x["result"] == "ok" for x in rows)
+    # price history of the collection only (location filter), in a period
+    await ws.send_json({"id": 2, "type": "lego_tracker/logs/export", "parts": ["history"], "start": now - 5 * 86400,
+                        "filters": {"scope": "collection", "location": "kast 2"}})
+    rows = list(csv.DictReader(io.StringIO((await ws.receive_json())["result"]["csv"])))
+    assert {x["set_number"] for x in rows} == {"42143"} and rows[0]["price"] == "300.0"
+    await ws.send_json({"id": 3, "type": "lego_tracker/logs/export", "parts": ["history"], "filters": {"theme": "Icons", "scope": "watchlist"}})
+    rows = list(csv.DictReader(io.StringIO((await ws.receive_json())["result"]["csv"])))
+    assert [x["price"] for x in rows if x["set_number"] == "10281"][:2] == ["40.0", "36.0"]
+    # total per day over several parts: one file with a table per part
+    await ws.send_json({"id": 4, "type": "lego_tracker/logs/export", "parts": ["total", "checks"], "start": now - 4 * 86400})
+    r = (await ws.receive_json())["result"]
+    assert r["csv"].startswith("# Shop checks") and "# Price history in total" in r["csv"] and r["counts"]["total"] >= 3
+    total = r["csv"].split("# Price history in total\n")[1]
+    last = list(csv.DictReader(io.StringIO(total)))[-1]
+    assert last["sets_with_price"] == "2"

@@ -3,20 +3,36 @@
     "step": {
       "user": {
         "title": "LEGO Organizing Tool",
-        "description": "대부분의 설정은 LEGO Organizing Tool 패널의 관리 → 설정에서도 할 수 있습니다.",
+        "description": "대부분의 설정은 패널에도 있습니다: 관리 → 설정.",
         "data": {
-          "discount_threshold": "'큰 할인' 기준 할인율 (%)",
-          "retailers": "확인할 상점",
-          "language": "언어 (패널, 알림, 사용자 스크립트)",
-          "refresh_mode": "자동 가격 확인",
-          "spread_hours": "분산 주기: 모든 세트를 … 시간마다 한 번",
-          "refresh_times": "고정 시간 ('정해진 시간에'일 때만, 예: 07:30, 19:30)",
-          "digest_time": "일일 요약 시간",
-          "min_history_days": "'역대 최저'로 인정되기 위한 최소 기록 일수",
-          "use_impersonation": "Chrome 브라우저 흉내 (curl_cffi; 차단이 훨씬 적음)",
-          "notify_service": "딜 알림용 notify 서비스 (선택; 권장: 패널의 알림 탭)",
-          "brickset_api_key": "Brickset API 키 (선택, 무료)",
-          "rebrickable_api_key": "Rebrickable API 키 (선택, 무료)"
+          "discount_threshold": "할인 기준",
+          "retailers": "상점",
+          "language": "언어",
+          "refresh_mode": "가격 확인",
+          "spread_hours": "주기",
+          "watch_cycle_min": "관심 목록 주기",
+          "refresh_times": "고정 시간",
+          "digest_time": "일일 요약",
+          "min_history_days": "'최저가' 기록 기간",
+          "use_impersonation": "Chrome 흉내",
+          "notify_service": "알림 서비스",
+          "brickset_api_key": "Brickset 키",
+          "rebrickable_api_key": "Rebrickable 키"
+        },
+        "data_description": {
+          "discount_threshold": "이 할인율부터 세트를 딜로 봅니다.",
+          "retailers": "확인할 상점입니다.",
+          "language": "패널, 알림 및 유저스크립트.",
+          "refresh_mode": "분산: 주기마다 세트를 한 번씩, 상점에 부담이 적습니다.",
+          "spread_hours": "… 시간마다 세트를 한 번씩.",
+          "watch_cycle_min": "관심 목록 세트는 더 자주 확인할 수 있습니다.",
+          "refresh_times": "예: 07:30, 19:30.",
+          "digest_time": "일일 요약 시간.",
+          "min_history_days": "'최저가'로 인정되기 전 가격 기록 일수.",
+          "use_impersonation": "curl_cffi: 차단이 훨씬 적습니다.",
+          "notify_service": "선택 사항; 패널의 알림 탭이 더 좋습니다.",
+          "brickset_api_key": "선택 사항, 무료.",
+          "rebrickable_api_key": "선택 사항, 무료."
         }
       }
     },
@@ -31,20 +47,36 @@
     "step": {
       "init": {
         "title": "LEGO Organizing Tool",
-        "description": "대부분의 설정은 LEGO Organizing Tool 패널의 관리 → 설정에서도 할 수 있습니다.",
+        "description": "대부분의 설정은 패널에도 있습니다: 관리 → 설정.",
         "data": {
-          "discount_threshold": "'큰 할인' 기준 할인율 (%)",
-          "retailers": "확인할 상점",
-          "language": "언어 (패널, 알림, 사용자 스크립트)",
-          "refresh_mode": "자동 가격 확인",
-          "spread_hours": "분산 주기: 모든 세트를 … 시간마다 한 번",
-          "refresh_times": "고정 시간 ('정해진 시간에'일 때만, 예: 07:30, 19:30)",
-          "digest_time": "일일 요약 시간",
-          "min_history_days": "'역대 최저'로 인정되기 위한 최소 기록 일수",
-          "use_impersonation": "Chrome 브라우저 흉내 (curl_cffi; 차단이 훨씬 적음)",
-          "notify_service": "딜 알림용 notify 서비스 (선택; 권장: 패널의 알림 탭)",
-          "brickset_api_key": "Brickset API 키 (선택, 무료)",
-          "rebrickable_api_key": "Rebrickable API 키 (선택, 무료)"
+          "discount_threshold": "할인 기준",
+          "retailers": "상점",
+          "language": "언어",
+          "refresh_mode": "가격 확인",
+          "spread_hours": "주기",
+          "watch_cycle_min": "관심 목록 주기",
+          "refresh_times": "고정 시간",
+          "digest_time": "일일 요약",
+          "min_history_days": "'최저가' 기록 기간",
+          "use_impersonation": "Chrome 흉내",
+          "notify_service": "알림 서비스",
+          "brickset_api_key": "Brickset 키",
+          "rebrickable_api_key": "Rebrickable 키"
+        },
+        "data_description": {
+          "discount_threshold": "이 할인율부터 세트를 딜로 봅니다.",
+          "retailers": "확인할 상점입니다.",
+          "language": "패널, 알림 및 유저스크립트.",
+          "refresh_mode": "분산: 주기마다 세트를 한 번씩, 상점에 부담이 적습니다.",
+          "spread_hours": "… 시간마다 세트를 한 번씩.",
+          "watch_cycle_min": "관심 목록 세트는 더 자주 확인할 수 있습니다.",
+          "refresh_times": "예: 07:30, 19:30.",
+          "digest_time": "일일 요약 시간.",
+          "min_history_days": "'최저가'로 인정되기 전 가격 기록 일수.",
+          "use_impersonation": "curl_cffi: 차단이 훨씬 적습니다.",
+          "notify_service": "선택 사항; 패널의 알림 탭이 더 좋습니다.",
+          "brickset_api_key": "선택 사항, 무료.",
+          "rebrickable_api_key": "선택 사항, 무료."
         }
       }
     },
@@ -55,9 +87,32 @@
   "selector": {
     "refresh_mode": {
       "options": {
-        "spread": "하루 동안 분산 (주기마다 모든 세트 한 번)",
-        "times": "정해진 시간에",
-        "off": "끄기 (수동만)"
+        "spread": "하루에 분산",
+        "times": "고정 시간",
+        "off": "끔"
+      }
+    },
+    "cycle": {
+      "options": {
+        "2": "2시간",
+        "3": "3시간",
+        "4": "4시간",
+        "6": "6시간",
+        "12": "12시간",
+        "24": "24시간"
+      }
+    },
+    "watch_cycle": {
+      "options": {
+        "0": "다른 세트와 동일",
+        "30": "30분",
+        "60": "1시간",
+        "120": "2시간",
+        "180": "3시간",
+        "240": "4시간",
+        "360": "6시간",
+        "720": "12시간",
+        "1440": "24시간"
       }
     }
   },

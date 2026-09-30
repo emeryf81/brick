@@ -12,7 +12,7 @@ from homeassistant.components.http import KEY_HASS, HomeAssistantView
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
-from .const import DOMAIN, PANEL_URL, RETAILERS
+from .const import CONF_DEV_FULL_REFRESH, DOMAIN, PANEL_URL, RETAILERS
 from .csv_import import analyze_csv
 from .i18n import tr
 from .models import combined_history, normalize_set_number, offer_price
@@ -57,7 +57,7 @@ def _card(coord, num: str, with_history: bool = False) -> dict[str, Any]:
     series = combined_history(offers)
     card = {
         **s, **st,
-        "watched": coll is None,
+        "watched": coord.is_watched(num),
         "owned": coll is not None,
         "collection": coll,
         "spark": [p for _, p in series][-60:],
@@ -106,6 +106,7 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_compare_html)
     websocket_api.async_register_command(hass, ws_filter_test)
     websocket_api.async_register_command(hass, ws_client_error)
+    websocket_api.async_register_command(hass, ws_logs_export)
     websocket_api.async_register_command(hass, ws_notify_set)
     websocket_api.async_register_command(hass, ws_notify_test)
     hass.http.register_view(UserscriptView())
@@ -137,7 +138,8 @@ def ws_overview(hass, connection, msg):
         "userscript_last": coord.store.get("userscript_last"), "relay_last": coord.store.get("relay_last"),
         "relay": {"enabled": coord.relay_enabled, "pending": coord.relay_items(100)["total"] if coord.relay_enabled else 0},
         "bol_api": bool(coord.bol_api),
-        "compare": _compare_status(coord),
+        "compare": _compare_status(coord), "deal_rules": coord.deal_rules,
+        "watch_limit": coord.watch_limit, "full_refresh": coord.dev(CONF_DEV_FULL_REFRESH),
         "value_source": coord.store.get("value_source", "shop_first"),
         "health": {
             "errors": sum(s["offers_error"] for s in (coord.data or coord.compute())["statuses"].values()),
@@ -395,13 +397,14 @@ def ws_offer_update(hass, connection, msg):
 @websocket_api.require_admin
 @websocket_api.websocket_command({
     vol.Required("type"): f"{DOMAIN}/offer/fetch", vol.Required("set_number"): str, vol.Required("retailer"): str,
+    vol.Optional("url"): str,
 })
 @websocket_api.async_response
 async def ws_offer_fetch(hass, connection, msg):
     """Fetch one shop for one set now (searching a link first if there is none). Works for paused shops."""
     coord = _coord(hass)
     try:
-        result = await coord.fetch_shop(msg["set_number"], msg["retailer"])
+        result = await coord.fetch_shop(msg["set_number"], msg["retailer"], msg.get("url"))
     except ValueError as err:
         connection.send_error(msg["id"], "invalid_format", str(err))
         return
@@ -478,6 +481,25 @@ async def ws_compare_test(hass, connection, msg):
             coord._cstore(src).pop(num, None)
     dbg = coord._compare_debug.get(src) or {}
     connection.send_result(msg["id"], {"steps": steps, "entry": entry, "size": len(dbg.get("html") or "")})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({
+    vol.Required("type"): f"{DOMAIN}/logs/export", vol.Required("parts"): [vol.In(["checks", "history", "total"])],
+    vol.Optional("start"): vol.Coerce(float), vol.Optional("end"): vol.Coerce(float), vol.Optional("filters", default={}): dict,
+})
+@callback
+def ws_logs_export(hass, connection, msg):
+    """Logbook export as CSV: shop checks, price history per set and/or in total, with filters."""
+    from . import log_export
+    from .models import retirement_status
+
+    coord = _coord(hass)
+    if not msg["parts"]:
+        connection.send_error(msg["id"], "invalid", tr("Choose at least one part to export."))
+        return
+    text, counts = log_export.build(coord.store, msg, coord.is_watched, lambda s: retirement_status(s)["retiring_soon"])
+    connection.send_result(msg["id"], {"csv": text, "counts": counts})
 
 
 _CLIENT_ERRORS: list[float] = []
