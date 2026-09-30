@@ -19,7 +19,7 @@ from homeassistant.util import dt as dt_util
 
 from .client import Fetcher, lookup_metadata
 from .const import (
-    CONF_BRICKWATCH, CONF_COMPARE_SOURCES, COMPARE_FRESH_HOURS, COMPARE_MISSING_HOURS, COMPARE_NET_ERRORS, COMPARE_PAUSE_HOURS,
+    CONF_BRICKWATCH, CONF_BLOCK_WORDS, CONF_ALLOW_WORDS, CONF_COMPARE_SOURCES, COMPARE_FRESH_HOURS, COMPARE_MISSING_HOURS, COMPARE_NET_ERRORS, COMPARE_PAUSE_HOURS,
     CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET, CONF_BOL_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS,
     CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_LANGUAGE, CONF_REFRESH_MODE, CONF_SPREAD_HOURS, DEFAULT_REFRESH_MODE, DEFAULT_SPREAD_HOURS, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, CONF_CUSTOM_SHOPS, CONF_DIGEST_TIME, CONF_NO_AUTOPAUSE, CONF_SHOP_SEARCH, CONF_VALUE_SOURCE, DEFAULT_DIGEST_TIME, GENERIC_SHOPS, CONF_DISCOUNT_THRESHOLD, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
     DEFAULT_REFRESH_TIMES, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS, DEFAULT_RETAILERS,
@@ -37,7 +37,7 @@ from . import compare
 from .shops import all_domains
 from .parsers import Parsed, title_check
 from .shops import SEARCH, valid_search
-from .parsers import ACCESSORY_RE, KNOCKOFF_RE, clean_title, normalize_url, retailer_from_url, url_key
+from .parsers import BUILTIN_WORDS, KNOCKOFF_RE, accessory_word, set_custom_words, clean_title, normalize_url, retailer_from_url, url_key
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -96,6 +96,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_load(self) -> None:
         set_language(self.language)
+        set_custom_words(self.opt(self.entry, CONF_BLOCK_WORDS, []), self.opt(self.entry, CONF_ALLOW_WORDS, []))
         await self.fetcher.async_setup()
         if (data := await self._store.async_load()):
             self.store = {**new_store(), **data}
@@ -939,7 +940,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if src in ("user", "import") or (src and src[0].isupper() or src == "brickset.com" or "+" in (src or "")):
             return False
         # names from older versions: replace the ones that look like a shop title
-        return bool(re.search(r"\blego\b", name, re.I) or ACCESSORY_RE.search(name) or KNOCKOFF_RE.search(name)
+        return bool(re.search(r"\blego\b", name, re.I) or accessory_word(name) or KNOCKOFF_RE.search(name)
                     or len(name) > 70)
 
     def needs_enrich(self, num: str) -> bool:
@@ -1070,7 +1071,9 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "language": o.get(CONF_LANGUAGE, DEFAULT_LANGUAGE), "languages": LANGUAGES,
             "bol_country": o.get(CONF_BOL_COUNTRY, "auto"), "bol_api": bool(self.bol_api),
             "browser_relay": bool(o.get(CONF_RELAY, True)), "brickwatch": bool(o.get(CONF_BRICKWATCH, False)),
-            "compare_sources": self.compare_sources, "relay_hours": int(o.get(CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS)),
+            "compare_sources": self.compare_sources,
+            "block_words": list(o.get(CONF_BLOCK_WORDS, [])), "allow_words": list(o.get(CONF_ALLOW_WORDS, [])),
+            "builtin_words": list(BUILTIN_WORDS), "relay_hours": int(o.get(CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS)),
         }
 
     def settings_validate(self, fields: dict[str, Any]) -> dict[str, Any]:
@@ -1094,6 +1097,24 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for key in ("auto_refresh", "use_impersonation", CONF_RELAY, CONF_BRICKWATCH):
             if key in fields:
                 opts[key] = bool(fields[key])
+        for key in (CONF_BLOCK_WORDS, CONF_ALLOW_WORDS):
+            if key in fields:
+                raw = fields[key]
+                items = re.split(r"[\n,;]+", raw) if isinstance(raw, str) else raw if isinstance(raw, list) else None
+                if items is None:
+                    raise LocalizedError("{field}: not a valid choice", field=key)
+                words: list[str] = []
+                for w in items:
+                    w = re.sub(r"\s+", " ", str(w)).strip()
+                    if not w:
+                        continue
+                    if not 2 <= len(w.rstrip("*")) <= 60 or "*" in w.rstrip("*"):
+                        raise LocalizedError("Word list: “{word}” must be 2 to 60 characters (a * only at the end)", word=w[:60])
+                    if w.lower() not in (x.lower() for x in words):
+                        words.append(w)
+                if len(words) > 300:
+                    raise LocalizedError("Word list: at most 300 words")
+                opts[key] = words
         if CONF_COMPARE_SOURCES in fields:
             sel = fields[CONF_COMPARE_SOURCES]
             if not isinstance(sel, list) or any(src not in compare.SOURCES for src in sel):

@@ -1151,6 +1151,17 @@ class LegoTrackerPanel extends HTMLElement {
         <h3 style="margin-top:16px">＋ ${t("Add your own shop")}</h3><div class="form"><label>${t("Name")}<input id="n_name" placeholder="${t("e.g. {example}", { example: "Intertoys" })}"></label><label>${t("Domain")}<input id="n_domain" placeholder="intertoys.be"></label>
         <label style="grid-column:span 2">${t("Search URL")}<input id="n_search" placeholder="https://www.intertoys.be/zoeken?q=lego+10311"><div class="hint muted" id="n_search_prev"></div></label></div>
         <p style="font-size:12px">${t("Prices are read from the standard product data (JSON-LD/meta) that most web shops have.")}</p><button class="btn ghost" id="n_add">＋ ${t("Add to the list")}</button></div>
+      <div class="panel"><h3>🚫 ${t("Product filter")}</h3>
+        <p>${t("A product whose title contains one of these words is never taken as the set (e.g. an LED kit or display case for that set number): it is skipped everywhere — shop searches, link check and comparison sites — and the next result with the set number counts.")}</p>
+        <details style="margin:0 0 10px"><summary class="muted" style="cursor:pointer">${t("Built-in words ({n})", { n: (st.builtin_words || []).length })}</summary>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">${(st.builtin_words || []).map((w) => `<span class="abadge">${esc(w)}</span>`).join("")}</div></details>
+        <div class="form">
+          <label style="grid-column:span 2">${t("Extra words (one per line)")}<textarea id="o_block" rows="5" placeholder="lichtset&#10;brickbling&#10;verlicht*">${esc((st.block_words || []).join("\n"))}</textarea>
+            <span class="hint muted">${t("Not case-sensitive, whole words; * at the end matches any ending.")}</span></label>
+          <label style="grid-column:span 2">${t("Exceptions (one per line)")}<textarea id="o_allow" rows="5" placeholder="lichtsteen&#10;light brick">${esc((st.allow_words || []).join("\n"))}</textarea>
+            <span class="hint muted">${t("Words or phrases that may appear in the title of a real set, e.g. a set with a light brick.")}</span></label>
+          <label style="grid-column:1/-1">${t("Try a product title")}<input id="o_ftest" placeholder="LMB verlichtingsset voor LEGO 10368"><span class="hint" id="o_fres"></span></label>
+        </div></div>
       <div class="panel"><h3>🛠️ ${t("Technical")}</h3><div class="form"><label class="chk"><input type="checkbox" id="o_imp" ${st.use_impersonation ? "checked" : ""}> ${t("Imitate the Chrome browser (curl_cffi) – now: {transport}", { transport: esc(st.transport) })}</label></div></div>
       <div class="panel" style="position:sticky;bottom:12px;z-index:2;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button class="btn" id="o_save">💾 ${t("Save settings")}</button><span class="muted" style="font-size:13px">${t("After saving the integration restarts briefly (a running job stops).")}</span></div>`;
   }
@@ -1334,6 +1345,18 @@ class LegoTrackerPanel extends HTMLElement {
     }
   }
   bindSettings(root, $) {
+    const lines = (v) => v.split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean);
+    let ft;
+    const ftest = () => { clearTimeout(ft); ft = setTimeout(async () => {
+      const title = $("o_ftest").value.trim(), out = $("o_fres");
+      if (!title) { out.textContent = ""; return; }
+      try {
+        const r = await this._hass.callWS({ type: "lego_tracker/filter/test", title, block_words: lines($("o_block").value), allow_words: lines($("o_allow").value) });
+        out.className = "hint " + (r.word ? "bad" : "ok");
+        out.textContent = r.word ? "🚫 " + t("skipped: “{word}”", { word: r.word }) : "✓ " + t("allowed (can be the set)");
+      } catch (e) { out.textContent = String(e.message || e); }
+    }, 300); };
+    for (const id of ["o_ftest", "o_block", "o_allow"]) if ($(id)) $(id).addEventListener("input", ftest);
     const d = this.state.draft, st = this.state.settings;
     const syncShops = () => root.querySelectorAll("tr[data-shop]").forEach((tr) => {
       const x = d.shops.find((y) => y.id === tr.dataset.shop); if (!x) return;
@@ -1385,6 +1408,7 @@ class LegoTrackerPanel extends HTMLElement {
         lego_locale: ($("o_locale").value || "nl-be").trim(), language: $("o_lang").value,
       };
       f.bol_country = $("o_bolc").value; f.browser_relay = $("o_relay").checked; f.relay_hours = +$("o_relayh").value || 6;
+      f.block_words = lines($("o_block").value); f.allow_words = lines($("o_allow").value);
       for (const k of ["brickset_api_key", "rebrickable_api_key", "bol_client_id", "bol_client_secret"]) { const el = $("k_" + k), v = el.value.trim(); if (v) f[k] = v; else if (el.dataset.clear) f[k] = ""; }
       if (!f.retailers.length) return this.toast(t("Switch on at least one shop"), "err");
       if (d.mode === "spread" && !(f.spread_hours >= 1 && f.spread_hours <= 168)) return this.toast(t("Cycle: between 1 and 168 hours"), "err");

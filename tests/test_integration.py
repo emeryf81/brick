@@ -941,6 +941,38 @@ def test_accessory_words_never_count_as_the_set():
         assert title_check(t, num)[0] == "ok", t
 
 
+async def test_own_filter_words_and_exceptions(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    from custom_components.lego_tracker import compare
+    from custom_components.lego_tracker.parsers import title_check
+
+    c = await _setup(hass, entry)
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/settings/set",
+                        "fields": {"block_words": "brickshine\nverlicht*", "allow_words": ["met lichtsteen", "Light brick"]}})
+    assert (await ws.receive_json())["success"]
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][entry.entry_id]
+    await ws.send_json({"id": 2, "type": "lego_tracker/settings/get"})
+    st = (await ws.receive_json())["result"]
+    assert st["block_words"] == ["brickshine", "verlicht*"] and st["allow_words"] == ["met lichtsteen", "Light brick"]
+    assert "LMB" in st["builtin_words"]
+    # own words work everywhere: link check and comparison sites
+    assert title_check("Brickshine kit LEGO 10368", "10368")[0] == "suspect"
+    assert title_check("LEGO 10368 verlichtbaar model", "10368")[0] == "suspect"            # verlicht* = any ending
+    assert compare.is_accessory("BrickShine 10368")
+    # exceptions: a real set with a light brick is the set again
+    assert title_check("LEGO Icons 10368 met lichtsteen", "10368")[0] == "ok"
+    assert title_check("LEGO 10368 with light brick", "10368")[0] == "ok"
+    assert title_check("LEGO 10368 licht", "10368")[0] == "suspect"                          # the built-in word still counts
+    # try a title with unsaved lists (the saved ones stay in force)
+    await ws.send_json({"id": 3, "type": "lego_tracker/filter/test", "title": "Brickshine 10368", "block_words": [], "allow_words": []})
+    assert (await ws.receive_json())["result"]["word"] is None
+    await ws.send_json({"id": 4, "type": "lego_tracker/filter/test", "title": "Brickshine 10368"})
+    assert (await ws.receive_json())["result"]["word"].lower() == "brickshine"
+    await ws.send_json({"id": 5, "type": "lego_tracker/settings/set", "fields": {"block_words": ["a*b"]}})
+    assert not (await ws.receive_json())["success"]                                          # * only at the end
+
+
 def test_compare_parsers_skip_led_and_follow():
     from custom_components.lego_tracker import compare
     from custom_components.lego_tracker.shops import all_domains

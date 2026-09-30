@@ -291,6 +291,52 @@ KNOCKOFF_RE = re.compile(r"\b(keeppley|mould ?king|cada|lepin|bluebrixx|cobi|slu
                          r"funwhole|jmbricklayer|lumibricks|briksmax|light my bricks|lightailing|kyglaring|brickbling)\b", re.I)
 
 
+# your own words (Manage → Settings → Product filter): extra words that are never the set, and exceptions
+_USER_BLOCK: re.Pattern | None = None
+_USER_ALLOW: re.Pattern | None = None
+
+
+def _word_re(words: list[str]) -> re.Pattern | None:
+    """Whole words / phrases, case-insensitive; a trailing * matches any ending ('verlicht*')."""
+    parts = []
+    for w in words:
+        w = re.sub(r"\s+", " ", str(w)).strip()
+        if not w:
+            continue
+        star = w.endswith("*")
+        body = r"\s+".join(re.escape(x) for x in w.rstrip("*").split(" "))
+        parts.append(rf"(?<!\w){body}{r'\w*' if star else r'(?!\w)'}")
+    return re.compile("|".join(parts), re.I) if parts else None
+
+
+def set_custom_words(block: list[str] | None, allow: list[str] | None) -> None:
+    global _USER_BLOCK, _USER_ALLOW
+    _USER_BLOCK, _USER_ALLOW = _word_re(block or []), _word_re(allow or [])
+
+
+# the built-in list in readable form (shown in the settings)
+BUILTIN_WORDS = ("LED", "LMB", "verlichting*", "licht", "lichtjes", "lichtset", "light(s)", "lighting", "display", "vitrine",
+                 "acryl*", "plexi*", "showcase", "stofkap", "dust cover", "wall mount", "sticker", "poster", "puzzle", "sokken",
+                 "t-shirt", "mok", "sleutelhanger", "magneet", "handleiding", "onderdelen los", "compatibel", "niet van lego",
+                 "geschikt voor LEGO / <nummer>", "passend bij LEGO / <nummer>", "voor LEGO", "for LEGO")
+
+
+def strip_allowed(text: str) -> str:
+    return _USER_ALLOW.sub(" ", text) if _USER_ALLOW and text else text
+
+
+def accessory_word(text: str | None) -> str | None:
+    """The word that makes a product title an accessory (not the set itself), or None.
+    Exceptions are removed first, then your own words and the built-in list are checked."""
+    if not text:
+        return None
+    t = strip_allowed(htmllib.unescape(text))
+    for rx in (_USER_BLOCK, ACCESSORY_RE):
+        if rx and (m := rx.search(t)):
+            return m.group(0)
+    return None
+
+
 def title_check(title: str | None, set_number: str) -> tuple[str | None, str]:
     """('ok' | 'suspect' | None, reason). None = nothing to judge."""
     if not title:
@@ -298,8 +344,8 @@ def title_check(title: str | None, set_number: str) -> tuple[str | None, str]:
     t = htmllib.unescape(title)
     if KNOCKOFF_RE.search(t):
         return "suspect", T("other brand: {brand}", brand=KNOCKOFF_RE.search(t).group(0))
-    if ACCESSORY_RE.search(t):
-        return "suspect", T("looks like an accessory ({word})", word=ACCESSORY_RE.search(t).group(0))
+    if (word := accessory_word(t)):
+        return "suspect", T("looks like an accessory ({word})", word=word)
     if not re.search(rf"(?<!\d){re.escape(set_number)}(?!\d)", t):
         return "suspect", T("set number {number} is not in the title", number=set_number)
     if not re.search(r"lego", t, re.I):

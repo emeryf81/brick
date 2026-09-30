@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import quote_plus, urljoin, urlparse
 
 from .models import parse_price
-from .parsers import ACCESSORY_RE, KNOCKOFF_RE
+from .parsers import KNOCKOFF_RE, accessory_word, strip_allowed
 
 # id -> (display name, host); order = order in which the sources are tried
 SOURCES: dict[str, tuple[str, str]] = {
@@ -61,7 +61,7 @@ SHOP_ALIASES = (
 
 def is_accessory(text: str | None) -> bool:
     """True when a title / description is not the LEGO set itself (e.g. an LED kit for that set)."""
-    return bool(text and (NOT_THE_SET.search(text) or ACCESSORY_RE.search(text) or KNOCKOFF_RE.search(text)))
+    return bool(text and (accessory_word(text) or KNOCKOFF_RE.search(text)))
 
 
 def has_number(text: str | None, num: str) -> bool:
@@ -529,7 +529,7 @@ def parse(source: str, page: str, num: str, page_url: str, domains: dict[str, st
         head = " ".join(filter(None, (_h1(page), _page_title(page), _meta(page, "og:title"), str(info.get("name") or ""))))
         desc = " ".join(filter(None, (_meta(page, "description"), _meta(page, "og:description"), str(info.get("description") or ""))))
         # the title: any accessory word; the description: only LED (a real set's text may say 'display model')
-        if search or is_accessory(head) or NOT_THE_SET.search(desc):
+        if search or is_accessory(head) or NOT_THE_SET.search(strip_allowed(desc)):
             # an LED kit (or other accessory) page for this number, or a search page: look further on the site
             links = _links(root, page_url, r"/set/", num)
             if links and step < MAX_STEPS - 1:

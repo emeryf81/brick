@@ -104,6 +104,7 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_compare_fetch)
     websocket_api.async_register_command(hass, ws_compare_test)
     websocket_api.async_register_command(hass, ws_compare_html)
+    websocket_api.async_register_command(hass, ws_filter_test)
     websocket_api.async_register_command(hass, ws_notify_set)
     websocket_api.async_register_command(hass, ws_notify_test)
     hass.http.register_view(UserscriptView())
@@ -476,6 +477,24 @@ async def ws_compare_test(hass, connection, msg):
             coord._cstore(src).pop(num, None)
     dbg = coord._compare_debug.get(src) or {}
     connection.send_result(msg["id"], {"steps": steps, "entry": entry, "size": len(dbg.get("html") or "")})
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/filter/test", vol.Required("title"): str,
+                                  vol.Optional("block_words"): [str], vol.Optional("allow_words"): [str]})
+@callback
+def ws_filter_test(hass, connection, msg):
+    """Product filter: is this title an accessory? With the given (unsaved) word lists, else the saved ones."""
+    from . import parsers
+    from .const import CONF_ALLOW_WORDS, CONF_BLOCK_WORDS
+
+    coord = _coord(hass)
+    saved = (coord.opt(coord.entry, CONF_BLOCK_WORDS, []), coord.opt(coord.entry, CONF_ALLOW_WORDS, []))
+    parsers.set_custom_words(msg.get("block_words", saved[0]), msg.get("allow_words", saved[1]))
+    try:
+        word = parsers.accessory_word(msg["title"]) or ((m := parsers.KNOCKOFF_RE.search(msg["title"])) and m.group(0))
+    finally:
+        parsers.set_custom_words(*saved)
+    connection.send_result(msg["id"], {"word": word or None})
 
 
 @websocket_api.require_admin
