@@ -547,6 +547,7 @@
 "Show and fix": "查看并修复",
 "Show errors": "查看错误",
 "Show failed checks": "查看失败的检查",
+"Show {n} more ({total} left)": "再显示 {n} 个（还剩 {total} 个）",
 "Site": "网站",
 "Size": "大小",
 "Sort": "排序",

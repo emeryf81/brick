@@ -62,6 +62,21 @@ const signPct = (v) => (v == null ? "–" : `${v > 0 ? "+" : ""}${v.toLocaleStri
 const DATE = (ts, o = { day: "2-digit", month: "short" }) => new Date(ts * 1000).toLocaleDateString(LOC, o);
 const TIME = (ts) => new Date(ts * 1000).toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" });
 const SRC = { kieskeurig: "Kieskeurig", shoparize: "Shoparize", channable: "Channable Shopping", producthero: "Producthero", brickeconomy: "BrickEconomy" };
+/** A small version of a product image: full-size LEGO images are ~2000 px (≈16 MB decoded each),
+ *  which makes iOS kill the page when a view shows hundreds of sets. */
+const thumb = (url, w = 320) => {
+  if (!url) return url;
+  try {
+    const u = new URL(url);
+    if (/(^|\.)lego\.com$/.test(u.hostname) && u.pathname.includes("/cdn/")) {
+      for (const [k, v] of Object.entries({ format: "webply", fit: "bounds", quality: "70", width: String(w), height: String(w) })) u.searchParams.set(k, v);
+      return u.toString();
+    }
+    if (/media-amazon\.com$/.test(u.hostname)) return url.replace(/\._[A-Z0-9_,]+_\.(jpe?g|png|webp)$/i, `._AC_SL${w}_.$1`);
+  } catch (e) { /* not a URL */ }
+  return url;
+};
+const GRID_PAGE = 48;
 const ago = (ts) => {
   if (!ts) return t("never");
   const s = Date.now() / 1000 - ts;
@@ -231,6 +246,8 @@ input[type=range]{padding:0;accent-color:var(--lt-accent)}input[type=checkbox]{a
 .panel p{margin:0 0 10px;color:var(--lt-muted);font-size:14px;line-height:1.5}
 h2.sec{font-size:16px;margin:18px 0 10px;display:flex;align-items:center;gap:8px}h2.sec .n{font-size:12px;color:var(--lt-muted);font-weight:500}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:14px}
+.grid .card{content-visibility:auto;contain-intrinsic-size:auto 300px}.enter .grid .card:nth-child(n+13){animation:none}
+@media(prefers-reduced-motion:reduce){.enter>*,.enter .card,.enter .shop{animation:none!important}}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:800px){.two{grid-template-columns:1fr}}
 /* cards */
 .card{background:var(--lt-card);border-radius:var(--lt-radius);padding:10px 10px 12px;cursor:pointer;position:relative;box-shadow:var(--lt-shadow);display:flex;flex-direction:column;gap:3px;transition:transform .2s cubic-bezier(.3,1.4,.5,1),box-shadow .2s;outline:none}
@@ -462,6 +479,8 @@ class LegoTrackerPanel extends HTMLElement {
   }
   _render(animate = false) {
     const s = this.state, root = this.shadowRoot;
+    const gridKey = `${s.section}/${s.sub[s.section]}/${JSON.stringify(s.f)}`;
+    if (gridKey !== this._gridKey) { this._gridKey = gridKey; s.gridMax = GRID_PAGE; }   // new view or filter: first page again
     this._rendered = true;
     const sec = SECTIONS[s.section], sub = s.sub[s.section];
     const d = s.data;
@@ -610,7 +629,7 @@ class LegoTrackerPanel extends HTMLElement {
       ${Object.keys(subs).length ? `<div class="chips"><span class="chip sm ${!f.subtheme ? "on" : ""}" data-subtheme="">${t("All subthemes")}</span>${Object.keys(subs).sort().map((st) => `<span class="chip sm ${f.subtheme === st ? "on" : ""}" data-subtheme="${esc(st)}">${esc(st)} <span class="muted">${subs[st]}</span></span>`).join("")}</div>` : ""}
       ${Object.keys(conds).length > 1 ? `<div class="chips"><span class="chip sm ${!f.cond ? "on" : ""}" data-cond="">${t("Any condition")}</span>${Object.keys(conds).map((c) => `<span class="chip sm ${f.cond === c ? "on" : ""}" data-cond="${esc(c)}">${esc(t(c))} <span class="muted">${conds[c]}</span></span>`).join("")}</div>` : ""}`;
   }
-  img(s, big = false) { return s.image ? `<img loading="lazy" src="${esc(s.image)}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'ph',textContent:'🧱'}))">` : `<span class="ph"${big ? ' style="font-size:60px"' : ""}>🧱</span>`; }
+  img(s, big = false) { return s.image ? `<img loading="lazy" decoding="async" src="${esc(thumb(s.image, big ? 640 : 320))}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'ph',textContent:'🧱'}))">` : `<span class="ph"${big ? ' style="font-size:60px"' : ""}>🧱</span>`; }
   badges(s) {
     return [
       s.is_all_time_low ? `<span class="badge">🔻 ${t("Lowest ever")}</span>` : "",
@@ -640,7 +659,12 @@ class LegoTrackerPanel extends HTMLElement {
       <div class="m">${store ? t("at {shop}", { shop: esc(store) }) : s.offers_live === 0 && Object.keys(s.offers || {}).length ? "⚠ " + t("no price found") : Object.keys(s.offers || {}).length ? t("no price") : t("no shop links yet")}${s.price_per_piece ? ` · ${t("{n} ct/piece", { n: (s.price_per_piece * 100).toFixed(1) })}` : ""}${s.target_price ? ` · 🎯 ${EUR0(s.target_price)}` : ""}</div>
       ${spark(s.spark)}</div>`;
   }
-  gridOf(list, mode) { return `<div class="grid">${list.map((s, i) => this.card(s, i, mode)).join("")}</div>`; }
+  gridOf(list, mode) {
+    // page by page: hundreds of cards (images, animations) at once make the iPhone app run out of memory
+    const max = this.state.gridMax || GRID_PAGE, shown = list.slice(0, max);
+    const more = list.length > max ? `<div style="text-align:center;margin:14px 0"><button class="btn ghost" data-gridmore="1">${t("Show {n} more ({total} left)", { n: Math.min(GRID_PAGE, list.length - max), total: list.length - max })}</button></div>` : "";
+    return `<div class="grid">${shown.map((s, i) => this.card(s, i, mode)).join("")}</div>${more}`;
+  }
   emptyState(icon, text, action = "") { return `<div class="empty"><span class="big">${icon}</span>${text}${action ? `<br><br>${action}` : ""}</div>`; }
   banner() {
     const h = this.state.data.health; if (!h || !h.errors) return "";
@@ -1264,6 +1288,7 @@ class LegoTrackerPanel extends HTMLElement {
   bindContent(root) {
     const s = this.state, $ = (id) => root.querySelector("#" + id), on = (sel, ev, fn) => root.querySelectorAll(sel).forEach((e) => e.addEventListener(ev, fn));
     this.bindCards(root);
+    this.shadowRoot.querySelectorAll("[data-gridmore]").forEach((el) => { el.onclick = () => { const y = window.scrollY; s.gridMax = (s.gridMax || GRID_PAGE) + GRID_PAGE; this.render(false); window.scrollTo(0, y); }; });
     this.shadowRoot.querySelectorAll("[data-goto]").forEach((el) => { el.onclick = () => { const [a, b] = el.dataset.goto.split("/"); s.section = a; s.sub[a] = b; if (a === "log") s.logv.data = null; this.closeDialog(true); this.resetFilters(); this.persist(); this.render(true); }; });
     // filters
     const q = $("q"); if (q) q.addEventListener("input", (e) => { s.f.q = e.target.value; this.renderResults(); });
@@ -1637,7 +1662,7 @@ class LegoTrackerPanel extends HTMLElement {
   // ---------------------------------------------------------------- item editor (errors, link check, logbook)
   /** Inline editor for one set: name, set data (LEGO.com first) and every shop with its own buttons. */
   itemEditorHtml(s, focus = null) {
-    return `<div class="item" data-inum="${esc(s.set_number)}"><div class="itemhead">${s.image ? `<img src="${esc(s.image)}" alt="" loading="lazy">` : `<span class="ph">🧱</span>`}
+    return `<div class="item" data-inum="${esc(s.set_number)}"><div class="itemhead">${s.image ? `<img src="${esc(thumb(s.image, 160))}" alt="" loading="lazy" decoding="async">` : `<span class="ph">🧱</span>`}
         <div style="flex:1;min-width:0"><div class="form" style="margin:0"><label style="grid-column:span 2">${t("Name")}${s.name_source === "user" ? ` <span class="mbadge">✎ ${t("manual")}</span>` : ""}<input class="i_name" value="${esc(s.name || "")}" data-orig="${esc(s.name || "")}" placeholder="${t("empty = filled in automatically")}"></label></div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button class="btn sm i_save" disabled>💾 ${t("Save name")}</button><button class="btn ghost sm i_enrich" title="${t("Get the image, RRP and name from LEGO.com, then theme, year and pieces from Brickset / Rebrickable")}">🖼 ${t("Set data from LEGO.com")}</button><button class="btn ghost sm" data-set="${esc(s.set_number)}">${t("Open set")}</button><button class="btn ghost sm i_log">📜 ${t("Logbook")}</button></div>
         <div class="muted" style="font-size:12px;margin-top:4px">${esc(s.set_number)} · ${esc(s.theme || "?")}${s.rrp ? " · " + t("RRP {price}", { price: EUR(s.rrp) }) : ""}${s.image_source ? " · 🖼 " + esc(s.image_source === "shop" ? t("image from a shop") : s.image_source === "user" ? t("manual") : s.image_source) : ""}</div></div></div>
