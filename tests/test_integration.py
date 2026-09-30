@@ -1,5 +1,6 @@
 """Smoke tests against a real Home Assistant core (needs pytest-homeassistant-custom-component)."""
 import time
+import copy
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -8,7 +9,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.lego_tracker.const import DOMAIN
+from custom_components.lego_tracker.const import DOMAIN, MAX_HISTORY
 from custom_components.lego_tracker.parsers import Parsed
 
 CSV = "Number;Name;Theme;Qty;Paid;Value\n10281-1;Bonsai;Botanicals;1;40;50\n42143;Ferrari;Technic;1;350;400\n"
@@ -179,6 +180,41 @@ async def test_bulk_target_notify_export_and_backup(hass: HomeAssistant, entry, 
     assert out["sets"] == 3
     with pytest.raises(ServiceValidationError):
         await hass.services.async_call(DOMAIN, "import_data", {"data": {"bogus": 1}}, blocking=True, return_response=True)
+
+
+@pytest.mark.parametrize("merge", [False, True])
+async def test_backup_history_validation_is_atomic(hass: HomeAssistant, entry, merge):
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    coord = hass.data[DOMAIN][entry.entry_id]
+    before = copy.deepcopy(coord.store)
+    for history in ([[i, 50] for i in range(MAX_HISTORY + 1)], [[2, 50], [1, 40]]):
+        data = {"sets": {"10281": {}}, "offers": {"10281": {"bol": {"history": history}}}}
+        with patch.object(coord, "push_update") as push:
+            with pytest.raises(ServiceValidationError, match="invalid price history"):
+                await hass.services.async_call(DOMAIN, "import_data", {"data": data, "merge": merge}, blocking=True)
+            push.assert_not_called()
+        assert coord.store == before
+
+
+@pytest.mark.parametrize("merge", [False, True])
+async def test_backup_history_limit_and_overview(hass: HomeAssistant, entry, hass_ws_client, merge):
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    history = [[1_700_000_000 + i, 50 + i % 2] for i in range(MAX_HISTORY)]
+    data = {"sets": {"10281": {"set_number": "10281"}},
+            "offers": {"10281": {"bol": {"history": history, "available": True, "last_price": 51}}}}
+    await hass.services.async_call(DOMAIN, "import_data", {"data": data, "merge": merge}, blocking=True)
+    coord = hass.data[DOMAIN][entry.entry_id]
+    assert coord.store["offers"]["10281"]["bol"]["history"] == history
+    assert coord.store["offers"]["10281"]["bol"]["history"] is not history
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/overview"})
+    card = (await ws.receive_json())["result"]["sets"][0]
+    assert card["all_time_low"] == 50
+    assert card["spark"] == [p for _, p in history][-60:]
+    await ws.send_json({"id": 2, "type": "lego_tracker/set", "set_number": "10281"})
+    assert (await ws.receive_json())["result"]["history"]["bol"] == history
 
 
 async def test_diagnostics_and_health_sensor(hass: HomeAssistant, entry, no_network):
