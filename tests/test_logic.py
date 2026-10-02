@@ -544,3 +544,15 @@ def test_parse_lego_sold_out_never_takes_a_recommended_products_price():
     assert parsers.parse_page("lego_com", other, "10280").price is None
     assert parsers.lego_number("https://www.lego.com/nl-be/product/flower-bouquet-10280") == "10280"
     assert parsers.lego_number("https://www.lego.com/nl-be/product/10280?x=1") == "10280"
+
+
+def test_suspicious_price_without_rrp_uses_the_other_shops():
+    from custom_components.lego_tracker.models import is_suspicious_price
+
+    new_set = {"set_number": "75192"}                                     # no RRP, no history yet
+    assert is_suspicious_price(75000.0, new_set, {}, [749.99, 759.0])     # cents read without the comma
+    assert is_suspicious_price(75000.0, new_set, {}, [749.99])
+    assert not is_suspicious_price(749.99, new_set, {}, [75000.0])        # one other shop: never blame the low one
+    assert is_suspicious_price(19.99, new_set, {}, [749.99, 759.0])       # an accessory, two shops agree
+    assert not is_suspicious_price(729.0, new_set, {}, [749.99, 759.0])
+    assert not is_suspicious_price(75000.0, new_set, {}, [])              # nothing to compare with

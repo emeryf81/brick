@@ -1536,3 +1536,21 @@ async def test_fetcher_spaces_requests_per_site():
     assert f.next_free("https://www.amazon.nl/dp/B0") == 0
     f.last_search["bol.com"] = time.time()
     assert 115 < f.next_free("bol.com", search=True) <= 120
+
+
+async def test_new_custom_shop_is_used_and_shop_detail(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    c = await _setup(hass, entry)
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/settings/set", "fields": {
+        "custom_shops": [{"id": "c_smyths", "name": "Smyths", "domain": "smythstoys.com",
+                          "search": "https://www.smythstoys.com/be/nl-be/search?text={query}"}]}})
+    assert (await ws.receive_json())["result"]["saved"]
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][entry.entry_id]
+    assert "c_smyths" in c.retailers                          # added shops are searched and fetched right away
+    c.fetcher._trace("c_smyths", "search", "https://www.smythstoys.com/be/nl-be/search?text=LEGO+10368", time.time(), 200, 51234,
+                     None, "the search page does not contain 10368: this shop probably loads its results with JavaScript.", "10368")
+    await ws.send_json({"id": 2, "type": "lego_tracker/shop/detail", "retailer": "c_smyths"})
+    d = (await ws.receive_json())["result"]
+    assert d["site"] == "smythstoys.com" and d["trace"][0]["status"] == 200 and d["enabled"]
+    assert any("JavaScript" in h for h in d["hints"])

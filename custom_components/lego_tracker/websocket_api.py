@@ -108,6 +108,7 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_client_error)
     websocket_api.async_register_command(hass, ws_logs_export)
     websocket_api.async_register_command(hass, ws_report)
+    websocket_api.async_register_command(hass, ws_shop_detail)
     websocket_api.async_register_command(hass, ws_notify_set)
     websocket_api.async_register_command(hass, ws_notify_test)
     hass.http.register_view(UserscriptView())
@@ -530,6 +531,17 @@ def ws_report(hass, connection, msg):
         return
     rep, text = coord.report_problem(num, msg["problems"], msg["shops"], msg["comment"], msg["save"])
     connection.send_result(msg["id"], {"id": rep["id"], "saved": msg["save"], "csv": text})
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/shop/detail", vol.Required("retailer"): str})
+@callback
+def ws_shop_detail(hass, connection, msg):
+    """Shops → click a shop: last requests, results, errors and a diagnosis (polled while open)."""
+    coord = _coord(hass)
+    if coord is None or msg["retailer"] not in RETAILERS:
+        connection.send_error(msg["id"], "not_found", "Unknown shop")
+        return
+    connection.send_result(msg["id"], coord.shop_detail(msg["retailer"]))
 
 
 _CLIENT_ERRORS: list[float] = []
