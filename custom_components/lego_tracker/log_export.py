@@ -12,7 +12,7 @@ from typing import Any, Callable
 from .const import RETAILERS
 from .models import price_at, rows_to_csv, trusted
 
-PARTS = ("checks", "history", "total")
+PARTS = ("checks", "history", "total", "reports")
 DAY = 86400
 
 
@@ -150,8 +150,18 @@ def build(store: dict[str, Any], opts: dict[str, Any], is_watched: Callable[[str
         tables["history"] = history_rows(store, nums, start, end, shops)
     if "total" in parts:
         tables["total"] = total_rows(store, nums, start, end)
-    if len(tables) == 1:
+    reports = None
+    if "reports" in parts:                         # 'Problem with this set' reports in the period (set filters apply)
+        from . import report
+
+        wanted = set(nums)
+        reports = [r for r in store.get("reports", []) if start <= r["ts"] <= end and r["set_number"] in wanted]
+    if len(tables) == 1 and reports is None:
         (key, rows), = tables.items()
         return rows_to_csv(rows, COLUMNS[key]), {key: len(rows)}
     chunks = [f"# {TITLES[k]}\n" + rows_to_csv(rows, COLUMNS[k]) for k, rows in tables.items()]
-    return "\n".join(chunks), {k: len(v) for k, v in tables.items()}
+    counts = {k: len(v) for k, v in tables.items()}
+    if reports is not None:
+        chunks.append(report.to_csv(reports))
+        counts["reports"] = len(reports)
+    return "\n".join(chunks), counts

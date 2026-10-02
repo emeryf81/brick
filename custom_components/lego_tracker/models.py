@@ -449,7 +449,7 @@ ACTIVITY_MAX = 6000
 ACTIVITY_KINDS = {
     "check": "Shop check", "price": "Price change", "fetch": "Shop connection", "discover": "Link search", "link": "Link check",
     "userscript": "Userscript (Tampermonkey)", "import": "Import", "job": "Job", "notify": "Notification",
-    "meta": "Set data", "user": "Your action", "settings": "Settings", "shop": "Shop status",
+    "meta": "Set data", "user": "Your action", "settings": "Settings", "shop": "Shop status", "report": "Problem report",
 }
 
 

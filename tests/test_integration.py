@@ -32,6 +32,12 @@ def no_refresh_gap():
 
 
 @pytest.fixture(autouse=True)
+def no_manual_gap():
+    with patch("custom_components.lego_tracker.coordinator.MANUAL_GAP", 0):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def no_catalogue():
     """Tests use real set numbers: without this the built-in catalogue would fill them in."""
     from custom_components.lego_tracker import catalog
@@ -1474,3 +1480,59 @@ async def test_watch_on_and_off_for_owned_and_not_owned_sets(hass: HomeAssistant
     c.update_set("10281", {"watch": False})
     await c.add_set("10281", discover=False)             # added to the watchlist again
     assert c.is_watched("10281")
+
+
+async def test_problem_report_to_logbook_and_csv(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
+    c.update_offer("10281", "bol", url="https://www.bol.com/nl/nl/p/lego-bonsai-10281/9300000012345678/")
+    c.store["offers"]["10281"]["bol"].update(error="price not found on the page", history=[[1700000000, 41.5]])
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/report", "set_number": "10281", "problems": ["price", "link", "bogus"],
+                        "shops": ["bol"], "comment": "price is from an LED kit", "save": False})
+    r = await ws.receive_json()
+    assert r["success"] and not c.store.get("reports")                       # CSV only: nothing stored
+    csv = r["result"]["csv"]
+    assert "# Problem reports: shops" in csv and "price is from an LED kit" in csv and "price not found on the page" in csv
+    assert "bol.com" in csv and "=41.5" in csv and "bogus" not in csv
+    await ws.send_json({"id": 2, "type": "lego_tracker/report", "set_number": "10281", "problems": ["price"], "comment": "x"})
+    r = await ws.receive_json()
+    assert r["success"] and len(c.store["reports"]) == 1
+    entry_ = c.store["activity"][-1]
+    assert entry_["kind"] == "report" and entry_["level"] == "warning" and entry_["report"] == r["result"]["id"]
+    await ws.send_json({"id": 3, "type": "lego_tracker/logs/export", "parts": ["reports"]})
+    r = await ws.receive_json()
+    assert r["success"] and r["result"]["counts"] == {"reports": 1} and "# Problem reports: recent log" in r["result"]["csv"]
+
+
+async def test_manual_actions_wait_two_minutes(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10311"}, blocking=True)
+    c.update_offer("10281", "bol", url="https://www.bol.com/nl/nl/p/lego-bonsai-10281/9300000012345678/")
+    with patch("custom_components.lego_tracker.coordinator.MANUAL_GAP", 120):
+        await hass.services.async_call(DOMAIN, "refresh", {"set_number": "10281"}, blocking=True, return_response=True)
+        with pytest.raises(ServiceValidationError, match="once every 2 minutes"):      # also for another set
+            await hass.services.async_call(DOMAIN, "refresh", {"set_number": "10311"}, blocking=True, return_response=True)
+        st = c.manual_status()
+        assert st["prices"] and "bol" in st["shops"] and st["find"] is None
+        with pytest.raises(ValueError, match="once every 2 minutes"):                  # the shop's site was just asked
+            await c.fetch_shop("10311", "bol")
+        await c.fetch_shop("10311", "amazon_de")                                         # another site is fine
+        with pytest.raises(ValueError):
+            await c.fetch_shop("10281", "amazon_de")
+        ws = await hass_ws_client(hass)
+        await ws.send_json({"id": 1, "type": "lego_tracker/overview"})
+        r = await ws.receive_json()
+        assert r["result"]["manual"]["shops"].keys() >= {"bol", "amazon_de"}
+
+
+async def test_fetcher_spaces_requests_per_site():
+    from custom_components.lego_tracker.client import Fetcher
+
+    f = Fetcher(None, use_impersonation=False)
+    f.last_request["bol.com"] = time.time()
+    assert 25 < f.next_free("https://www.bol.com/nl/nl/p/x/") <= 30
+    assert f.next_free("https://www.amazon.nl/dp/B0") == 0
+    f.last_search["bol.com"] = time.time()
+    assert 115 < f.next_free("bol.com", search=True) <= 120

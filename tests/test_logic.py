@@ -1,4 +1,5 @@
 import time
+import re
 
 import pytest
 from lego_pkg import csv_import, models, parsers
@@ -520,3 +521,26 @@ def test_activity_log_collapse_and_query():
     for i in range(models.ACTIVITY_MAX + 10):
         models.add_activity(store, "info", "job", f"x{i}")
     assert len(store["activity"]) == models.ACTIVITY_MAX
+
+
+def test_parse_lego_sold_out_never_takes_a_recommended_products_price():
+    sold_out = """<html><title>Boeket bloemen 10280 | LEGO® Icons</title>
+<script type="application/ld+json">{"@type":"Product","name":"Boeket bloemen","sku":"10280","image":"https://www.lego.com/cdn/10280.png",
+"offers":{"@type":"Offer","price":"59.99","priceCurrency":"EUR","availability":"https://schema.org/OutOfStock"}}</script>
+<script type="application/ld+json">{"@type":"Product","name":"Mini bloemen","sku":"40646","offers":{"@type":"Offer","price":"14.99","availability":"https://schema.org/InStock"}}</script>
+<script id="__NEXT_DATA__">{"recommendations":[{"productCode":"40646","price":{"formattedAmount":"€ 14,99","centAmount":1499},"availabilityStatus":"E_AVAILABLE"}],
+"product":{"productCode":"10280","price":{"formattedAmount":"€ 59,99","centAmount":5999},"availabilityStatus":"H_OUT_OF_STOCK"}}</script></html>"""
+    p = parsers.parse_page("lego_com", sold_out, "10280")
+    assert p.price is None and p.unavailable and p.list_price == 59.99 and p.title == "Boeket bloemen"
+    # without JSON-LD: only the state around this product's code counts
+    no_ld = re.sub(r'<script type="application/ld\+json">.*?</script>', "", sold_out, flags=re.S)
+    p = parsers.parse_page("lego_com", no_ld, "10280")
+    assert p.price is None and p.unavailable and p.list_price == 59.99
+    in_stock = sold_out.replace("OutOfStock", "InStock").replace("H_OUT_OF_STOCK", "E_AVAILABLE")
+    p = parsers.parse_page("lego_com", in_stock, "10280")
+    assert p.price == 59.99 and not p.unavailable and p.list_price == 59.99
+    # a page with only other products' codes gives no price at all
+    other = '<script>{"productCode":"40646","price":{"centAmount":1499}}</script>'
+    assert parsers.parse_page("lego_com", other, "10280").price is None
+    assert parsers.lego_number("https://www.lego.com/nl-be/product/flower-bouquet-10280") == "10280"
+    assert parsers.lego_number("https://www.lego.com/nl-be/product/10280?x=1") == "10280"

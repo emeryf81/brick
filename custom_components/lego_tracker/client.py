@@ -6,6 +6,7 @@ import json
 import logging
 import random
 import time
+from urllib.parse import urlparse
 from typing import Any
 
 import aiohttp
@@ -13,7 +14,7 @@ import aiohttp
 from .models import normalize_set_number
 from .i18n import T
 from .shops import domain_of
-from .parsers import Parsed, find_search_result, lego_product_url, parse_brickset_page, parse_page, search_url
+from .parsers import Parsed, find_search_result, lego_number, lego_product_url, parse_brickset_page, parse_page, search_url
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,6 +37,20 @@ ORIGINS = {
     "amazon_be": "https://www.amazon.com.be/", "bol": "https://www.bol.com/nl/nl/",
     "kruidvat_be": "https://www.kruidvat.be/nl/",
 }
+# To protect the traffic to and the load on the shops and comparison sites: at most 2 requests a minute
+# per site, and a search at most once every 2 minutes per site.
+DOMAIN_GAP = 30.0
+SEARCH_GAP = 120.0
+
+
+class Aborted(Exception):
+    """The running job was stopped while a request was waiting for its turn."""
+
+
+def site_of(url: str) -> str:
+    return urlparse(url).netloc.lower().removeprefix("www.")
+
+
 # After a block we stop asking that retailer for a while: hammering makes bot protection stricter.
 COOLDOWN_HOURS = (1, 3, 6, 12, 24)
 CURL_REQUIREMENT = "curl_cffi>=0.7.0"
@@ -61,6 +76,10 @@ class Fetcher:
         self.on_pause = None   # callback(retailer, hours), set by the coordinator
         self.blocked_until: dict[str, float] = {}
         self.discover_error: dict[str, str | None] = {}   # why the last search found nothing, per shop
+        self.domain_gap, self.search_gap = DOMAIN_GAP, SEARCH_GAP
+        self.last_request: dict[str, float] = {}           # per site: when it was last asked anything
+        self.last_search: dict[str, float] = {}            # per site: when it was last searched
+        self.abort: Any = None                             # callable: True = stop waiting (the job was stopped)
 
     @property
     def transport(self) -> str:
@@ -118,11 +137,27 @@ class Fetcher:
         async with sess.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=30), allow_redirects=True) as resp:
             return resp.status, await resp.text(errors="replace")
 
-    async def _get(self, retailer: str, url: str) -> tuple[int, str]:
+    def next_free(self, url_or_site: str, search: bool = False) -> float:
+        """Seconds until this site may be asked again (searches: also the search gap)."""
+        site = site_of(url_or_site) if "/" in url_or_site else url_or_site
+        due = self.last_request.get(site, 0) + self.domain_gap
+        if search:
+            due = max(due, self.last_search.get(site, 0) + self.search_gap)
+        return max(0.0, due - time.time())
+
+    async def _wait_turn(self, site: str, search: bool) -> None:
+        while (left := self.next_free(site, search)) > 0:
+            if self.abort and self.abort():
+                raise Aborted
+            await asyncio.sleep(min(left, 1.0))
+
+    async def _get(self, retailer: str, url: str, search: bool = False) -> tuple[int, str]:
         if self._curl_ok is None:
             await self.async_setup()
-        lock = self._locks.setdefault(retailer, asyncio.Lock())
+        site = site_of(url)
+        lock = self._locks.setdefault(site, asyncio.Lock())      # one request at a time per site
         async with lock:
+            await self._wait_turn(site, search)
             origin = ORIGINS.get(retailer) or (f"https://www.{d}/" if (d := domain_of(retailer)) else None)
             if origin and retailer not in self._warmed:   # look like a visitor: home page first
                 self._warmed.add(retailer)
@@ -132,7 +167,12 @@ class Fetcher:
                     pass
                 await asyncio.sleep(2 + random.random() * 2)
             await asyncio.sleep(self.min_delay + random.random() * 3)
-            return await self._request(retailer, url, referer=origin)
+            try:
+                return await self._request(retailer, url, referer=origin)
+            finally:
+                self.last_request[site] = time.time()
+                if search:
+                    self.last_search[site] = time.time()
 
     def reset_cooldowns(self, retailer: str | None = None) -> None:
         if retailer is None:
@@ -165,6 +205,8 @@ class Fetcher:
             return None, T("paused {hours} h after being blocked", hours=f"{left / 3600:.1f}")
         try:
             status, page = await self._get(retailer, url)
+        except Aborted:
+            return None, T("paused: the job was stopped")
         except Exception as err:  # noqa: BLE001 - aiohttp and curl_cffi raise different types
             return None, T("network error: {error}", error=str(err)[:120])
         if status in (403, 429, 503):
@@ -174,7 +216,7 @@ class Fetcher:
             return None, T("page not found (HTTP 404)")
         if status >= 400:
             return None, T("HTTP error {status}", status=status)
-        parsed = parse_page(retailer, page)
+        parsed = parse_page(retailer, page, lego_number(url) if retailer == "lego_com" else None)
         if parsed.blocked:
             self._note_block(retailer)
             return None, T("blocked (captcha / bot protection)")
@@ -190,6 +232,8 @@ class Fetcher:
             return 0, "", T("paused {hours} h after being blocked", hours=f"{left / 3600:.1f}")
         try:
             status, page = await self._get(key, url)
+        except Aborted:
+            return 0, "", T("paused: the job was stopped")
         except Exception as err:  # noqa: BLE001
             return 0, "", T("network error: {error}", error=str(err)[:120])
         if status in (403, 429, 503):
@@ -208,7 +252,10 @@ class Fetcher:
             self.discover_error[retailer] = T("paused after being blocked") if url else T("this shop has no search URL")
             return None
         try:
-            status, page = await self._get(retailer, url)
+            status, page = await self._get(retailer, url, search=True)
+        except Aborted:
+            self.discover_error[retailer] = T("paused: the job was stopped")
+            return None
         except Exception as err:  # noqa: BLE001
             self.discover_error[retailer] = T("could not reach the shop: {error}", error=str(err)[:100])
             return None
@@ -229,11 +276,11 @@ class Fetcher:
         # LEGO.com search is partly rendered in the browser: try the product URL directly
         try:
             status, page = await self._get(retailer, lego_product_url(set_number))
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - also Aborted
             return None
         if status < 400:
-            parsed = parse_page(retailer, page)
-            if parsed.price or (parsed.title and set_number in (parsed.title + page[:200000])):
+            parsed = parse_page(retailer, page, set_number)
+            if parsed.price or parsed.list_price or (parsed.title and set_number in (parsed.title + page[:200000])):
                 return lego_product_url(set_number)
         self.discover_error[retailer] = T("no matching product found")
         return None

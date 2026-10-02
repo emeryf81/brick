@@ -434,11 +434,30 @@ class LegoTrackerPanel extends HTMLElement {
     try {
       const [d, c] = await Promise.all([this._hass.callWS({ type: "lego_tracker/overview" }), this._hass.callWS({ type: "lego_tracker/collection" })]);
       if (await loadLanguage(d.language, d.version)) { animate = true; this.shadowRoot.host.setAttribute("lang", LANG); }
-      this.state.data = d; this.state.coll = c; this.state.err = null;
+      this.state.data = d; this.state.coll = c; this.state.err = null; this.state.mAt = Date.now() / 1000;
       if (this.state.threshold == null) this.state.threshold = d.threshold;
       this.state.job = d.job; if (d.job && d.job.running) this.pollJob();
     } catch (e) { this.state.err = e.message || String(e); }
     this.render(animate || !this._rendered);
+  }
+  /** Manual fetches and searches are possible once every 2 minutes (per set action, per shop site): seconds to wait. */
+  mLeft(key) {
+    const m = this.state.data && this.state.data.manual; if (!m) return 0;
+    const u = key === "prices" || key === "find" ? m[key] : (m.shops || {})[key];
+    return u ? Math.max(0, Math.ceil(u - m.now - (Date.now() / 1000 - this.state.mAt))) : 0;
+  }
+  mTitle(sec) { return t("To protect the traffic to and the load on the shops, this is possible once every 2 minutes. Available again in {s} s.", { s: sec }); }
+  mAttr(key) { const sec = this.mLeft(key); return sec ? `disabled data-mwait="${esc(key)}" title="${esc(this.mTitle(sec))}"` : `data-mkey="${esc(key)}"`; }
+  /** Count the greyed buttons down and switch them on again when their 2 minutes are over. */
+  tickManual() {
+    clearTimeout(this._mTimer);
+    const roots = [this.shadowRoot, this.shadowRoot.getElementById("dlg")].filter(Boolean);
+    let waiting = false;
+    for (const r of roots) for (const b of r.querySelectorAll("[data-mwait]")) {
+      const sec = this.mLeft(b.dataset.mwait);
+      if (sec) { waiting = true; b.disabled = true; b.title = this.mTitle(sec); } else { b.disabled = false; b.removeAttribute("title"); b.dataset.mkey = b.dataset.mwait; delete b.dataset.mwait; }
+    }
+    if (waiting) this._mTimer = setTimeout(() => this.tickManual(), 1000);
   }
   svc(service, data = {}, ret = false) {
     return this._hass.callWS({ type: "call_service", domain: "lego_tracker", service, service_data: data, return_response: ret });
@@ -465,7 +484,7 @@ class LegoTrackerPanel extends HTMLElement {
   /** "Refresh all prices" is off unless allowed; then at most once a minute (the server checks it too). */
   fullRefreshAttr(title) {
     const d = this.state.data;
-    if (d && !d.full_refresh) return `disabled title="${esc(t("Switched off: fetching every set at once puts too much load on the shops. Prices are checked set by set in the background; use ↻ in a set to fetch one set now."))}"`;
+    if (d && !d.full_refresh) return `disabled title="${esc(t("Switched off to protect the traffic to and the load on the shops: prices are checked set by set in the background; use ↻ in a set to fetch one set now (once every 2 minutes)."))}"`;
     return title ? `title="${esc(title)}"` : "";
   }
   isDeal(s) {
@@ -510,7 +529,7 @@ class LegoTrackerPanel extends HTMLElement {
     const keepToasts = root.querySelector(".toasts"), keepDlg = root.getElementById("dlg");
     root.innerHTML = `<style>${STYLE}</style><div class="wrap">
       <header>${this._narrow ? `<ha-menu-button></ha-menu-button>` : ""}<img class="logo" src="/lego_tracker_static/icon.png${d ? `?v=${encodeURIComponent(d.version)}` : ""}" alt="" onerror="this.outerHTML=this.dataset.fb" data-fb="${esc(BRICK)}"><div><h1>LEGO Organizing Tool</h1><div class="meta">${d ? `v${esc(d.version)} · ${t("{n} sets tracked", { n: d.sets.length })}` : t("loading…")}</div></div>
-        <div class="hsp"></div>${status}<button class="btn ghost sm" data-act="discover" title="${t("Search shop links for sets that have none yet")}">🔎 <span class="lbl">${t("Find links")}</span></button><button class="btn sm" data-act="refresh" ${this.fullRefreshAttr(t("Fetch all shop prices now"))}>↻ <span class="lbl">${t("Refresh prices")}</span></button></header>
+        <div class="hsp"></div>${status}<button class="btn ghost sm" data-act="discover" title="${t("Search shop links for sets that have none yet: a job you can follow and stop, spread out so every shop is searched at most once every 2 minutes")}">🔎 <span class="lbl">${t("Find links")}</span></button><button class="btn sm" data-act="refresh" ${this.fullRefreshAttr(t("Fetch all shop prices now"))}>↻ <span class="lbl">${t("Refresh prices")}</span></button></header>
       <div id="jobbar"></div>
       <nav class="seg" role="tablist">${Object.entries(SECTIONS).map(([k, v]) => `<button role="tab" data-sec="${k}" class="${k === s.section ? "on" : ""}">${t(v.label)}<small>${t(v.hint)}</small></button>`).join("")}<span class="ind"></span></nav>
       <div class="sub">${sec.subs.map(([k, l]) => `<button data-sub="${k}" class="${k === sub ? "on" : ""}">${t(l)}${this.subCount(s.section, k)}</button>`).join("")}${s.section === "manage" ? `<button data-sub="secret" class="secretlink" tabindex="-1" aria-hidden="true"></button>` : ""}</div>
@@ -614,7 +633,7 @@ class LegoTrackerPanel extends HTMLElement {
     el.className = animate && !REDUCED ? "enter" : "";
     el.innerHTML = view.call(this);
     this.bindContent(el);
-    this.hookCharts(el);
+    this.hookCharts(el); this.tickManual();
     if (animate) this.countUp(el);
   }
   // only the results area (keeps focus in the search box while typing)
@@ -1079,7 +1098,8 @@ class LegoTrackerPanel extends HTMLElement {
       <div style="display:flex;gap:16px;flex-wrap:wrap;margin:12px 0">
         <label class="chk" title="${t("Every check of every shop: when, set, shop, result, price and error")}"><input type="checkbox" class="xp" value="checks" ${has("checks") ? "checked" : ""}> 🔄 ${t("Shop checks")} ⓘ</label>
         <label class="chk" title="${t("Every recorded price per set and per shop")}"><input type="checkbox" class="xp" value="history" ${has("history") ? "checked" : ""}> 📈 ${t("Price history per set")} ⓘ</label>
-        <label class="chk" title="${t("Per day: the sum of the lowest price of the chosen sets (last known price carried forward), e.g. what your watchlist would cost")}"><input type="checkbox" class="xp" value="total" ${has("total") ? "checked" : ""}> Σ ${t("Price history in total")} ⓘ</label></div>
+        <label class="chk" title="${t("Per day: the sum of the lowest price of the chosen sets (last known price carried forward), e.g. what your watchlist would cost")}"><input type="checkbox" class="xp" value="total" ${has("total") ? "checked" : ""}> Σ ${t("Price history in total")} ⓘ</label>
+        <label class="chk" title="${t("Every 'Problem with this set' report: links, prices, errors and your remark")}"><input type="checkbox" class="xp" value="reports" ${has("reports") ? "checked" : ""}> ⚠ ${t("Problem reports")} ⓘ</label></div>
       <div class="form"><label>${t("From")}<input type="date" id="xp_from" value="${day(30)}"></label><label>${t("To")}<input type="date" id="xp_to" value="${day(0)}"></label>
         <label>${t("Set")}<select id="xp_set">${setOpts}</select></label></div>
       <div class="form" id="xp_checks" ${has("checks") ? "" : "hidden"}><label>${t("Shop")}<select id="xp_shop"><option value="">${t("All shops")}</option>${shops}</select></label>
@@ -1115,7 +1135,7 @@ class LegoTrackerPanel extends HTMLElement {
       const a = document.createElement("a");
       a.href = URL.createObjectURL(new Blob(["\ufeff" + r.csv], { type: "text/csv;charset=utf-8" }));
       a.download = `lego-logbook-${new Date().toISOString().slice(0, 10)}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-      $("xp_res").textContent = Object.entries(r.counts).map(([k, n]) => `${t({ checks: "Shop checks", history: "Price history per set", total: "Price history in total" }[k])}: ${n}`).join(" · ");
+      $("xp_res").textContent = Object.entries(r.counts).map(([k, n]) => `${t({ checks: "Shop checks", history: "Price history per set", total: "Price history in total", reports: "Problem reports" }[k])}: ${n}`).join(" · ");
     });
   }
   bindLog(root, $) {
@@ -1362,7 +1382,7 @@ class LegoTrackerPanel extends HTMLElement {
         <label>${t("Daily digest at")}<input id="o_digest" type="time" value="${esc(st.digest_time)}"></label></div></div>
       <div class="panel"><h3>⏰ ${t("Automatic price checks")}</h3><div class="radio">
         <label class="${mode === "spread" ? "on" : ""}"><input type="radio" name="rmode" value="spread" ${mode === "spread" ? "checked" : ""}><b>🔄 ${t("Spread over the day")}</b><span>${t("Every set is checked once per cycle at every shop, evenly spread (e.g. 240 sets in 24 h = 10 sets per hour). Gentle on the shops, fewer blocks.")}</span></label>
-        <label class="${mode === "times" ? "on" : ""}${dev.dev_fixed_times ? "" : " dis"}" title="${dev.dev_fixed_times ? "" : t("Switched off: checking every set at once puts too much load on the shops and comparison sites, which then block you sooner.")}"><input type="radio" name="rmode" value="times" ${mode === "times" ? "checked" : ""} ${dev.dev_fixed_times ? "" : "disabled"}><b>🕖 ${t("At fixed times")}</b><span>${dev.dev_fixed_times ? t("A full round of all sets at the times you choose.") : t("Not available: a full round of all sets at once puts too much load on the shops and comparison sites.")}</span></label>
+        <label class="${mode === "times" ? "on" : ""}${dev.dev_fixed_times ? "" : " dis"}" title="${dev.dev_fixed_times ? "" : t("Switched off to protect the traffic to and the load on the shops and comparison sites.")}"><input type="radio" name="rmode" value="times" ${mode === "times" ? "checked" : ""} ${dev.dev_fixed_times ? "" : "disabled"}><b>🕖 ${t("At fixed times")}</b><span>${dev.dev_fixed_times ? t("A full round of all sets at the times you choose.") : t("Not available, to protect the traffic to and the load on the shops and comparison sites.")}</span></label>
         <label class="${mode === "off" ? "on" : ""}"><input type="radio" name="rmode" value="off" ${mode === "off" ? "checked" : ""}><b>⏸ ${t("Off")}</b><span>${t("Only when you fetch a set yourself (↻ in the set window).")}</span></label></div>
         <div class="form" id="rm_spread" ${mode === "spread" ? "" : "hidden"}>
           <label title="${t("How often every set is checked at every shop. Shorter = fresher prices, but more load on the shops.")}">${t("Cycle: every set once every … hours")} ⓘ${dev.dev_free_cycle ? `<input id="o_spread" type="number" min="1" max="168" value="${st.spread_hours}">` : `<select id="o_spread">${(st.cycle_choices || [2, 3, 4, 6, 12, 24]).map((h) => `<option value="${h}" ${+st.spread_hours === h ? "selected" : ""}>${t("{n} h", { n: h })}</option>`).join("")}</select>`}<span class="hint" id="o_spread_hint"></span></label>
@@ -1835,7 +1855,7 @@ class LegoTrackerPanel extends HTMLElement {
     const lk = (o) => { const st = o.link_status || "unknown"; return `<span class="lk ${st}" title="${esc(tx(o.link_reason || ""))}">${{ ok: "✓ " + t("correct"), confirmed: "✓ " + t("approved"), suspect: "⚠ " + t("suspicious"), unknown: "? " + t("not checked") }[st] || st}</span>`; };
     const man = `<span class="mbadge" title="${t("Entered by hand: always wins over automatic values")}">✎ ${t("manual")}</span>`, auto = `<span class="abadge">${t("auto")}</span>`;
     const paused = stats;
-    const fetchBtn = (rid, has) => `<button class="btn ghost sm fetchb" data-rid="${rid}" title="${esc(has ? t("Fetch this shop now (also when it is paused)") : t("Search this shop for the set and fetch the price now"))}">${has ? "↻" : "🔎"} ${esc(has ? t("Fetch") : t("Find"))}</button>`;
+    const fetchBtn = (rid, has) => `<button class="btn ghost sm fetchb" data-rid="${rid}" ${this.mLeft(rid) ? this.mAttr(rid) : `title="${esc(has ? t("Fetch this shop now (also when it is paused)") : t("Search this shop for the set and fetch the price now"))}"`}>${has ? "↻" : "🔎"} ${esc(has ? t("Fetch") : t("Find"))}</button>`;
     const rows = rids.map((rid) => {
       const o = (s.offers || {})[rid], p = (paused[rid] || {}).paused_hours > 0 ? ` <span class="lk suspect" title="${t("paused after a block: {shops}", { shops: retailers[rid] })}">⏸</span>` : "";
       if (!o) return `<tr class="orow${focus === rid ? " focus" : ""}" data-rid="${rid}"><td><b>${esc(retailers[rid])}</b>${p}<div class="muted" style="font-size:12px">${t("no link yet")}</div></td>
@@ -1896,7 +1916,8 @@ class LegoTrackerPanel extends HTMLElement {
     };
     root.querySelectorAll(".fetchb").forEach((b) => b.onclick = () => this.busy(b, "", async () => { await fetchOne(b.dataset.rid); await this.load(); reopen(); }));
     const all = q("fetchall"); if (all) all.onclick = () => this.busy(all, t("Fetching…"), async () => {
-      let ok = 0; const ids = rows.map((tr) => tr.dataset.rid);
+      let ok = 0; const ids = rows.map((tr) => tr.dataset.rid).filter((rid) => !this.mLeft(rid));
+      if (!ids.length) { this.toast(this.mTitle(Math.max(...rows.map((tr) => this.mLeft(tr.dataset.rid)))), "err"); return; }
       for (const rid of ids) { try { if ((await fetchOne(rid)).ok) ok++; } catch (e) { this.toast(tx(e.message), "err"); } }
       this.toast(t("{ok} of {n} shops OK", { ok, n: ids.length }), ok ? "ok" : "err"); await this.load(); reopen();
     });
@@ -1925,6 +1946,35 @@ class LegoTrackerPanel extends HTMLElement {
     q("i_log").onclick = () => this.showLogFor(num);
     this.bindShopTable(box, s, after);
   }
+  /** 'Problem with this set': what is wrong (checkboxes, shops, remark) → logbook and/or CSV with everything known. */
+  reportForm(box, s) {
+    if (!box.hidden) { box.hidden = true; return; }
+    const probs = [["link", t("Link")], ["shop", t("Shop")], ["price", t("Price")], ["data", t("Set details (name, RRP, …)")], ["image", t("Image")], ["status", t("Watchlist / collection")], ["other", t("Something else")]];
+    const shops = Object.entries(s.offers || {});
+    box.innerHTML = `<div class="panel" style="margin:6px 0 10px;background:var(--lt-soft)"><h3 style="margin-top:0">⚠ ${t("Problem with this set")}</h3>
+      <p class="muted" style="font-size:12px;margin:0 0 8px">${t("All links, prices, errors and the recent log of this set are added automatically.")}</p>
+      <div class="chips" style="margin:0 0 8px">${probs.map(([k, l]) => `<label class="chk"><input type="checkbox" class="rp_p" value="${k}"> ${l}</label>`).join(" ")}</div>
+      ${shops.length ? `<div class="muted" style="font-size:12px;margin:4px 0">${t("Which shops? (optional)")}</div><div class="chips" style="margin:0 0 8px">${shops.map(([rid, o]) => `<label class="chk"><input type="checkbox" class="rp_s" value="${esc(rid)}"> ${esc(o.label || rid)}</label>`).join(" ")}</div>` : ""}
+      <label style="display:block">${t("What is wrong?")}<textarea id="rp_c" rows="3" maxlength="2000" style="width:100%;box-sizing:border-box;font:inherit;margin-top:4px" placeholder="${esc(t("e.g. the price is from another product, the link goes to an LED kit, …"))}"></textarea></label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="btn sm" type="button" id="rp_log">📜 ${t("Write to the logbook")}</button><button class="btn ghost sm" type="button" id="rp_csv">⬇ ${t("Download as CSV")}</button><button class="btn ghost sm" type="button" id="rp_x">${t("Cancel")}</button></div></div>`;
+    box.hidden = false;
+    const pick = (cls) => [...box.querySelectorAll(cls)].filter((c) => c.checked).map((c) => c.value);
+    const send = (save, btn) => this.busy(btn, "…", async () => {
+      const problems = pick(".rp_p"), comment = box.querySelector("#rp_c").value.trim();
+      if (!problems.length && !comment) { this.toast(t("Tick what is wrong or write a remark."), "err"); return; }
+      const r = await this._hass.callWS({ type: "lego_tracker/report", set_number: s.set_number, problems, shops: pick(".rp_s"), comment, save });
+      if (!save) {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(new Blob(["\ufeff" + r.csv], { type: "text/csv;charset=utf-8" }));
+        a.download = `lego-problem-${s.set_number}-${new Date().toISOString().slice(0, 10)}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      }
+      this.toast(save ? t("Problem written to the logbook") : t("CSV downloaded"), "ok");
+      box.hidden = true;
+    });
+    box.querySelector("#rp_log").onclick = (e) => send(true, e.currentTarget);
+    box.querySelector("#rp_csv").onclick = (e) => send(false, e.currentTarget);
+    box.querySelector("#rp_x").onclick = () => { box.hidden = true; };
+  }
   // ---------------------------------------------------------------- set dialog
   closeDialog(instant = false) { const d = this.shadowRoot.getElementById("dlg"); if (!d || !d.open) return; if (instant || REDUCED) { d.close(); return; } d.classList.add("closing"); setTimeout(() => { d.classList.remove("closing"); d.close(); }, 170); }
   async openSet(num, focusShop = null) {
@@ -1950,7 +2000,8 @@ class LegoTrackerPanel extends HTMLElement {
       <div class="dbody"><div class="chips">${[[30, t("{n} d", { n: 30 })], [90, t("{n} d", { n: 90 })], [365, t("1 year")], [0, t("All")]].map(([d, l]) => `<span class="chip sm ${this.state.range === d ? "on" : ""}" data-range="${d}">${l}</span>`).join("")}</div>
         ${lineChart(series, { area: true })}
         <div class="stats">${stat(t("Lowest ever"), EUR(s.all_time_low))}${stat(t("RRP"), EUR(s.rrp))}${s.owned && c.current_value != null ? stat(t("Value (import)"), EUR(c.current_value)) : ""}${stat(t("Discount"), s.discount_rrp != null ? `${s.discount_rrp > 0 ? "−" : "+"}${Math.abs(s.discount_rrp)}%` : "–")}${stat(t("Per piece"), s.price_per_piece ? t("{n} ct", { n: (s.price_per_piece * 100).toFixed(1) }) : "–")}${stat(t("7 days"), signPct(s.change_7d))}${stat(t("30 days"), signPct(s.change_30d))}${s.retires_in_days != null ? stat(s.retired ? t("Retired since") : t("Retires in"), s.retired ? esc(s.exit_date) : t("{n} d", { n: s.retires_in_days })) : ""}${stat(t("Last check"), ago(s.checked))}</div>
-        <h3 style="margin:16px 0 4px;display:flex;align-items:center;gap:8px">🏪 ${t("Shops: links & prices")}<span class="hsp" style="flex:1"></span><button class="btn ghost sm" id="lg" type="button">📜 ${t("Logbook")}</button></h3>
+        <h3 style="margin:16px 0 4px;display:flex;align-items:center;gap:8px">🏪 ${t("Shops: links & prices")}<span class="hsp" style="flex:1"></span><button class="btn ghost sm" id="rp" type="button" title="${esc(t("Collects the links, prices, errors and recent log of this set, with your remark, for the logbook or a CSV file"))}">⚠ ${t("Problem with this set")}</button><button class="btn ghost sm" id="lg" type="button">📜 ${t("Logbook")}</button></h3>
+        <div id="rpbox" hidden></div>
         <p class="muted" style="font-size:12px;margin:0 0 6px">${t("Edit a link or price and press Save. What you enter by hand always wins and is never overwritten; empty a field to hand it back to the automatic search / price.")}</p>
         ${this.shopTableHtml(s, focusShop)}
         ${this.compareHtml(s)}
@@ -1967,11 +2018,12 @@ class LegoTrackerPanel extends HTMLElement {
           <div class="form" id="collf" style="${s.owned ? "" : "opacity:.45;pointer-events:none"}"><label>${t("Quantity")}<input name="qty" type="number" min="1" value="${c.qty ?? 1}"></label><label>${t("Paid (€ each)")}<input name="paid" type="number" min="0" step="0.01" value="${c.paid ?? ""}"></label>
           <label>${t("Purchase date")}<input name="added" type="date" max="${new Date().toISOString().slice(0, 10)}" value="${esc(c.added || "")}"></label><label>${t("Condition")}<select name="condition"><option value="">–</option>${CONDITIONS.map((x) => `<option value="${x}" ${c.condition === x ? "selected" : ""}>${t(x)}</option>`).join("")}</select></label><label>${t("Current value (€, import)")}<input name="current_value" type="number" min="0" step="0.01" value="${c.current_value ?? ""}"></label><label>${t("Location")}<input name="location" value="${esc(c.location || "")}"></label></div></fieldset>
         <datalist id="dthemes">${this.state.data.themes.map((th) => `<option value="${esc(th)}">`).join("")}</datalist>
-        <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="save" type="submit">${t("Save")}</button><button class="btn ghost" id="find" type="button">🔎 ${t("Find shops")}</button><button class="btn ghost" id="rf" type="button">↻ ${t("Fetch prices")}</button><button class="btn ghost" id="enr" type="button" title="${t("Get the image, RRP and name from LEGO.com, then theme, year and pieces from Brickset / Rebrickable")}">🖼 ${t("Set data from LEGO.com")}</button><span class="hsp" style="flex:1"></span><button class="btn danger" id="rm" type="button">${t("Delete")}</button></div></form></div>`;
+        <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="save" type="submit">${t("Save")}</button><button class="btn ghost" id="find" type="button" ${this.mAttr("find")}>🔎 ${t("Find shops")}</button><button class="btn ghost" id="rf" type="button" ${this.mAttr("prices")}>↻ ${t("Fetch prices")}</button><button class="btn ghost" id="enr" type="button" title="${t("Get the image, RRP and name from LEGO.com, then theme, year and pieces from Brickset / Rebrickable")}">🖼 ${t("Set data from LEGO.com")}</button><span class="hsp" style="flex:1"></span><button class="btn danger" id="rm" type="button">${t("Delete")}</button></div></form></div>`;
     const q = (id) => dlg.querySelector("#" + id);
     dlg.scrollTop = scroll;
     q("x").onclick = () => this.closeDialog();
     q("lg").onclick = () => this.showLogFor(num);
+    q("rp").onclick = () => this.reportForm(q("rpbox"), s);
     dlg.querySelectorAll("[data-goto]").forEach((el) => { el.onclick = () => { const [a, b] = el.dataset.goto.split("/"); this.state.section = a; this.state.sub[a] = b; this.closeDialog(true); this.persist(); this.render(true); }; });
     dlg.querySelectorAll("[data-range]").forEach((ch) => ch.onclick = () => { this.state.range = +ch.dataset.range; this.persist(); this.openSet(num); });
     // ---- shop table: manual links and prices, per-shop fetch
@@ -2004,7 +2056,7 @@ class LegoTrackerPanel extends HTMLElement {
     if (q("cmpgo")) q("cmpgo").onclick = (e) => this.busy(e.currentTarget, "", async () => { const r = await this._hass.callWS({ type: "lego_tracker/compare/fetch", set_number: num, retry_missing: true }); await this.load(); this.toast(r.found ? t("Comparison prices fetched") : t("No comparison site has this set"), r.found ? "ok" : ""); this.openSet(num); });
     q("rf").onclick = (e) => this.busy(e.currentTarget, t("Fetching…"), async () => { await this.svc("refresh", { set_number: num }); await this.load(); this.openSet(num); });
     q("rm").onclick = () => { if (!confirm(t(s.owned ? "Delete set {number} with its whole price history, and remove it from your collection?" : "Delete set {number} with its whole price history?", { number: num }))) return; this.busy(q("rm"), "", async () => { await this.svc("remove_set", { set_number: num }); this.closeDialog(); await this.load(); this.toast(t("Set {number} deleted", { number: num }), "ok"); }); };
-    this.hookCharts(dlg);
+    this.hookCharts(dlg); this.tickManual();
   }
 }
 if (!customElements.get("lego-tracker-panel")) customElements.define("lego-tracker-panel", LegoTrackerPanel);

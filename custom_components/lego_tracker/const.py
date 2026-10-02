@@ -48,6 +48,7 @@ CONF_WATCH_CYCLE = "watch_cycle_min"                     # watchlist sets once p
 WATCH_CYCLE_CHOICES = (0, 30, 60, 120, 180, 240, 360, 720, 1440)
 WATCH_LIMIT = 100                                        # sets on the watchlist
 FULL_REFRESH_GAP = 60                                    # seconds between two full price rounds
+MANUAL_GAP = 120                                         # a manual fetch / search: once every 2 minutes (per set action, per shop)
 # developer mode (not in the regular settings)
 CONF_DEV_FIXED_TIMES = "dev_fixed_times"                 # allow full rounds at fixed times
 CONF_DEV_FULL_REFRESH = "dev_full_refresh"               # allow "refresh all prices" by hand / service
