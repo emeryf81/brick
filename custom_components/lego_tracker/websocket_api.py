@@ -107,6 +107,7 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_filter_test)
     websocket_api.async_register_command(hass, ws_client_error)
     websocket_api.async_register_command(hass, ws_logs_export)
+    websocket_api.async_register_command(hass, ws_report)
     websocket_api.async_register_command(hass, ws_notify_set)
     websocket_api.async_register_command(hass, ws_notify_test)
     hass.http.register_view(UserscriptView())
@@ -139,7 +140,7 @@ def ws_overview(hass, connection, msg):
         "relay": {"enabled": coord.relay_enabled, "pending": coord.relay_items(100)["total"] if coord.relay_enabled else 0},
         "bol_api": bool(coord.bol_api),
         "compare": _compare_status(coord), "deal_rules": coord.deal_rules,
-        "watch_limit": coord.watch_limit, "full_refresh": coord.dev(CONF_DEV_FULL_REFRESH),
+        "watch_limit": coord.watch_limit, "full_refresh": coord.dev(CONF_DEV_FULL_REFRESH), "manual": coord.manual_status(),
         "value_source": coord.store.get("value_source", "shop_first"),
         "health": {
             "errors": sum(s["offers_error"] for s in (coord.data or coord.compute())["statuses"].values()),
@@ -485,7 +486,7 @@ async def ws_compare_test(hass, connection, msg):
 
 @websocket_api.require_admin
 @websocket_api.websocket_command({
-    vol.Required("type"): f"{DOMAIN}/logs/export", vol.Required("parts"): [vol.In(["checks", "history", "total"])],
+    vol.Required("type"): f"{DOMAIN}/logs/export", vol.Required("parts"): [vol.In(["checks", "history", "total", "reports"])],
     vol.Optional("start"): vol.Coerce(float), vol.Optional("end"): vol.Coerce(float), vol.Optional("filters", default={}): dict,
 })
 @callback
@@ -511,6 +512,24 @@ def ws_logs_export(hass, connection, msg):
             return
     text, counts = log_export.build(coord.store, msg, coord.is_watched, lambda s: retirement_status(s)["retiring_soon"])
     connection.send_result(msg["id"], {"csv": text, "counts": counts})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({
+    vol.Required("type"): f"{DOMAIN}/report", vol.Required("set_number"): str,
+    vol.Optional("problems", default=[]): [str], vol.Optional("shops", default=[]): [str],
+    vol.Optional("comment", default=""): str, vol.Optional("save", default=True): bool,
+})
+@callback
+def ws_report(hass, connection, msg):
+    """'Problem with this set': everything known about the set plus what is wrong; to the logbook and/or as CSV."""
+    coord = _coord(hass)
+    num = normalize_set_number(msg["set_number"])
+    if coord is None or num not in coord.store["sets"]:
+        connection.send_error(msg["id"], "not_found", tr("Set {number} is not tracked.", number=num))
+        return
+    rep, text = coord.report_problem(num, msg["problems"], msg["shops"], msg["comment"], msg["save"])
+    connection.send_result(msg["id"], {"id": rep["id"], "saved": msg["save"], "csv": text})
 
 
 _CLIENT_ERRORS: list[float] = []

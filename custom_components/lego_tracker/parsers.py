@@ -204,24 +204,83 @@ def parse_kruidvat(page: str) -> Parsed:
 # Only structured availability values count; plain words can appear in translation bundles on every page.
 LEGO_RETIRING_RE = re.compile(r'"(?:availabilityStatus|availability|productStatus|stockStatus)"\s*:\s*"[^"]*RETIRING[^"]*"', re.I)
 LEGO_GONE_RE = re.compile(r'"(?:availabilityStatus|availability|productStatus)"\s*:\s*"[^"]*(?:RETIRED|Discontinued)[^"]*"', re.I)
+LEGO_SOLD_OUT_RE = re.compile(r'"(?:availabilityStatus|availability|productStatus|stockStatus)"\s*:\s*"[^"]*'
+                              r'(?:SOLD_?OUT|OUT_?OF_?STOCK|OutOfStock|SoldOut)[^"]*"', re.I)
+LEGO_CENTS_RE = {k: re.compile(rf'"{k}"\s*:\s*\{{[^{{}}]*?"centAmount"\s*:\s*(\d+)') for k in ("price", "listPrice", "originalPrice")}
 
 
-def parse_lego(page: str) -> Parsed:
-    """LEGO.com product page: JSON-LD + the Next.js/Apollo state (centAmount prices)."""
+def _lego_product(page: str, num: str | None) -> tuple[float | None, str | None, str | None, bool | None]:
+    """(price, name, image, in stock) of the page's own product in JSON-LD: the node for this set number,
+    also when it is sold out (then its price is the regular price, not a price you can pay now)."""
+    for block in _jsonld_blocks(page):
+        for node in _walk(block):
+            types = node.get("@type")
+            if "Product" not in (types if isinstance(types, list) else [types]):
+                continue
+            ids = " ".join(str(node.get(k) or "") for k in ("sku", "productID", "mpn", "name", "url"))
+            if num and not re.search(rf"(?<!\d){re.escape(num)}(?!\d)", ids):
+                continue                                   # another product (e.g. a recommendation)
+            prices, stock = [], None
+            for off in _walk(node.get("offers") or []):
+                if (p := parse_price(off.get("price") or off.get("lowPrice"))) is not None:
+                    prices.append(p)
+                    avail = str(off.get("availability", ""))
+                    stock = (stock or False) or not ("OutOfStock" in avail or "SoldOut" in avail or "Discontinued" in avail)
+            img = node.get("image")
+            img = img[0] if isinstance(img, list) and img else img
+            return (min(prices) if prices else None, node.get("name"), img if isinstance(img, str) else None, stock)
+    return None, None, None, None
+
+
+def _lego_window(page: str, num: str | None, ld_price: float | None) -> str:
+    """The part of the page state that belongs to this product: around its price (the one JSON-LD gives),
+    or around its product code. A page also lists recommended products with their own prices."""
+    if ld_price is not None:
+        m = re.search(rf'"price"\s*:\s*\{{[^{{}}]*?"centAmount"\s*:\s*{round(ld_price * 100)}\b', page)
+        if m:
+            return page[max(0, m.start() - 1500):m.end() + 3000]
+    if num:
+        m = re.search(rf'"(?:productCode|sku)"\s*:\s*"{re.escape(num)}"', page)
+        if m:                                              # up to the neighbouring products' codes
+            codes = [c.start() for c in re.finditer(r'"productCode"\s*:\s*"', page)]
+            end = min([c for c in codes if c > m.start()] + [m.end() + 3000])
+            if LEGO_CENTS_RE["price"].search(page, m.start(), end):
+                return page[m.start():end]                 # the prices that follow its code
+            start = max([c + 15 for c in codes if c < m.start()] + [m.start() - 3000, 0])
+            before = page[start:m.start()]
+            last = before.rfind('"price"')                 # else the nearest price just before its code
+            return before[last:] + page[m.start():end] if last >= 0 else page[m.start():end]
+        if re.search(r'"productCode"\s*:\s*"\d', page):
+            return ""                                      # only other products' codes: none of these prices is ours
+    return page[:400000]
+
+
+def parse_lego(page: str, num: str | None = None) -> Parsed:
+    """LEGO.com product page: JSON-LD + the Next.js/Apollo state (centAmount prices). Only the prices of the
+    product itself count; a sold-out set gives its regular price (RRP) but no price to buy at."""
     if "Access Denied" in page[:3000] or "captcha" in page[:5000].lower():
         return Parsed(None, blocked=True)
-    ld = _from_jsonld(page)
-    cents = {k: int(m.group(1)) / 100 for k in ("price", "listPrice", "originalPrice")
-             if (m := re.search(rf'"{k}"\s*:\s*\{{[^{{}}]*?"centAmount"\s*:\s*(\d+)', page))}
-    price = (ld.price if ld else None) or cents.get("price")
+    ld_price, ld_name, ld_image, in_stock = _lego_product(page, num)
+    win = _lego_window(page, num, ld_price)
+    cents = {k: int(m.group(1)) / 100 for k, rx in LEGO_CENTS_RE.items() if (m := rx.search(win))}
+    price = ld_price or cents.get("price")
     list_price = cents.get("listPrice") or cents.get("originalPrice") or price
     if list_price and price and list_price < price:
         list_price = price
-    title = (ld.title if ld else None) or _meta(page, "og:title") or _title(page)
-    image = (ld.image if ld else None) or _meta(page, "og:image")
-    head = page[:400000]
-    return Parsed(price, title, image, unavailable=price is None and bool(LEGO_GONE_RE.search(head)),
-                  list_price=list_price, retiring=bool(LEGO_RETIRING_RE.search(head)))
+    title = ld_name or _meta(page, "og:title") or _title(page)
+    image = ld_image or _meta(page, "og:image")
+    head = win if num else page[:400000]
+    sold_out = in_stock is False or bool(LEGO_SOLD_OUT_RE.search(win[:20000] if num else ""))
+    gone = bool(LEGO_GONE_RE.search(head))
+    if sold_out or (price is None and gone):
+        return Parsed(None, title, image, unavailable=True, list_price=list_price, retiring=bool(LEGO_RETIRING_RE.search(head)))
+    return Parsed(price, title, image, list_price=list_price, retiring=bool(LEGO_RETIRING_RE.search(head)))
+
+
+def lego_number(url: str | None) -> str | None:
+    """The set number at the end of a LEGO.com product URL (/product/flower-bouquet-10280)."""
+    m = re.search(r"/product/(?:[^/?#]*?-)?(\d{3,7})/?(?:[?#]|$)", url or "")
+    return m.group(1) if m else None
 
 
 PARSERS = {
@@ -231,7 +290,9 @@ PARSERS = {
 }
 
 
-def parse_page(retailer: str, page: str) -> Parsed:
+def parse_page(retailer: str, page: str, set_number: str | None = None) -> Parsed:
+    if retailer == "lego_com":
+        return parse_lego(page, set_number)       # never the generic fallback: it may read a recommended product
     parser = PARSERS.get(retailer, parse_generic)
     result = parser(page)
     if result.price is None and not result.blocked and not result.unavailable:

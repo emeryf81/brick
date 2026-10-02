@@ -20,7 +20,7 @@ from homeassistant.util import dt as dt_util
 from .client import Fetcher, lookup_metadata
 from .const import (
     CONF_COMPARE, CONF_COMPARE_OLD, CONF_BLOCK_WORDS, CYCLE_CHOICES, CONF_WATCH_CYCLE, WATCH_CYCLE_CHOICES, WATCH_LIMIT,
-    FULL_REFRESH_GAP, CONF_DEAL_MIN_SCORE, CONF_DEAL_ATL, CONF_DEAL_TARGET, DEFAULT_DEAL_MIN_SCORE, CONF_DEV_FIXED_TIMES, CONF_DEV_FULL_REFRESH, CONF_DEV_FREE_CYCLE, CONF_DEV_WATCH_UNLIMITED, CONF_ALLOW_WORDS, CONF_COMPARE_SOURCES, COMPARE_FRESH_HOURS, COMPARE_MISSING_HOURS, COMPARE_NET_ERRORS, COMPARE_PAUSE_HOURS,
+    FULL_REFRESH_GAP, MANUAL_GAP, CONF_DEAL_MIN_SCORE, CONF_DEAL_ATL, CONF_DEAL_TARGET, DEFAULT_DEAL_MIN_SCORE, CONF_DEV_FIXED_TIMES, CONF_DEV_FULL_REFRESH, CONF_DEV_FREE_CYCLE, CONF_DEV_WATCH_UNLIMITED, CONF_ALLOW_WORDS, CONF_COMPARE_SOURCES, COMPARE_FRESH_HOURS, COMPARE_MISSING_HOURS, COMPARE_NET_ERRORS, COMPARE_PAUSE_HOURS,
     CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET, CONF_BOL_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS,
     CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_LANGUAGE, CONF_REFRESH_MODE, CONF_SPREAD_HOURS, DEFAULT_REFRESH_MODE, DEFAULT_SPREAD_HOURS, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, CONF_CUSTOM_SHOPS, CONF_DIGEST_TIME, CONF_NO_AUTOPAUSE, CONF_SHOP_SEARCH, CONF_VALUE_SOURCE, DEFAULT_DIGEST_TIME, GENERIC_SHOPS, CONF_DISCOUNT_THRESHOLD, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
     DEFAULT_REFRESH_TIMES, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS, DEFAULT_RETAILERS,
@@ -35,7 +35,7 @@ from .i18n import DEFAULT_LANGUAGE, LANGUAGES, LocalizedError, T, resolve, set_l
 from .notifications import Notifier, default_rules
 from .bol_api import BolApi, BolApiError
 from . import catalog, compare
-from .shops import all_domains
+from .shops import all_domains, domain_of
 from .parsers import Parsed, title_check
 from .shops import SEARCH, valid_search
 from .parsers import BUILTIN_WORDS, KNOCKOFF_RE, is_search_url, accessory_word, set_custom_words, clean_title, normalize_url, retailer_from_url, url_key
@@ -76,6 +76,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.log("error", "shop", T("{shop} blocked us: paused for {hours} h", shop=RETAILERS.get(rid, (rid,))[0], hours=hours), retailer=rid)
             self.hass.async_create_task(self.notifier.on_shop_paused(rid, hours))
         self.fetcher.on_pause = _paused
+        self.fetcher.abort = lambda: self._cancel and self.job_running     # 'Stop' also ends a wait for a site
+        self._manual: dict[str, float] = {}
 
     # ---------------------------------------------------------------- options
     @staticmethod
@@ -325,6 +327,51 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return info
 
     # ------------------------------------------------------------------ logbook
+    # ------------------------------------------------------------ manual actions (load protection)
+    def _site(self, rid: str) -> str:
+        return (domain_of(rid) or rid).removeprefix("www.")
+
+    def manual_left(self, key: str) -> float:
+        return max(0.0, self._manual.get(key, 0) + MANUAL_GAP - time.time())
+
+    def manual_gate(self, key: str) -> None:
+        """Manual fetches and searches: at most once every 2 minutes (per set action, per shop site)."""
+        if (left := self.manual_left(key)) > 0:
+            s = int(left) + 1
+            if key == "prices":
+                raise LocalizedError("To protect the traffic to and the load on the shops, fetching prices is possible once every 2 minutes. Try again in {s} s.", s=s)
+            if key == "find":
+                raise LocalizedError("To protect the traffic to and the load on the shops, searching the shops is possible once every 2 minutes. Try again in {s} s.", s=s)
+            raise LocalizedError("To protect the traffic to and the load on this shop, it can be fetched once every 2 minutes. Try again in {s} s.", s=s)
+        self._manual[key] = time.time()
+
+    def manual_status(self) -> dict[str, Any]:
+        """When each manual button is available again (epoch seconds), for the panel to grey them out."""
+        until = lambda k: (self._manual[k] + MANUAL_GAP) if self.manual_left(k) > 0 else None  # noqa: E731
+        return {"now": time.time(), "gap": MANUAL_GAP, "prices": until("prices"), "find": until("find"),
+                "shops": {rid: u for rid in RETAILERS if (u := until("site:" + self._site(rid)))}}
+
+    def mark_sites(self, rids: list[str]) -> None:
+        now = time.time()
+        for rid in rids:
+            self._manual["site:" + self._site(rid)] = now
+
+    def report_problem(self, num: str, problems: list[str], shops: list[str], comment: str,
+                       save: bool = True) -> tuple[dict[str, Any], str]:
+        """'Problem with this set': a snapshot of links, prices, errors and the recent log, with the user's remark."""
+        from . import report
+
+        rep = report.build(self.store, num, self.compute()["statuses"].get(num, {}), problems, shops, comment)
+        if save:
+            report.save(self.store, rep)
+            what = ", ".join(rep["problems"]) or "?"
+            self.log("warning", "report", T("problem reported ({what})", what=what) + (f": {rep['comment'][:300]}" if rep["comment"] else ""),
+                     set_number=num, report=rep["id"], retailer=rep["shops"][0] if len(rep["shops"]) == 1 else None,
+                     source="panel")
+            self._save()
+            self.push_update()
+        return rep, report.to_csv([rep])
+
     def log(self, level: str, kind: str, message: str, **fields: Any) -> None:
         """Everything the integration does ends up here (Beheer → Logboek)."""
         fields.setdefault("source", "server")
@@ -862,6 +909,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise LocalizedError("Set {number} is not tracked.", number=num)
         if retailer not in RETAILERS:
             raise LocalizedError("Unknown shop {shop}.", shop=retailer)
+        self.manual_gate("site:" + self._site(retailer))
         offers = self.store["offers"].setdefault(num, {})
         found = False
         search_page = None
@@ -910,9 +958,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         live = self._live_retailers(force)
         nums = [n for n in self.store["sets"] if self._missing(n, live)]
         paused = [RETAILERS[r][0] for r in self.retailers if r not in live]
-        return self.start_job("discover", T("Finding missing shop links"), nums,
-                              lambda n: self.discover_set(n, live),
-                              T("paused and skipped: {shops}", shops=", ".join(paused)) if paused else None)
+        note = T("spread out: each shop is searched at most once every 2 minutes")
+        if paused:
+            note += "; " + T("paused and skipped: {shops}", shops=", ".join(paused))
+        return self.start_job("discover", T("Finding missing shop links"), nums, lambda n: self.discover_set(n, live), note)
 
     async def discover_set(self, num: str, retailers: list[str] | None = None) -> dict[str, int]:
         live = retailers if retailers is not None else self._live_retailers(False)
@@ -1062,6 +1111,16 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         before = (s.get("rrp"), s.get("image"), s.get("name"), s.get("retiring"))
         if parsed.list_price and s.get("rrp_source") != "user":
             s["rrp"], s["rrp_source"] = round(parsed.list_price, 2), "LEGO.com"
+        if parsed.list_price and (o := self.store["offers"].get(num, {}).get("lego_com")) and o.get("history"):
+            # LEGO.com never sells far below its own regular price: such points were another product's price
+            # (older versions read a recommended product on a sold-out page)
+            keep = [p for p in o["history"] if p[1] >= parsed.list_price * 0.4]
+            if len(keep) != len(o["history"]):
+                self.log("info", "price", T("removed {n} wrong LEGO.com prices (another product on the page)",
+                                            n=len(o["history"]) - len(keep)), set_number=num, retailer="lego_com", source="server")
+                o["history"] = keep
+                if o.get("last_price") is not None and o["last_price"] < parsed.list_price * 0.4:
+                    o["last_price"], o["available"] = None, False
         if parsed.image and parsed.image.startswith("https://") and s.get("image_source") != "user":
             s["image"], s["image_source"] = parsed.image, "LEGO.com"
         if parsed.title and (self._name_replaceable(s) or s.get("name_source") == "LEGO.com"):

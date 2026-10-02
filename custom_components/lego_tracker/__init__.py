@@ -207,7 +207,13 @@ def _register_services(hass: HomeAssistant) -> None:
     async def discover_offers(call: ServiceCall) -> dict:
         c = _coordinator(hass)
         if num := call.data.get("set_number"):
-            res = await c.discover_set(normalize_set_number(num), c._live_retailers(call.data["force"]))
+            live = c._live_retailers(call.data["force"])
+            try:
+                c.manual_gate("find")
+            except ValueError as err:
+                raise ServiceValidationError(str(err)) from err
+            c.mark_sites(c._missing(normalize_set_number(num), live))
+            res = await c.discover_set(normalize_set_number(num), live)
             c.push_update()
             return {"started": False, **res}
         return _job(c.start_discover, call.data["force"])
@@ -252,7 +258,13 @@ def _register_services(hass: HomeAssistant) -> None:
             num = normalize_set_number(num)
             if num not in c.store["sets"]:
                 raise ServiceValidationError(T("Set {number} is not tracked.", number=num))
-            res = await c.refresh_set(num, c._live_retailers(call.data["force"]))
+            live = c._live_retailers(call.data["force"])
+            try:
+                c.manual_gate("prices")
+            except ValueError as err:
+                raise ServiceValidationError(str(err)) from err
+            c.mark_sites([r for r in (c.store["offers"].get(num) or {}) if r in live])
+            res = await c.refresh_set(num, live)
             c.push_update()
             return {"started": False, **res}
         return _job(c.start_full_refresh, call.data["force"])

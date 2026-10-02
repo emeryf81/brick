@@ -30,6 +30,7 @@ async def server(aiohttp_server):
 async def test_fetch_and_cooldown(hass, server, impersonate):
     f = Fetcher(hass, impersonate)
     f.min_delay = 0
+    f.domain_gap = f.search_gap = 0
     await f.async_setup()
     assert f.transport.startswith("curl_cffi") == impersonate
     parsed, err = await f.fetch_offer("bol", server["url"])
@@ -53,6 +54,7 @@ async def test_fetch_and_cooldown(hass, server, impersonate):
 async def test_captcha_page_counts_as_block(hass, server):
     f = Fetcher(hass, False)
     f.min_delay = 0
+    f.domain_gap = f.search_gap = 0
     server["body"] = "<html>Type the characters you see in this image</html>"
     parsed, err = await f.fetch_offer("amazon_nl", server["url"])
     assert "captcha" in err and f.cooldown_left("amazon_nl") > 0
