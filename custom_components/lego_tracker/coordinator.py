@@ -17,7 +17,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
-from .client import Fetcher, lookup_metadata
+from .client import DOMAIN_GAP, SEARCH_GAP, Fetcher, lookup_metadata
 from .const import (
     CONF_COMPARE, CONF_COMPARE_OLD, CONF_BLOCK_WORDS, CYCLE_CHOICES, CONF_WATCH_CYCLE, WATCH_CYCLE_CHOICES, WATCH_LIMIT,
     FULL_REFRESH_GAP, MANUAL_GAP, CONF_DEAL_MIN_SCORE, CONF_DEAL_ATL, CONF_DEAL_TARGET, DEFAULT_DEAL_MIN_SCORE, CONF_DEV_FIXED_TIMES, CONF_DEV_FULL_REFRESH, CONF_DEV_FREE_CYCLE, CONF_DEV_WATCH_UNLIMITED, CONF_ALLOW_WORDS, CONF_COMPARE_SOURCES, COMPARE_FRESH_HOURS, COMPARE_MISSING_HOURS, COMPARE_NET_ERRORS, COMPARE_PAUSE_HOURS,
@@ -38,7 +38,7 @@ from . import catalog, compare
 from .shops import all_domains, domain_of
 from .parsers import Parsed, title_check
 from .shops import SEARCH, valid_search
-from .parsers import BUILTIN_WORDS, KNOCKOFF_RE, is_search_url, accessory_word, set_custom_words, clean_title, normalize_url, retailer_from_url, url_key
+from .parsers import BUILTIN_WORDS, KNOCKOFF_RE, find_search_result, is_search_url, search_url, accessory_word, set_custom_words, clean_title, normalize_url, retailer_from_url, url_key
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -868,6 +868,11 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else:
                 old_price = offer.get("last_price") if offer.get("available") else None
                 record_price(offer, price, error=error)
+                if price is not None:
+                    if via:
+                        offer["last_via"] = via
+                    else:
+                        offer.pop("last_via", None)
                 if price is not None and (old_price is None or abs(old_price - price) >= 0.01):
                     self.log("ok", "price", T("€{old} → €{new}", old=f"{old_price:.2f}", new=f"{price:.2f}") if old_price
                              else T("first price €{price}", price=f"{price:.2f}"),
@@ -1036,14 +1041,90 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return {"enabled": self.relay_enabled, "interval_hours": int(self.opt(self.entry, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS)),
                 "items": [i for _, i in items[:limit]], "total": len(items)}
 
+    # ------------------------------------------------------------ continuous check (userscript)
+    RELAY_SEARCH_DAYS = 7          # a set/shop searched by the browser without result: not again for a week
+    RELAY_FAIL_HOURS = 6           # a link the server can't fetch: the browser checks it at most every 6 h
+
+    def continuous_items(self, limit: int = 20) -> dict[str, Any]:
+        """Work for the userscript's continuous check, most useful first:
+        1. links that never had a price; 2. sets without any price: search the shops that have no link yet;
+        3. links the server can't fetch (blocked, paused, errors) and not checked by the browser recently."""
+        now = time.time()
+        searched = self.store.setdefault("relay_searched", {})
+        items: list[tuple[int, float, dict[str, Any]]] = []
+        if not self.relay_enabled:
+            return {"enabled": False, "items": [], "total": 0, "counts": {}}
+        live_shops = [r for r in self.retailers if r in RETAILERS]
+        for num, s in self.store["sets"].items():
+            offers = self.store["offers"].get(num, {})
+            priced = any(o.get("available") and o.get("last_price") or o.get("manual_price") for o in offers.values())
+            for rid in live_shops:
+                o = offers.get(rid)
+                if rid == "bol" and self.bol_api:
+                    continue
+                base = {"set_number": num, "retailer": rid, "shop": RETAILERS[rid][0]}
+                if o and o.get("url") and not compare.is_compare_url(o["url"]):
+                    if o.get("manual_price") or o.get("link_status") == "rejected":
+                        continue
+                    last_try = o.get("relay_ts", 0)
+                    if not o.get("history") and not o.get("last_ok"):
+                        if now - last_try > 3600:                       # never a price: first, once an hour at most
+                            items.append((0, last_try, {**base, "url": o["url"], "reason": "no_price"}))
+                    elif (o.get("error") or self.fetcher.cooldown_left(rid) > 0) and now - max(last_try, o.get("last_ok") or 0) > self.RELAY_FAIL_HOURS * 3600:
+                        items.append((2, o.get("last_ok") or 0, {**base, "url": o["url"], "reason": "server_fails"}))
+                elif not priced and rid != "lego_com" and (url := search_url(rid, num)) \
+                        and now - searched.get(f"{num}|{rid}", 0) > self.RELAY_SEARCH_DAYS * 86400:
+                    items.append((1, searched.get(f"{num}|{rid}", 0), {**base, "kind": "search", "url": url, "reason": "search"}))
+        items.sort(key=lambda x: (x[0], x[1]))
+        counts: dict[str, int] = {}
+        for _, _, it in items:
+            counts[it["reason"]] = counts.get(it["reason"], 0) + 1
+        return {"enabled": True, "items": [i for _, _, i in items[:limit]], "total": len(items), "counts": counts,
+                "site_gap": DOMAIN_GAP, "search_gap": SEARCH_GAP}
+
+    def relay_heartbeat(self, beat: dict[str, Any]) -> None:
+        """The userscript's continuous check says it is alive (shown under Manage → Userscript)."""
+        keep = {k: beat.get(k) for k in ("done", "ok", "fail", "found", "waiting", "version") if isinstance(beat.get(k), (int, float, str))}
+        self.store["relay_heartbeat"] = {"ts": time.time(), "on": bool(beat.get("on", True)), **keep}
+
+    def _relay_search(self, item: dict[str, Any]) -> str | dict[str, Any]:
+        """A shop's search page fetched by the browser: find the product here (same rules as the server)."""
+        rid, num = item.get("retailer"), normalize_set_number(str(item.get("set_number") or ""))
+        if rid not in RETAILERS or num not in self.store["sets"]:
+            raise ValueError(f"{rid}: {num}: not a tracked set / shop")
+        self.store.setdefault("relay_searched", {})[f"{num}|{rid}"] = time.time()
+        html = item.get("html") if isinstance(item.get("html"), str) else ""
+        try:
+            status = int(item.get("status") or 0)
+        except (TypeError, ValueError):
+            status = 0
+        found = find_search_result(rid, html, num) if html and 0 < status < 400 else None
+        offers = self.store["offers"].setdefault(num, {})
+        if found and url_key(rid, found) not in set(self.store.setdefault("rejected", {}).get(num, [])) \
+                and not (offers.get(rid) or {}).get("url"):
+            offers[rid] = {"url": found, "history": [], "found": time.time()}
+            self.log("ok", "discover", T("link found by your browser"), set_number=num, retailer=rid, url=found, source="relay")
+            return {"set_number": num, "retailer": rid, "shop": RETAILERS[rid][0], "url": found, "reason": "no_price"}
+        why = (T("the shop blocked the search (HTTP {status})", status=status) if status in (403, 429, 503)
+               else T("could not reach the shop: {error}", error=str(item.get("error") or "?")[:100]) if not status
+               else T("search page: HTTP error {status}", status=status) if status >= 400
+               else T("no matching product found") if num in html
+               else T("the search page does not contain {number}: this shop probably loads its results with JavaScript. Paste the product page URL instead.", number=num))
+        self.log("info", "discover", T("your browser searched: {reason}", reason=why), set_number=num, retailer=rid, url=item.get("url"), source="relay")
+        return "fail"
+
     def relay_result(self, item: dict[str, Any]) -> str:
         """One page fetched by the user's browser: a price (stored like the userscript) or a failure.
         A comparison-site page comes back as HTML and is read here ('follow' adds the next page to fetch)."""
         if item.get("kind") == "page":
             return self._relay_page(item)
+        if item.get("kind") == "search":
+            return self._relay_search(item)
         url, price, error = item.get("url"), item.get("price"), item.get("error")
         rid = item.get("retailer") or (retailer_from_url(url) if url else None)
         num = normalize_set_number(item["set_number"]) if item.get("set_number") else None
+        if num and rid and (o := self.store["offers"].get(num, {}).get(rid)):
+            o["relay_ts"] = time.time()                      # the continuous check doesn't ask for it again at once
         if price:
             self.report_price(float(price), url=url, set_number=num, retailer=rid, title=item.get("title"), via="relay")
             status = "ok"
@@ -1840,6 +1921,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         before = self.compute()["statuses"].get(num, {})
         record_price(offer, price)
         offer["last_ok"] = offer["last_checked"]
+        if url:
+            offer["last_via"] = source                       # 'relay' / 'userscript': shown as ⓤ next to the price
         msg = (T("price €{price} fetched by your browser (relay)", price=f"{price:.2f}") if source == "relay"
                else T("price €{price} received via Tampermonkey", price=f"{price:.2f}") if url
                else T("price €{price} entered by hand", price=f"{price:.2f}"))

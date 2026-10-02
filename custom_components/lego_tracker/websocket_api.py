@@ -67,6 +67,7 @@ def _card(coord, num: str, with_history: bool = False) -> dict[str, Any]:
                   "available": o.get("available"), "error": o.get("error"), "checked": o.get("last_checked"),
                   "low": min((p for _, p in o.get("history", [])), default=None),
                   "title": o.get("title"), "link_status": o.get("link_status"), "link_reason": o.get("link_reason"),
+                  "via": o.get("last_via") if o.get("available") else None,
                   "ignored": bool(o.get("error") and o.get("ignored_error") == o.get("error"))}
             for rid, o in offers.items() if rid in RETAILERS
         },
@@ -138,7 +139,9 @@ def ws_overview(hass, connection, msg):
         **coord.job_info(),
         "language": coord.language, "languages": _languages(),
         "userscript_last": coord.store.get("userscript_last"), "relay_last": coord.store.get("relay_last"),
-        "relay": {"enabled": coord.relay_enabled, "pending": coord.relay_items(100)["total"] if coord.relay_enabled else 0},
+        "relay": {"enabled": coord.relay_enabled, "pending": coord.relay_items(100)["total"] if coord.relay_enabled else 0,
+                  "continuous": coord.continuous_items(1)["counts"] if coord.relay_enabled else {},
+                  "heartbeat": coord.store.get("relay_heartbeat")},
         "bol_api": bool(coord.bol_api),
         "compare": _compare_status(coord), "deal_rules": coord.deal_rules,
         "watch_limit": coord.watch_limit, "full_refresh": coord.dev(CONF_DEV_FULL_REFRESH), "manual": coord.manual_status(),
@@ -610,6 +613,8 @@ class RelayView(HomeAssistantView):
             limit = max(1, min(100, int(request.query.get("limit", "40"))))
         except ValueError:
             limit = 40
+        if request.query.get("mode") == "continuous":          # the userscript's continuous check
+            return self.json(coord.continuous_items(min(limit, 50)))
         return self.json(coord.relay_items(limit))
 
     async def post(self, request: web.Request) -> web.Response:
@@ -620,6 +625,8 @@ class RelayView(HomeAssistantView):
             body = await request.json()
             results = body.get("results") or []
             assert isinstance(results, list) and len(results) <= 100
+            if isinstance(body.get("heartbeat"), dict):
+                coord.relay_heartbeat(body["heartbeat"])
         except Exception:  # noqa: BLE001 - any malformed body
             return self.json_message("invalid body", 400)
         out: dict[str, Any] = {"ok": 0, "fail": 0, "rejected": [], "follow": []}

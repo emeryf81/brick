@@ -1554,3 +1554,47 @@ async def test_new_custom_shop_is_used_and_shop_detail(hass: HomeAssistant, entr
     d = (await ws.receive_json())["result"]
     assert d["site"] == "smythstoys.com" and d["trace"][0]["status"] == 200 and d["enabled"]
     assert any("JavaScript" in h for h in d["hints"])
+
+
+async def test_continuous_check_priorities_search_and_via(hass: HomeAssistant, entry, no_network, hass_client):
+    c = await _setup(hass, entry)
+    for n in ("10281", "10311", "42143"):
+        await hass.services.async_call(DOMAIN, "add_set", {"set_number": n}, blocking=True)
+    offers = c.store["offers"]
+    offers["10281"]["bol"] = {"url": "https://www.bol.com/nl/nl/p/lego-bonsai-10281/9300000012345678/", "history": []}
+    offers["10311"]["bol"] = {"url": "https://www.bol.com/nl/nl/p/lego-orchidee-10311/9300000012345679/", "history": [[1, 39.99]],
+                              "last_ok": 1, "error": "blocked (HTTP 403)", "available": False}
+    offers["42143"]["lego_com"] = {"url": "https://www.lego.com/nl-be/product/42143", "history": [[1, 449.99]],
+                                   "last_ok": time.time(), "available": True, "last_price": 449.99}
+    q = c.continuous_items(50)
+    reasons = [(i["reason"], i["set_number"], i["retailer"]) for i in q["items"]]
+    assert reasons[0] == ("no_price", "10281", "bol")                         # never a price: first
+    first_search = next(k for k, (r, *_x) in enumerate(reasons) if r == "search")
+    assert reasons.index(("server_fails", "10311", "bol")) > first_search      # then searches, then failing links
+    assert not any(n == "42143" and r == "search" for r, n, _ in reasons)      # has a price: no searching for it
+    assert q["counts"]["no_price"] == 1 and q["site_gap"] == 30
+
+    client = await hass_client()
+    page = '<a href="/nl/nl/p/lego-icons-orchidee-10311/9300000099/">LEGO Icons 10311 Orchidee</a>'
+    r = await client.post("/api/lego_tracker/relay", json={"heartbeat": {"on": True, "done": 3, "ok": 2, "version": "x"},
+                          "results": [{"kind": "search", "retailer": "amazon_de", "set_number": "10311", "url": "https://www.amazon.de/s?k=LEGO+10311", "status": 200, "html": "nothing"},
+                                      {"kind": "search", "retailer": "c_none", "set_number": "10311", "status": 200, "html": page}]})
+    body = await r.json()
+    assert body["fail"] == 1 and len(body["rejected"]) == 1 and c.store["relay_heartbeat"]["done"] == 3
+    assert "10311|amazon_de" in c.store["relay_searched"]
+    assert not any(i["kind"] == "search" and i["set_number"] == "10311" and i["retailer"] == "amazon_de"
+                   for i in c.continuous_items(50)["items"] if i.get("kind"))             # not searched again this week
+    # a price from the browser is marked, a server price clears the mark
+    r = await client.post("/api/lego_tracker/relay", json={"results": [{"set_number": "10281", "retailer": "bol",
+                          "url": offers["10281"]["bol"]["url"], "price": 41.5, "title": "LEGO Bonsai 10281"}]})
+    assert (await r.json())["ok"] == 1 and offers["10281"]["bol"]["last_via"] == "relay"
+    ws_card = __import__("custom_components.lego_tracker.websocket_api", fromlist=["_card"])._card(c, "10281")
+    assert ws_card["offers"]["bol"]["via"] == "relay"
+    await c.refresh_set("10281", ["bol"])
+    assert "last_via" not in offers["10281"]["bol"]
+    found = '<a href="/nl/nl/p/lego-technic-ferrari-daytona-sp3-42143/9300000088/">x</a>'
+    r = await client.post("/api/lego_tracker/relay", json={"results": [{"kind": "search", "retailer": "bol", "set_number": "42143",
+                          "url": "https://www.bol.com/nl/nl/s/?searchtext=42143", "status": 200, "html": found}]})
+    body = await r.json()
+    assert body["follow"][0]["url"] == "https://www.bol.com/nl/nl/p/lego-technic-ferrari-daytona-sp3-42143/9300000088/"
+    assert offers["42143"]["bol"]["url"] == body["follow"][0]["url"]                # linked: the browser fetches it next

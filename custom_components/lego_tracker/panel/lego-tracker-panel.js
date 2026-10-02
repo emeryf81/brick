@@ -62,6 +62,9 @@ const signPct = (v) => (v == null ? "–" : `${v > 0 ? "+" : ""}${v.toLocaleStri
 const DATE = (ts, o = { day: "2-digit", month: "short" }) => new Date(ts * 1000).toLocaleDateString(LOC, o);
 const TIME = (ts) => new Date(ts * 1000).toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" });
 const SRC = { kieskeurig: "Kieskeurig", shoparize: "Shoparize", channable: "Channable Shopping", producthero: "Producthero", brickeconomy: "BrickEconomy" };
+/** Where a shop price came from, as a small mark next to it: ⓤ = your own browser (userscript), ⓒ = another source. */
+const viaBadge = (via) => (via === "relay" || via === "userscript" ? ` <span class="vbadge" title="${esc(t("Price fetched by your own browser (userscript)"))}">ⓤ</span>`
+  : SRC[via] ? ` <span class="vbadge" title="${esc(t("price via {source} (the shop itself failed)", { source: SRC[via] }))}">ⓒ</span>` : "");
 /** A small version of a product image: full-size LEGO images are ~2000 px (≈16 MB decoded each),
  *  which makes iOS kill the page when a view shows hundreds of sets. */
 const thumb = (url, w = 320) => {
@@ -249,7 +252,7 @@ h2.sec{font-size:16px;margin:18px 0 10px;display:flex;align-items:center;gap:8px
 .addtile .plus{font-size:54px;line-height:1;font-weight:300}.addtile:hover{background:color-mix(in srgb,var(--lt-accent) 16%,var(--lt-card))}
 .card .img{position:relative}.cbtns{position:absolute;right:4px;bottom:4px;display:flex;gap:4px}
 .cbtn{width:28px;height:28px;border-radius:50%;border:0;background:var(--lt-accent);color:var(--lt-on-accent);font-weight:700;font-size:15px;line-height:1;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.35);display:grid;place-items:center;padding:0}
-.cbtn:hover{transform:scale(1.1)}.shop.click{cursor:pointer;transition:box-shadow .15s}.shop.click:hover{box-shadow:0 0 0 2px var(--lt-accent)}.tlx li.tlr{display:flex;gap:10px;align-items:flex-start}.tlx .tthumb{position:relative;flex:0 0 72px;width:72px;height:72px;border-radius:10px;overflow:hidden;background:var(--lt-soft)}.tlx .tthumb img{width:100%;height:100%;object-fit:contain}.tlx .tthumb .ph{display:grid;place-items:center;width:100%;height:100%;font-size:28px}.tlx .tthumb .cbtns{right:2px;bottom:2px;gap:2px}.tlx .tthumb .cbtn{width:22px;height:22px;font-size:11px}.tlx .tthumb .cbtn.off{min-width:22px;padding:0 4px;font-size:10px}.tlx .tbody{min-width:0;flex:1}.tlx a{color:var(--lt-accent)}.cbtn.off{width:auto;min-width:28px;padding:0 7px;border-radius:14px;background:var(--lt-card,#fff);color:var(--lt-accent);font-size:13px}.prefill{display:flex;gap:12px;align-items:center;padding:10px;margin:0 0 12px;border-radius:12px;background:var(--lt-soft)}
+.cbtn:hover{transform:scale(1.1)}.vbadge{color:var(--lt-accent);font-weight:700;cursor:help}.shop.click{cursor:pointer;transition:box-shadow .15s}.shop.click:hover{box-shadow:0 0 0 2px var(--lt-accent)}.tlx li.tlr{display:flex;gap:10px;align-items:flex-start}.tlx .tthumb{position:relative;flex:0 0 72px;width:72px;height:72px;border-radius:10px;overflow:hidden;background:var(--lt-soft)}.tlx .tthumb img{width:100%;height:100%;object-fit:contain}.tlx .tthumb .ph{display:grid;place-items:center;width:100%;height:100%;font-size:28px}.tlx .tthumb .cbtns{right:2px;bottom:2px;gap:2px}.tlx .tthumb .cbtn{width:22px;height:22px;font-size:11px}.tlx .tthumb .cbtn.off{min-width:22px;padding:0 4px;font-size:10px}.tlx .tbody{min-width:0;flex:1}.tlx a{color:var(--lt-accent)}.cbtn.off{width:auto;min-width:28px;padding:0 7px;border-radius:14px;background:var(--lt-card,#fff);color:var(--lt-accent);font-size:13px}.prefill{display:flex;gap:12px;align-items:center;padding:10px;margin:0 0 12px;border-radius:12px;background:var(--lt-soft)}
 .prefill .img{width:72px;height:72px;display:grid;place-items:center}.prefill .img img{max-width:72px;max-height:72px;object-fit:contain}.prefill>div:nth-child(2){flex:1}
 .radio label.dis{opacity:.5;cursor:not-allowed}.radio label.dis input{cursor:not-allowed}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:14px}
@@ -393,12 +396,14 @@ class LegoTrackerPanel extends HTMLElement {
       const m = e.data;
       if (!m || m.source !== "lego-tracker-userscript") return;
       if (m.type === "relay-pong") { this.state.relayHere = m; }
+      if (m.type === "continuous-status") this.state.contRun = m;
       if (m.type === "relay-status") {
         this.state.relayRun = m;
         if (m.finished) { this.toast(t("Browser relay done: {ok} prices, {fail} failed", { ok: m.ok, fail: m.fail }), m.ok ? "ok" : "err"); this.load(); }
         if (m.error === "no-token") this.toast(t("The userscript has no token yet: Tampermonkey menu → LEGO Price Tracker settings"), "err");
       }
       const box = this.shadowRoot && this.shadowRoot.getElementById("relaybox"); if (box) { box.innerHTML = this.relayBoxInner(); this.bindRelay(box); }
+      const cbox = this.shadowRoot && this.shadowRoot.getElementById("contbox"); if (cbox) { cbox.innerHTML = this.contBoxInner(); this.bindCont(cbox); }
     });
   }
   relayPing() { try { window.postMessage({ source: "lego-tracker-panel", type: "relay-ping" }, "*"); } catch (e) { /* ignore */ } }
@@ -408,6 +413,32 @@ class LegoTrackerPanel extends HTMLElement {
     const prog = run && run.running ? `<div class="meter" style="margin:8px 0"><i style="width:${run.total ? Math.round((run.done / run.total) * 100) : 0}%;animation:none;transition:width .6s"></i></div><div class="muted" style="font-size:12px">${t("{done}/{total} pages · {ok} prices · {fail} failed", { done: run.done || 0, total: run.total || 0, ok: run.ok || 0, fail: run.fail || 0 })}${run.shop ? ` · ${esc(run.shop)} ${esc(run.set_number || "")}` : ""}</div>` : "";
     return `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${status}<span class="muted" style="font-size:13px">${rel.enabled === false ? t("Browser relay is off (Settings)") : t("{n} shop pages waiting for the relay", { n: rel.pending ?? 0 })}${last && last.ts ? " · " + t("last run {when}: {ok} prices, {fail} failed", { when: ago(last.ts), ok: last.ok || 0, fail: last.fail || 0 }) : ""}</span>
       <span class="hsp" style="flex:1"></span><button class="btn sm" id="relaygo" ${here && !(run && run.running) && rel.enabled !== false ? "" : "disabled"}>▶ ${t("Run now in this browser")}</button></div>${prog}`;
+  }
+  /** The userscript's continuous check: status in this browser, the last sign of life of any browser, the queue. */
+  contBoxInner() {
+    const d = this.state.data || {}, rel = d.relay || {}, here = this.state.relayHere, run = this.state.contRun || {}, hb = rel.heartbeat, q = rel.continuous || {};
+    const on = run.on != null ? run.on : !!(here && here.continuous);
+    const local = !here ? `<span class="lk unknown">${t("userscript not detected in this browser")}</span>`
+      : !here.token ? `<span class="lk suspect">${t("no token yet")}</span>`
+      : on ? (run.other_tab ? `<span class="lk ok">✓ ${t("on: another tab of this browser does the work")}</span>` : `<span class="lk ok">✓ ${t("on in this browser")}</span>`)
+      : `<span class="lk unknown">${t("off in this browser")}</span>`;
+    const alive = hb && hb.ts && Date.now() / 1000 - hb.ts < 15 * 60 && hb.on;
+    const remote = hb && hb.ts ? (alive ? `<span class="lk ok">⏺ ${t("a browser is checking (last sign of life {when})", { when: ago(hb.ts) })}</span>` : `<span class="muted">${t("last sign of life of a browser: {when}", { when: ago(hb.ts) })}</span>`) : `<span class="muted">${t("no browser has done a continuous check yet")}</span>`;
+    const now = on && run.running && !run.other_tab ? `<div class="muted" style="font-size:12px;margin-top:6px">${run.idle ? t("Nothing to do right now: it looks again every 10 minutes.") : run.next ? t("Waiting until a site may be asked again ({time}).", { time: TIME(run.next / 1000) }) : run.shop ? t("Now: {shop} {number}", { shop: esc(run.shop), number: esc(run.set_number || "") }) : ""}
+      ${run.done ? ` · ${t("{done} checked · {ok} prices · {found} links found · {fail} failed", { done: run.done, ok: run.ok || 0, found: run.found || 0, fail: run.fail || 0 })}` : ""}</div>` : "";
+    const queue = rel.enabled === false ? t("Browser relay is off (Settings)") : t("Waiting: {a} links without a price · {b} searches for sets without any price · {c} links the server can't fetch", { a: q.no_price || 0, b: q.search || 0, c: q.server_fails || 0 });
+    return `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${local}${remote}<span class="hsp" style="flex:1"></span>
+      <button class="btn sm${on ? " ghost" : ""}" id="contgo" ${here && here.token && rel.enabled !== false ? "" : "disabled"}>${on ? `■ ${t("Switch off in this browser")}` : `▶ ${t("Switch on in this browser")}`}</button></div>
+      <div class="muted" style="font-size:13px;margin-top:6px">${queue}</div>${now}`;
+  }
+  bindCont(box) {
+    const b = box.querySelector("#contgo"); if (!b) return;
+    b.onclick = () => {
+      const run = this.state.contRun || {}, here = this.state.relayHere || {}, on = run.on != null ? run.on : !!here.continuous;
+      window.postMessage({ source: "lego-tracker-panel", type: "continuous-set", on: !on }, "*");
+      this.state.contRun = { ...run, on: !on }; box.innerHTML = this.contBoxInner(); this.bindCont(box);
+      this.toast(!on ? t("Continuous check switched on in this browser") : t("Continuous check switched off"), "ok");
+    };
   }
   bindRelay(box) { const b = box.querySelector("#relaygo"); if (b) b.onclick = () => { window.postMessage({ source: "lego-tracker-panel", type: "relay-run" }, "*"); this.state.relayRun = { running: true, done: 0, total: 0 }; box.innerHTML = this.relayBoxInner(); }; }
   set hass(h) {
@@ -723,7 +754,7 @@ class LegoTrackerPanel extends HTMLElement {
       <div class="m">${esc(s.set_number)} · ${esc(s.theme || "?")}${s.subtheme ? ` / ${esc(s.subtheme)}` : ""} ${stars}</div>
       <div class="row"><span class="p">${EUR(s.best_price)}</span>${s.rrp && s.best_price != null && s.best_price < s.rrp ? `<s>${EUR(s.rrp)}</s>` : ""}${trd}</div>
       ${s.offers_suspect ? `<div class="m" style="color:var(--lt-red)">⚠ ${t(s.offers_suspect > 1 ? "{n} suspicious links" : "{n} suspicious link", { n: s.offers_suspect })}</div>` : ""}
-      <div class="m">${store ? t("at {shop}", { shop: esc(store) }) : s.offers_live === 0 && Object.keys(s.offers || {}).length ? "⚠ " + t("no price found") : Object.keys(s.offers || {}).length ? t("no price") : t("no shop links yet")}${s.price_per_piece ? ` · ${t("{n} ct/piece", { n: (s.price_per_piece * 100).toFixed(1) })}` : ""}${s.target_price ? ` · 🎯 ${EUR0(s.target_price)}` : ""}</div>
+      <div class="m">${store ? t("at {shop}", { shop: esc(store) }) + viaBadge(((s.offers || {})[s.best_retailer] || {}).via) : s.offers_live === 0 && Object.keys(s.offers || {}).length ? "⚠ " + t("no price found") : Object.keys(s.offers || {}).length ? t("no price") : t("no shop links yet")}${s.price_per_piece ? ` · ${t("{n} ct/piece", { n: (s.price_per_piece * 100).toFixed(1) })}` : ""}${s.target_price ? ` · 🎯 ${EUR0(s.target_price)}` : ""}</div>
       ${spark(s.spark)}</div>`;
   }
   /** The first "card" of a grid: a big + that opens Manage → Add (watchlist or collection). */
@@ -1460,7 +1491,12 @@ class LegoTrackerPanel extends HTMLElement {
     const stores = { chrome: ["Chrome", "https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo"], edge: ["Edge", "https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd"], firefox: ["Firefox", "https://addons.mozilla.org/firefox/addon/tampermonkey/"], safari: ["Safari", "https://www.tampermonkey.net/?browser=safari"] };
     const step = (n, title, body) => `<div class="action" style="--i:${n}"><b><span class="st ok" style="margin-right:6px">${n}</span>${title}</b>${body}</div>`;
     setTimeout(() => this.relayPing(), 50);
-    return `<div class="panel"><h3>🔁 ${t("Browser relay")}</h3><p>${t("While Home Assistant is open in a browser with the userscript, that browser fetches the shop pages that fail on the server (for example bol.com) in the background, calmly one by one, and sends the prices to Home Assistant. It runs automatically at most every few hours (Settings), or now with the button.")}</p><div id="relaybox">${this.relayBoxInner()}</div></div>
+    const how = [t("Links that never had a price come first."), t("Then sets without any price: the shops that have no link yet are searched in your browser; a product found there is linked and fetched right away."),
+      t("Then links the server can't fetch (blocked, paused, errors), each at most every 6 hours."), t("Calm: every site at most twice a minute, a search at most once every 2 minutes per site, 4–9 s between pages; a site that blocks your browser twice is left alone for an hour."),
+      t("Prices from your browser get the mark ⓤ next to the price (set → Shops, and on the cards).")];
+    return `<div class="panel"><h3>♾️ ${t("Continuous check")}</h3><p>${t("The userscript can also keep checking by itself, as long as a Home Assistant tab is open in that browser. It focuses on what the server can't do:")}</p>
+      <ol style="margin:0 0 10px;padding-left:20px">${how.map((x) => `<li>${x}</li>`).join("")}</ol><div id="contbox">${this.contBoxInner()}</div></div>
+      <div class="panel"><h3>🔁 ${t("Browser relay")}</h3><p>${t("While Home Assistant is open in a browser with the userscript, that browser fetches the shop pages that fail on the server (for example bol.com) in the background, calmly one by one, and sends the prices to Home Assistant. It runs automatically at most every few hours (Settings), or now with the button.")}</p><div id="relaybox">${this.relayBoxInner()}</div></div>
       <div class="panel"><h3>🧩 ${t("Send prices from your own browser")}</h3><p>${t("Shops block servers, but not your browser. The userscript reads the price and product title on every product page you visit and sends them to Home Assistant. That also works for Amazon and bol.com, and the title helps the link check. Only products that are already tracked (same link or ASIN) are updated.")}</p>
       ${last ? `<div class="banner" style="background:color-mix(in srgb,var(--lt-green) 12%,var(--lt-card));border-color:color-mix(in srgb,var(--lt-green) 40%,transparent)">✅ ${t("Works: last price received {when} (set {number}, {price} at {shop}).", { when: ago(last.ts), number: esc(last.set_number), price: EUR(last.price), shop: esc(this.state.data.retailers[last.retailer] || last.retailer) })} <a data-goto="log/all" style="cursor:pointer">${t("Logbook")} →</a></div>` : `<div class="banner">${t("No price received through the userscript yet.")}</div>`}</div>
       <div class="actions">
@@ -1469,7 +1505,19 @@ class LegoTrackerPanel extends HTMLElement {
       ${step(3, t("Create a token"), `<p>${t("In Home Assistant: your profile → Security → Long-lived access tokens → Create token (name e.g. “LEGO userscript”). Copy the token, you only see it once.")}</p><a class="btn ghost" href="/profile/security" target="_blank" rel="noopener">${t("Go to profile → Security")} ↗</a>`)}
       ${step(4, t("Set the token"), `<p>${t("In your browser click the Tampermonkey icon → LEGO Price Tracker settings. The address is already filled in ({origin}); then paste the token.", { origin: esc(origin) })}</p>`)}
       ${step(5, t("Test"), `<p>${t("Open a product page of a set you track (click a set → “open ↗”). After a few seconds a green message appears at the bottom right, and “✅ Works” appears above.")}</p>`)}
+      ${step(6, t("Switch on the continuous check"), `<p>${t("Come back to this page (reload it once after installing) and press “Switch on in this browser” above, or use the Tampermonkey menu → “Continuous check: switch on / off”. The setting is kept in Tampermonkey: it starts again by itself every time you open Home Assistant in this browser.")}</p>`)}
+      ${step(7, t("Keep it running"), `<p>${t("The check only runs while a Home Assistant tab is open (any page of Home Assistant). Tips:")}</p><ul style="margin:0;padding-left:18px;font-size:13px">
+        <li>${t("Pin a tab with Home Assistant (right-click the tab → Pin).")}</li>
+        <li>${t("Chrome: Settings → Performance → Memory Saver → “Always keep these sites active” → add {origin}. Edge: Settings → System and performance → Sleeping tabs → “Never put these sites to sleep”.", { origin: esc(origin) })}</li>
+        <li>${t("A computer that sleeps stops the check; it continues when it wakes up. Several tabs or windows are fine: only one tab of a browser does the work.")}</li>
+        <li>${t("Several browsers or computers may run it too: each paces itself, so keep it to one or two.")}</li></ul>`)}
+      ${step(8, t("Check that it works"), `<p>${t("Above you see “a browser is checking” with its last sign of life and what it is doing. In the logbook the entries have the source “relay”, and the prices get the mark ⓤ.")}</p>`)}
       </div>
+      <div class="panel" style="margin-top:16px"><h3>🛠 ${t("If it doesn't work")}</h3><ul style="margin:0;padding-left:18px">
+        <li><b>${t("“userscript not detected in this browser”")}</b>: ${t("reload this page; in Chrome/Edge switch on “Allow user scripts” for Tampermonkey (Extensions → Tampermonkey → Details); check that the script is enabled in the Tampermonkey dashboard.")}</li>
+        <li><b>${t("“no token yet” or HTTP 401")}</b>: ${t("set the token again via the Tampermonkey menu → LEGO Price Tracker settings; a revoked token stops everything.")}</li>
+        <li><b>${t("A shop keeps failing")}</b>: ${t("some shops block your browser too, or load their search results with JavaScript (then nothing can be found by searching). Open the shop under Shops & jobs to see why, and paste the product link in the set yourself.")}</li>
+        <li><b>${t("Nothing happens")}</b>: ${t("the browser relay may be off under Settings; or there is simply nothing to do (it looks again every 10 minutes).")}</li></ul></div>
       <div class="panel" style="margin-top:16px"><h3>🔒 ${t("Security")}</h3><p>${t("The script contains no token: that is only stored in Tampermonkey on your device. It only runs on the shop domains in your list and on your Home Assistant pages (for the browser relay), and only sends the set number, URL, title and price to your own Home Assistant. You can revoke the token in your profile at any time.")}</p></div>`;
   }
   vShops() {
@@ -1577,6 +1625,7 @@ class LegoTrackerPanel extends HTMLElement {
     root.querySelectorAll("[data-shoplog]").forEach((a) => a.addEventListener("click", () => { Object.assign(s.logv, { level: "", kind: "", retailer: a.dataset.shoplog, source: "", status: "fail", set: "", q: "", data: null, open: null }); s.section = "log"; s.sub.log = "checks"; this.persist(); this.render(true); }));
     // settings, errors, notifications
     if ($("relaybox")) this.bindRelay($("relaybox"));
+    if ($("contbox")) this.bindCont($("contbox"));
     if ($("x_cmp")) this.bindSecret(root, $);
     if ($("o_save")) this.bindSettings(root, $);
     if ($("e_scope")) this.bindErrors(root, $);
@@ -1877,7 +1926,7 @@ class LegoTrackerPanel extends HTMLElement {
       const autoP = o.manual_price != null ? o.auto_price : o.price;
       return `<tr class="orow${focus === rid ? " focus" : ""}" data-rid="${rid}"><td><b>${esc(o.label)}</b>${p} ${lk(o)}${o.title ? `<div class="muted" style="font-size:12px;max-width:240px">${esc(o.title.slice(0, 90))}</div>` : ""}${o.link_status === "suspect" ? `<div class="err">${esc(tx(o.link_reason || ""))}</div>` : ""}${o.error ? `<div class="err">${esc(tx(o.error))}${o.ignored ? ` <span class="muted">(${t("ignored")})</span>` : ""}</div>` : ""}</td>
         <td><div style="display:flex;gap:6px;align-items:center">${o.manual_url ? man : auto}${o.url ? `<a href="${esc(o.url)}" target="_blank" rel="noopener noreferrer" data-stop style="font-size:12px;white-space:nowrap">${t("open")} ↗</a>` : ""}</div><input class="ou" value="${esc(o.url || "")}" data-orig="${esc(o.url || "")}" placeholder="${t("empty = search automatically")}" style="margin-top:4px"></td>
-        <td class="num"><div>${o.manual_price != null ? man : auto} ${o.price != null ? `<b class="${o.price === cheapest ? "ok" : ""}">${EUR(o.price)}</b>` : "–"}</div>
+        <td class="num"><div>${o.manual_price != null ? man : auto} ${o.price != null ? `<b class="${o.price === cheapest ? "ok" : ""}">${EUR(o.price)}</b>${viaBadge(o.via)}` : "–"}</div>
           <input class="op" type="number" min="0" step="0.01" value="${o.manual_price ?? ""}" data-orig="${o.manual_price ?? ""}" placeholder="${autoP != null ? EUR(autoP) : t("auto")}" title="${t("empty = automatic price")}" style="margin-top:4px">
           <div class="muted" style="font-size:11px;margin-top:2px">${o.manual_price != null ? t("shop: {price}", { price: EUR(autoP) }) + " · " : ""}${t("low {price}", { price: EUR(o.low) })} · ${ago(o.checked)}</div></td>
         <td class="oact">${fetchBtn(rid, true)}${o.link_status !== "confirmed" ? `<button class="btn ghost sm okb" data-rid="${rid}" title="${t("This link is the right set")}">✓</button>` : ""}${o.error ? `<button class="btn ghost sm ignb" data-rid="${rid}" title="${esc(o.ignored ? t("Stop ignoring") : t("Ignore"))}">${o.ignored ? "👁" : "🙈"}</button>` : ""}<button class="btn ghost sm rmb" data-rid="${rid}" title="${t("Remove wrong link and never link it again")}">🗑</button></td></tr>`;
