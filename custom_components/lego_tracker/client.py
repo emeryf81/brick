@@ -6,6 +6,7 @@ import json
 import logging
 import random
 import time
+from collections import deque
 from urllib.parse import urlparse
 from typing import Any
 
@@ -80,6 +81,14 @@ class Fetcher:
         self.last_request: dict[str, float] = {}           # per site: when it was last asked anything
         self.last_search: dict[str, float] = {}            # per site: when it was last searched
         self.abort: Any = None                             # callable: True = stop waiting (the job was stopped)
+        self.trace: dict[str, deque] = {}                  # per shop: the last requests, what came back and why
+        self._search_meta: dict[str, tuple[int | None, int]] = {}
+
+    def _trace(self, key: str, kind: str, url: str, t0: float, status: int | None = None, size: int = 0,
+               result: str | None = None, error: str | None = None, set_number: str | None = None) -> None:
+        self.trace.setdefault(key, deque(maxlen=40)).append(
+            {"ts": time.time(), "kind": kind, "url": url, "status": status, "size": size, "set_number": set_number,
+             "ms": int((time.time() - t0) * 1000), "result": result, "error": error})
 
     @property
     def transport(self) -> str:
@@ -201,29 +210,38 @@ class Fetcher:
 
     async def fetch_offer(self, retailer: str, url: str, force: bool = False) -> tuple[Parsed | None, str | None]:
         """Returns (parsed, error). force: also try a paused shop (manual action from the panel)."""
+        t0 = time.time()
+        parsed, status, size, error = await self._fetch_offer(retailer, url, force)
+        if not (error or "").startswith("paused"):
+            res = None if not parsed else (f"€{parsed.price:.2f}" if parsed.price is not None else "unavailable")
+            self._trace(retailer, "page", url, t0, status, size, res, error)
+        return parsed, error
+
+    async def _fetch_offer(self, retailer: str, url: str, force: bool) -> tuple[Parsed | None, int | None, int, str | None]:
         if not force and (left := self.cooldown_left(retailer)) > 0:
-            return None, T("paused {hours} h after being blocked", hours=f"{left / 3600:.1f}")
+            return None, None, 0, T("paused {hours} h after being blocked", hours=f"{left / 3600:.1f}")
         try:
             status, page = await self._get(retailer, url)
         except Aborted:
-            return None, T("paused: the job was stopped")
+            return None, None, 0, T("paused: the job was stopped")
         except Exception as err:  # noqa: BLE001 - aiohttp and curl_cffi raise different types
-            return None, T("network error: {error}", error=str(err)[:120])
+            return None, None, 0, T("network error: {error}", error=str(err)[:120])
+        size = len(page or "")
         if status in (403, 429, 503):
             self._note_block(retailer)
-            return None, T("blocked (HTTP {status})", status=status)
+            return None, status, size, T("blocked (HTTP {status})", status=status)
         if status == 404:
-            return None, T("page not found (HTTP 404)")
+            return None, status, size, T("page not found (HTTP 404)")
         if status >= 400:
-            return None, T("HTTP error {status}", status=status)
+            return None, status, size, T("HTTP error {status}", status=status)
         parsed = parse_page(retailer, page, lego_number(url) if retailer == "lego_com" else None)
         if parsed.blocked:
             self._note_block(retailer)
-            return None, T("blocked (captcha / bot protection)")
+            return None, status, size, T("blocked (captcha / bot protection)")
         if parsed.price is None and not parsed.unavailable:
-            return None, T("price not found on the page")
+            return None, status, size, T("price not found on the page")
         self.blocks[retailer] = 0
-        return parsed, None
+        return parsed, status, size, None
 
     async def get_page(self, key: str, url: str, force: bool = False, note_block: bool = True) -> tuple[int, str, str | None]:
         """(status, html, error) for an extra source (a comparison site), with the same politeness and pauses.
@@ -243,6 +261,18 @@ class Fetcher:
         return status, page, None
 
     async def discover(self, retailer: str, set_number: str, force: bool = False, url: str | None = None) -> str | None:
+        """Search the shop for the set; every attempt is kept in the shop's trace (Shops → click a shop)."""
+        t0 = time.time()
+        self._search_meta[retailer] = (None, 0)
+        found = await self._discover(retailer, set_number, force, url)
+        err = self.discover_error.get(retailer)
+        if not (err or "").startswith("paused"):
+            status, size = self._search_meta.get(retailer, (None, 0))
+            self._trace(retailer, "search", url or search_url(retailer, set_number) or "", t0, status, size,
+                        found, err, set_number)
+        return found
+
+    async def _discover(self, retailer: str, set_number: str, force: bool = False, url: str | None = None) -> str | None:
         """Search the shop for the set (url: a search page to use instead of the shop's search URL).
         On failure the reason is kept in self.discover_error[retailer] (blocked, HTTP error, results
         loaded by JavaScript, or really nothing matching), so the panel can say what happened."""
@@ -253,6 +283,7 @@ class Fetcher:
             return None
         try:
             status, page = await self._get(retailer, url, search=True)
+            self._search_meta[retailer] = (status, len(page or ""))
         except Aborted:
             self.discover_error[retailer] = T("paused: the job was stopped")
             return None

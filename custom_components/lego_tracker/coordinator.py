@@ -29,7 +29,7 @@ from .const import (
 )
 from .models import (
     add_activity, add_event, clean_history, collection_analytics, link_check, collection_rows, collection_series, is_suspicious_price, collection_summary, COLLECTION_COLUMNS, rows_to_csv, validate_backup, wishlist_summary, is_watched, compute_set_status, new_store, normalize_set_number,
-    offer_price, record_price, today_iso,
+    offer_price, query_activity, record_price, today_iso,
 )
 from .i18n import DEFAULT_LANGUAGE, LANGUAGES, LocalizedError, T, resolve, set_language
 from .notifications import Notifier, default_rules
@@ -447,9 +447,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             done_txt += "".join(", " + p for p in parts if p)
             self.log("warning" if job.get("errors") else "ok", "job", done_txt)
             for rid, st in (job.get("shops") or {}).items():
+                why = sorted((st.get("why") or {}).items(), key=lambda x: -x[1])[:3]
                 self.log("ok" if not st["err"] else "warning" if st["ok"] else "error", "fetch",
-                         T("{shop}: {ok} succeeded, {failed} failed", shop=RETAILERS.get(rid, (rid,))[0], ok=st["ok"], failed=st["err"]),
-                         retailer=rid)
+                         T("{shop}: {ok} succeeded, {failed} failed", shop=RETAILERS.get(rid, (rid,))[0], ok=st["ok"], failed=st["err"])
+                         + "".join(f" · {n}× {r}" for r, n in why), retailer=rid)
             if job["kind"] == "refresh":
                 self._snapshot()
             if job["kind"] in ("enrich", "update"):
@@ -841,6 +842,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         results = await asyncio.gather(*(self._fetch(rid, o, num, force) for rid, o in offers))
         counts = {"updated": 0, "errors": 0, "skipped": 0}
         shop_results: dict[str, dict[str, Any]] = {}
+        # every shop's price in this round (and the last known ones): the yardstick for a set without RRP
+        round_prices = {rid: p for (rid, _o), (pr, _e) in zip(offers, results) if pr and (p := pr.price)}
+        known = {rid: o.get("last_price") for rid, o in self.store["offers"].get(num, {}).items()
+                 if o.get("available") and o.get("last_price")}
         for (rid, offer), (parsed, error) in zip(offers, results):
             via = None
             if (bwp := bw_prices.get(rid)) and (error or not parsed or parsed.price is None):
@@ -854,7 +859,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             status, reason = link_check(offer, s, num)
             offer["link_status"], offer["link_reason"] = status, reason
             price = parsed.price if parsed else None
-            if price is not None and (warn := is_suspicious_price(price, s, offer)):
+            others = [p for r, p in {**known, **round_prices}.items() if r != rid]
+            if price is not None and (warn := is_suspicious_price(price, s, offer, others)):
                 price, error = None, warn
             manual = offer.get("manual_price")
             if manual:                        # manual price has priority: only remember what the shop said
@@ -980,7 +986,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.log("info", "discover", T("found a link you rejected earlier; not linked again"), set_number=num, retailer=rid, url=url)
             elif self.job and self.job.get("running"):
                 st = self.job["shops"].setdefault(rid, {"ok": 0, "err": 0})
-                st["err"] += 1                  # summarised per shop at the end of the job
+                st["err"] += 1                  # summarised per shop at the end of the job, with the reasons
+                why = st.setdefault("why", {})
+                reason = self.fetcher.discover_error.get(rid) or T("no matching product found")
+                why[reason] = why.get(reason, 0) + 1
             else:
                 self.log("info", "discover", T("no matching product found"), set_number=num, retailer=rid)
             if url and self.job and self.job.get("running"):
@@ -1384,6 +1393,12 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         valid_ids = set(RETAILERS) | {s["id"] for s in opts.get(CONF_CUSTOM_SHOPS, [])}
         if "retailers" in fields:
             opts[CONF_RETAILERS] = [r for r in fields["retailers"] if r in valid_ids]
+        if "custom_shops" in fields:
+            # a shop you just added is searched and fetched right away (switch it off under Shops if you like)
+            before = {s["id"] for s in self.opt(self.entry, CONF_CUSTOM_SHOPS, []) or []}
+            active = list(opts.get(CONF_RETAILERS, self.opt(self.entry, CONF_RETAILERS, DEFAULT_RETAILERS)))
+            opts[CONF_RETAILERS] = [r for r in active if r in valid_ids] + \
+                [s["id"] for s in opts[CONF_CUSTOM_SHOPS] if s["id"] not in before and s["id"] not in active]
         if "no_autopause" in fields:
             opts[CONF_NO_AUTOPAUSE] = [r for r in fields["no_autopause"] if r in valid_ids]
         return opts
@@ -1571,7 +1586,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._alerted.add(key)
                 self.hass.bus.async_fire(event, payload)
                 add_event(self.store, flag, {k: payload[k] for k in ("set_number", "name", "price", "retailer", "url")}
-                          | {"discount": payload["discount"]})
+                          | {"discount": payload["discount"], "score": after.get("deal_score")})
         if before.get("best_price") != after.get("best_price") or any(
                 before.get(k) != after.get(k) for k in ("is_all_time_low", "target_hit", "retiring_soon", "deal_score")):
             self.hass.async_create_task(self.notifier.on_set_change(num, dict(before), dict(after)))
@@ -1730,6 +1745,44 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         finally:
             self.push_update()
 
+    def shop_detail(self, rid: str) -> dict[str, Any]:
+        """Shops → click a shop: its settings, the last requests (what was asked, what came back, why it
+        failed), its recent log and a plain diagnosis."""
+        from .shops import SEARCH
+
+        stats = self.retailer_stats().get(rid, {})
+        site = self._site(rid)
+        trace = list(reversed(self.fetcher.trace.get(rid, [])))
+        offers = [o for by in self.store["offers"].values() for r, o in by.items() if r == rid]
+        log = query_activity(self.store, retailer=rid, limit=40)["entries"]
+        via = [((e.get("results") or {}).get(rid) or {}).get("via") for e in log if e["kind"] == "check"]
+        hints = []
+        if rid not in self.retailers:
+            hints.append(T("This shop is switched off (Settings → Shops)."))
+        if self.fetcher.cooldown_left(rid) > 0:
+            hints.append(T("Paused after a block: the shop refused the requests. It is tried again automatically later."))
+        searches = [x for x in trace if x["kind"] == "search"]
+        js = sum(1 for x in searches if "JavaScript" in (x.get("error") or ""))
+        blocked = sum(1 for x in trace if x.get("status") in (403, 429, 503) or "blocked" in (x.get("error") or ""))
+        if js and js >= len(searches) / 2:
+            hints.append(T("The shop's search page loads its results with JavaScript, so the server sees no products. Paste product links by hand (set → Shops), or let the browser relay / userscript deliver prices."))
+        if blocked and blocked >= len(trace) / 2:
+            hints.append(T("Most requests are blocked by the shop's bot protection. The browser relay (userscript) or a manual price helps."))
+        if offers and via and all(via) and not any(x["kind"] == "page" and not x.get("error") for x in trace):
+            hints.append(T("The prices of this shop come from other sources, not from the shop's own pages."))
+        if not offers and not searches:
+            hints.append(T("No links yet and not searched since the last restart: use Find links, or paste a product link in a set."))
+        if not hints and stats.get("errors"):
+            hints.append(T("Some links fail: open the failing sets below to see the error per link."))
+        return {
+            "id": rid, "label": RETAILERS.get(rid, (rid,))[0], "site": site, "stats": stats,
+            "enabled": rid in self.retailers, "search": SEARCH.get(rid), "blocks": self.fetcher.blocks.get(rid, 0),
+            "paused_until": self.fetcher.blocked_until.get(rid) if self.fetcher.cooldown_left(rid) > 0 else None,
+            "last_request": self.fetcher.last_request.get(site), "next_free": self.fetcher.next_free(site),
+            "next_search": self.fetcher.next_free(site, search=True), "trace": trace, "log": log, "hints": hints,
+            "now": time.time(),
+        }
+
     def retailer_stats(self) -> dict[str, dict[str, Any]]:
         statuses = (self.data or self.compute())["statuses"]
         out: dict[str, dict[str, Any]] = {}
@@ -1776,7 +1829,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                      url=url, retailer=retailer, price=price, source=source, set_number=num)
             raise LocalizedError("No matching link: this page is not tracked (add the set or link it first).")
         num, retailer = found
-        if url and (warn := is_suspicious_price(price, self.store["sets"][num], self.store["offers"][num][retailer])):
+        others = [o["last_price"] for r, o in self.store["offers"][num].items() if r != retailer and o.get("available") and o.get("last_price")]
+        if url and (warn := is_suspicious_price(price, self.store["sets"][num], self.store["offers"][num][retailer], others)):
             self.log("error", "userscript", warn, set_number=num, retailer=retailer, url=url, price=price, source=source)
             raise ValueError(warn)   # already English (panel translates)
         offer = self.store["offers"][num][retailer]

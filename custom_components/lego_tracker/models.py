@@ -276,9 +276,17 @@ def link_check(offer: dict[str, Any], lego_set: dict[str, Any], set_number: str)
     return status, reason
 
 
-def is_suspicious_price(price: float, lego_set: dict[str, Any], offer: dict[str, Any]) -> str | None:
-    """Catch parse errors (accessory/marketplace/multi-pack prices) before they pollute history."""
+def is_suspicious_price(price: float, lego_set: dict[str, Any], offer: dict[str, Any],
+                        others: list[float] | None = None) -> str | None:
+    """Catch parse errors (accessory/marketplace/multi-pack prices, cents read without the comma) before
+    they pollute history. Without an RRP the other shops' prices for the same set are the yardstick, so a
+    new set (no RRP, no history yet) is checked too."""
     rrp = lego_set.get("rrp")
+    if not rrp and others:
+        mid = median(others)
+        # far above the others: e.g. cents read without the comma; far below needs two others (an accessory)
+        if price > mid * 4 or (len(others) >= 2 and price < mid * 0.25):
+            return T("suspicious price €{price} (far from €{usual}) ignored", price=f"{price:.2f}", usual=f"{mid:.2f}")
     if rrp and price < rrp * 0.2:
         return T("suspicious price €{price} (under 20% of RRP) ignored", price=f"{price:.2f}")
     if rrp and price > rrp * 4:

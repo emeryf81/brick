@@ -249,7 +249,7 @@ h2.sec{font-size:16px;margin:18px 0 10px;display:flex;align-items:center;gap:8px
 .addtile .plus{font-size:54px;line-height:1;font-weight:300}.addtile:hover{background:color-mix(in srgb,var(--lt-accent) 16%,var(--lt-card))}
 .card .img{position:relative}.cbtns{position:absolute;right:4px;bottom:4px;display:flex;gap:4px}
 .cbtn{width:28px;height:28px;border-radius:50%;border:0;background:var(--lt-accent);color:var(--lt-on-accent);font-weight:700;font-size:15px;line-height:1;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.35);display:grid;place-items:center;padding:0}
-.cbtn:hover{transform:scale(1.1)}.tlx li.tlr{display:flex;gap:10px;align-items:flex-start}.tlx .tthumb{position:relative;flex:0 0 72px;width:72px;height:72px;border-radius:10px;overflow:hidden;background:var(--lt-soft)}.tlx .tthumb img{width:100%;height:100%;object-fit:contain}.tlx .tthumb .ph{display:grid;place-items:center;width:100%;height:100%;font-size:28px}.tlx .tthumb .cbtns{right:2px;bottom:2px;gap:2px}.tlx .tthumb .cbtn{width:22px;height:22px;font-size:11px}.tlx .tthumb .cbtn.off{min-width:22px;padding:0 4px;font-size:10px}.tlx .tbody{min-width:0;flex:1}.tlx a{color:var(--lt-accent)}.cbtn.off{width:auto;min-width:28px;padding:0 7px;border-radius:14px;background:var(--lt-card,#fff);color:var(--lt-accent);font-size:13px}.prefill{display:flex;gap:12px;align-items:center;padding:10px;margin:0 0 12px;border-radius:12px;background:var(--lt-soft)}
+.cbtn:hover{transform:scale(1.1)}.shop.click{cursor:pointer;transition:box-shadow .15s}.shop.click:hover{box-shadow:0 0 0 2px var(--lt-accent)}.tlx li.tlr{display:flex;gap:10px;align-items:flex-start}.tlx .tthumb{position:relative;flex:0 0 72px;width:72px;height:72px;border-radius:10px;overflow:hidden;background:var(--lt-soft)}.tlx .tthumb img{width:100%;height:100%;object-fit:contain}.tlx .tthumb .ph{display:grid;place-items:center;width:100%;height:100%;font-size:28px}.tlx .tthumb .cbtns{right:2px;bottom:2px;gap:2px}.tlx .tthumb .cbtn{width:22px;height:22px;font-size:11px}.tlx .tthumb .cbtn.off{min-width:22px;padding:0 4px;font-size:10px}.tlx .tbody{min-width:0;flex:1}.tlx a{color:var(--lt-accent)}.cbtn.off{width:auto;min-width:28px;padding:0 7px;border-radius:14px;background:var(--lt-card,#fff);color:var(--lt-accent);font-size:13px}.prefill{display:flex;gap:12px;align-items:center;padding:10px;margin:0 0 12px;border-radius:12px;background:var(--lt-soft)}
 .prefill .img{width:72px;height:72px;display:grid;place-items:center}.prefill .img img{max-width:72px;max-height:72px;object-fit:contain}.prefill>div:nth-child(2){flex:1}
 .radio label.dis{opacity:.5;cursor:not-allowed}.radio label.dis input{cursor:not-allowed}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:14px}
@@ -326,7 +326,7 @@ a{color:var(--lt-accent)}.err{color:var(--lt-red);font-size:12px}.ok{color:var(-
 .kv{display:flex;justify-content:space-between;font-size:13px;padding:2px 0}.kv span{color:var(--lt-muted)}
 .skel{background:linear-gradient(90deg,var(--lt-line) 25%,color-mix(in srgb,var(--lt-line) 40%,var(--lt-card)) 50%,var(--lt-line) 75%);background-size:200% 100%;animation:shimmer 1.3s infinite;border-radius:var(--lt-radius)}
 /* dialog */
-dialog{border:0;border-radius:22px;padding:0;max-width:920px;width:calc(100vw - 24px);max-height:calc(100vh - 32px);background:var(--lt-card);color:var(--lt-text);box-shadow:0 24px 80px rgba(0,0,0,.35)}
+dialog{border:0;border-radius:22px;padding:0;overflow:auto;max-width:920px;width:calc(100vw - 24px);max-height:calc(100vh - 32px);background:var(--lt-card);color:var(--lt-text);box-shadow:0 24px 80px rgba(0,0,0,.35)}
 dialog[open]{animation:dlg .32s cubic-bezier(.3,1.3,.5,1)}dialog.closing{animation:dlgout .18s ease-in forwards}
 dialog::backdrop{background:rgba(10,12,20,.55);backdrop-filter:blur(3px);animation:fade .25s}
 .dhead{display:grid;grid-template-columns:150px 1fr auto;gap:16px;padding:18px 20px;border-bottom:1px solid var(--lt-line);position:sticky;top:0;background:var(--lt-card);z-index:3}
@@ -526,7 +526,7 @@ class LegoTrackerPanel extends HTMLElement {
     const sec = SECTIONS[s.section], sub = s.sub[s.section];
     const d = s.data;
     const status = d ? this.healthDot() : "";
-    const keepToasts = root.querySelector(".toasts"), keepDlg = root.getElementById("dlg");
+    const keepToasts = root.querySelector(".toasts"), keepDlg = root.getElementById("dlg"), dlgScroll = keepDlg ? keepDlg.scrollTop : 0;
     root.innerHTML = `<style>${STYLE}</style><div class="wrap">
       <header>${this._narrow ? `<ha-menu-button></ha-menu-button>` : ""}<img class="logo" src="/lego_tracker_static/icon.png${d ? `?v=${encodeURIComponent(d.version)}` : ""}" alt="" onerror="this.outerHTML=this.dataset.fb" data-fb="${esc(BRICK)}"><div><h1>LEGO Organizing Tool</h1><div class="meta">${d ? `v${esc(d.version)} · ${t("{n} sets tracked", { n: d.sets.length })}` : t("loading…")}</div></div>
         <div class="hsp"></div>${status}<button class="btn ghost sm" data-act="discover" title="${t("Search shop links for sets that have none yet: a job you can follow and stop, spread out so every shop is searched at most once every 2 minutes")}">🔎 <span class="lbl">${t("Find links")}</span></button><button class="btn sm" data-act="refresh" ${this.fullRefreshAttr(t("Fetch all shop prices now"))}>↻ <span class="lbl">${t("Refresh prices")}</span></button></header>
@@ -536,7 +536,12 @@ class LegoTrackerPanel extends HTMLElement {
       <div id="content"></div></div><div class="toasts"></div><dialog id="dlg"></dialog>`;
     // keep notifications and an open set dialog alive across re-renders (e.g. when a job finishes)
     if (keepToasts) root.querySelector(".toasts").replaceWith(keepToasts);
-    if (keepDlg) { root.getElementById("dlg").replaceWith(keepDlg); keepDlg._bound = true; }
+    if (keepDlg) {
+      root.getElementById("dlg").replaceWith(keepDlg); keepDlg._bound = true;
+      // taking an open dialog out of the page ends its modal state (no backdrop, content spilling out of the
+      // box): show it as a modal again, without the opening animation, at the same scroll position
+      if (keepDlg.open) { keepDlg.style.animation = "none"; keepDlg.close(); keepDlg.showModal(); keepDlg.scrollTop = dlgScroll; requestAnimationFrame(() => { keepDlg.style.animation = ""; }); }
+    }
     const menu = root.querySelector("ha-menu-button"); if (menu) { menu.hass = this._hass; menu.narrow = this._narrow; }
     this.placeIndicator(false);
     root.querySelectorAll("[data-sec]").forEach((b) => b.addEventListener("click", () => { if (s.section === b.dataset.sec) return; s.section = b.dataset.sec; this.resetFilters(); this.persist(); this.render(true); }));
@@ -633,6 +638,10 @@ class LegoTrackerPanel extends HTMLElement {
     el.className = animate && !REDUCED ? "enter" : "";
     el.innerHTML = view.call(this);
     this.bindContent(el);
+    clearTimeout(this._shopsTimer);
+    if (s.section === "manage" && s.sub.manage === "shops") {        // the shop status keeps itself up to date
+      this._shopsTimer = setTimeout(() => { const d = this.shadowRoot.getElementById("dlg"); if (this.isConnected && s.section === "manage" && s.sub.manage === "shops" && !(d && d.open)) this.load(); else if (this.isConnected) this.renderContent(); }, 30000);
+    }
     this.hookCharts(el); this.tickManual();
     if (animate) this.countUp(el);
   }
@@ -767,8 +776,11 @@ class LegoTrackerPanel extends HTMLElement {
       const url = e.url || (shop && s.offers && s.offers[shop] && s.offers[shop].url) || s.best_url;
       const shopName = shop ? esc(this.state.data.retailers[shop] || shop) : "";
       const now = s.best_price != null && price != null && Math.abs(s.best_price - price) >= 0.01 ? ` <span class="t">(${t("now {price}", { price: EUR(s.best_price) })})</span>` : "";
+      const disc = e.discount != null ? e.discount : s.rrp && price != null ? Math.round((1 - price / s.rrp) * 1000) / 10 : null;
+      const score = e.score != null ? e.score : s.deal_score;
+      const tags = `${disc != null && disc > 0 ? `<span class="badge red">−${Math.round(disc)}%</span>` : ""}${score != null ? `<span class="badge grey" title="${esc(t("Deal score"))}">⭐ ${Math.round(score)}</span>` : ""}`;
       return `<li class="tlr" data-set="${esc(e.set_number)}"><div class="tthumb img">${this.img(s)}${bySet[e.set_number] ? this.cornerBtns(s) : ""}</div><div class="tbody"><b><span class="ic">${i}</span> ${esc(s.name || e.name || e.set_number)}</b>
-        <div>${t(lbl)} · <b>${EUR(price)}</b>${now}${shopName ? ` · ${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" data-stop>${shopName} ↗</a>` : shopName}` : ""}</div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap;margin:2px 0">${tags}</div><div>${t(lbl)} · <b>${EUR(price)}</b>${now}${shopName ? ` · ${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" data-stop>${shopName} ↗</a>` : shopName}` : ""}</div>
         <div class="t">${esc(e.set_number)} · ${DATE(e.ts, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div></div></li>`;
     };
     return `<div class="panel"><h3>🕒 ${t("Recent deals")}</h3>${ev.length ? `<ul class="tl tlx">${ev.slice(0, 12).map(row).join("")}</ul>` : `<p>${t("Nothing reported yet. New lowest prices, high discounts and reached target prices appear here.")}</p>`}</div>`;
@@ -1465,7 +1477,7 @@ class LegoTrackerPanel extends HTMLElement {
     const cards = Object.entries(st).map(([rid, r], i) => {
       const ratio = r.offers ? r.ok / r.offers : 0;
       const state = !r.enabled ? ["", t("disabled")] : r.paused_hours > 0 ? ["bad", t("paused ({time})", { time: dur(r.paused_hours * 3600) })] : r.errors ? ["warn", t(r.errors > 1 ? "{n} errors" : "{n} error", { n: r.errors })] : ["", r.offers ? t("works") : t("no links")];
-      return `<div class="shop" style="--i:${i}"><h4><span class="dotst ${state[0]}"></span>${esc(r.label)}</h4><div class="muted" style="font-size:13px">${state[1]}${r.paused_hours > 0 ? ` <button class="btn ghost sm" data-resume="${esc(rid)}">▶ ${t("Resume")}</button>` : ""}</div>
+      return `<div class="shop click" style="--i:${i}" data-shop="${esc(rid)}" tabindex="0" title="${esc(t("Click for the last requests of this shop: what was asked, what came back and why it failed"))}"><h4><span class="dotst ${state[0]}"></span>${esc(r.label)}</h4><div class="muted" style="font-size:13px">${state[1]}${r.paused_hours > 0 ? ` <button class="btn ghost sm" data-resume="${esc(rid)}">▶ ${t("Resume")}</button>` : ""}</div>
         <div class="meter"><i style="width:${Math.round(ratio * 100)}%"></i></div>
         <div class="kv"><span>${t("Links")}</span><b>${r.offers}</b></div><div class="kv"><span>${t("With a price")}</span><b>${r.ok}</b></div><div class="kv"><span>${t("Cheapest for")}</span><b>${t("{n} sets", { n: r.cheapest })}</b></div><div class="kv"><span>${t("Last success")}</span><b>${ago(r.last_ok)}</b></div>
         ${r.errors ? `<a class="muted" style="font-size:12px;cursor:pointer" data-shoplog="${esc(rid)}">📜 ${t("Show failed checks")} →</a>` : ""}</div>`;
@@ -1520,6 +1532,8 @@ class LegoTrackerPanel extends HTMLElement {
       await this.load(); this.toast(t(on ? "{set} is on your watchlist" : "{set} is off your watchlist", { set: b.dataset.cwatch }), "ok");
     }); });
     on("#a_clearpre", "click", () => { s.addPrefill = null; this.renderContent(); });
+    on("[data-shop]", "click", (e) => { if (e.target.closest("button, a")) return; this.openShop(e.currentTarget.dataset.shop); });
+    on("[data-shop]", "keydown", (e) => { if (e.key === "Enter") this.openShop(e.currentTarget.dataset.shop); });
     on("[data-cz]", "click", (e) => { const v = e.currentTarget.dataset.cz; s.cz = { preset: v === "ytd" ? "ytd" : +v, from: null, to: null }; this.renderContent(); });
     for (const id of ["cz_from", "cz_to"]) { const el = $(id); if (el) el.addEventListener("change", () => {
       const a = $("cz_from").value, b = $("cz_to").value; if (!a || !b) return;
@@ -1975,9 +1989,39 @@ class LegoTrackerPanel extends HTMLElement {
     box.querySelector("#rp_csv").onclick = (e) => send(false, e.currentTarget);
     box.querySelector("#rp_x").onclick = () => { box.hidden = true; };
   }
+  /** Shops → click a shop: the last requests (what was asked, what came back, why it failed), a diagnosis and
+   * its recent log. Refreshed every 5 s while open. */
+  async openShop(rid) {
+    const dlg = this.shadowRoot.getElementById("dlg");
+    clearInterval(this._shopTimer);
+    let d; try { d = await this._hass.callWS({ type: "lego_tracker/shop/detail", retailer: rid }); } catch (e) { this.toast(tx(e.message), "err"); return; }
+    const scroll = dlg.open ? dlg.scrollTop : 0, r = d.stats || {};
+    const at = (ts) => (ts ? `${DATE(ts, { day: "numeric", month: "short" })} ${TIME(ts)}` : "–");
+    const secs = (x) => (x > 0 ? t("in {s} s", { s: Math.ceil(x) }) : t("now"));
+    const kind = { page: t("price page"), search: t("search") };
+    const trace = d.trace.length ? `<div class="tscroll"><table class="tbl"><tr><th>${t("When")}</th><th>${t("What")}</th><th>HTTP</th><th>${t("Size")}</th><th>${t("Result")}</th></tr>${d.trace.map((x) => `<tr><td style="white-space:nowrap">${at(x.ts)}<div class="muted" style="font-size:11px">${x.ms} ms</div></td>
+        <td>${esc(kind[x.kind] || x.kind)}${x.set_number ? ` <b>${esc(x.set_number)}</b>` : ""}<div style="font-size:11px;word-break:break-all"><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url.replace(/^https?:\/\/(www\.)?/, "").slice(0, 90))}</a></div></td>
+        <td class="num ${x.status >= 400 || !x.status ? "err" : ""}">${x.status ?? "–"}</td><td class="num">${x.size ? `${Math.round(x.size / 1024)} kB` : "–"}</td>
+        <td class="${x.error ? "err" : "ok"}" style="font-size:12px">${esc(tx(x.error || x.result || "OK"))}</td></tr>`).join("")}</table></div>` : `<p class="muted">${t("No requests to this shop since the last restart of Home Assistant.")}</p>`;
+    const log = d.log.length ? `<ul class="tl">${d.log.slice(0, 25).map((e) => { const res = (e.results || {})[rid]; return `<li ${e.set_number ? `data-set="${esc(e.set_number)}"` : ""}><span class="ic">${{ ok: "✅", error: "❌", warning: "⚠️" }[e.level] || "•"}</span><div><b>${esc(e.set_number || "")}</b> ${esc(tx(e.message))}${res ? `<div class="${res.ok === false ? "err" : "muted"}" style="font-size:12px">${res.price != null ? EUR(res.price) : ""}${res.error ? " " + esc(tx(res.error)) : ""}${res.via ? ` · ${t("via {source}", { source: esc(res.via) })}` : ""}</div>` : ""}<div class="t">${at(e.ts)}</div></div></li>`; }).join("")}</ul>` : `<p class="muted">${t("Nothing in the logbook for this shop yet.")}</p>`;
+    const kv = (k, v) => `<div class="stat"><small>${k}</small><b>${v}</b></div>`;
+    dlg.innerHTML = `<div class="dhead" style="grid-template-columns:1fr auto"><div><h2>🏪 ${esc(d.label)}</h2><div class="muted">${esc(d.site)} · ${d.enabled ? t("active") : t("switched off")}${d.paused_until ? ` · ⏸ ${t("paused until {time}", { time: at(d.paused_until) })}` : ""}</div>
+        <div class="muted" style="font-size:12px;margin-top:4px">🔄 ${t("Updates every 5 seconds")} · ${t("updated {time}", { time: TIME(d.now) })}</div></div><div><button class="x" id="x" aria-label="${t("Close")}">✕</button></div></div>
+      <div class="dbody">${d.hints.length ? `<div class="panel" style="background:var(--lt-soft)"><h3 style="margin-top:0">🩺 ${t("Diagnosis")}</h3><ul style="margin:0;padding-left:18px">${d.hints.map((h) => `<li>${esc(tx(h))}</li>`).join("")}</ul></div>` : ""}
+        <div class="pstats">${kv(t("Links"), r.offers ?? 0)}${kv(t("With a price"), r.ok ?? 0)}${kv(t("Errors"), r.errors ?? 0)}${kv(t("Cheapest for"), t("{n} sets", { n: r.cheapest ?? 0 }))}${kv(t("Last success"), ago(r.last_ok))}${kv(t("Blocks in a row"), d.blocks)}${kv(t("Last request"), at(d.last_request))}${kv(t("Next request possible"), secs(d.next_free))}${kv(t("Next search possible"), secs(d.next_search))}</div>
+        ${d.search ? `<p class="muted" style="font-size:12px;margin:10px 0 0">${t("Search URL")}: <code style="word-break:break-all">${esc(d.search)}</code></p>` : ""}
+        <h3>📡 ${t("Last requests")}</h3>${trace}
+        <h3>📜 ${t("Logbook")}</h3>${log}</div>`;
+    if (!dlg.open) dlg.showModal();
+    dlg.scrollTop = scroll;
+    dlg.querySelector("#x").onclick = () => { clearInterval(this._shopTimer); this.closeDialog(); };
+    dlg.querySelectorAll("[data-set]").forEach((el) => el.onclick = () => { clearInterval(this._shopTimer); this.openSet(el.dataset.set); });
+    this._shopTimer = setInterval(() => { if (!dlg.open || !dlg.querySelector("#x") || !this.isConnected) { clearInterval(this._shopTimer); return; } this.openShop(rid); }, 5000);
+  }
   // ---------------------------------------------------------------- set dialog
-  closeDialog(instant = false) { const d = this.shadowRoot.getElementById("dlg"); if (!d || !d.open) return; if (instant || REDUCED) { d.close(); return; } d.classList.add("closing"); setTimeout(() => { d.classList.remove("closing"); d.close(); }, 170); }
+  closeDialog(instant = false) { clearInterval(this._shopTimer); const d = this.shadowRoot.getElementById("dlg"); if (!d || !d.open) return; if (instant || REDUCED) { d.close(); return; } d.classList.add("closing"); setTimeout(() => { d.classList.remove("closing"); d.close(); }, 170); }
   async openSet(num, focusShop = null) {
+    clearInterval(this._shopTimer);
     const dlg = this.shadowRoot.getElementById("dlg");
     if (!dlg.open) { dlg.innerHTML = `<div class="dbody"><div class="skel" style="height:110px;margin-bottom:12px"></div><div class="skel" style="height:240px"></div></div>`; dlg.showModal(); }
     let s; try { s = await this._hass.callWS({ type: "lego_tracker/set", set_number: num }); } catch (e) { dlg.innerHTML = `<div class="dbody"><div class="empty">${esc(tx(e.message))}</div><br><button class="btn" id="x2">${t("Close")}</button></div>`; dlg.querySelector("#x2").onclick = () => this.closeDialog(); return; }
