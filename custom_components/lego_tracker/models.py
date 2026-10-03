@@ -515,6 +515,7 @@ def query_activity(store: dict[str, Any], *, level: str = "", kind: str = "", re
     num = normalize_set_number(set_number) if set_number.strip() else ""
 
     def ok(e: dict[str, Any]) -> bool:
+        """Return whether an activity entry matches the requested filters and time boundary."""
         if level == "problems" and e["level"] not in ("error", "warning"):
             return False
         if level == "events" and e["level"] not in ("info", "ok"):

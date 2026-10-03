@@ -51,6 +51,7 @@ def _compare_status(coord) -> dict[str, Any] | None:
 
 
 def _card(coord, num: str, with_history: bool = False) -> dict[str, Any]:
+    """Build a panel set card with offers and optional price history and comparison data."""
     s = coord.store["sets"][num]
     st = (coord.data or coord.compute())["statuses"].get(num, {})
     offers = coord.store["offers"].get(num, {})
@@ -88,6 +89,7 @@ def _card(coord, num: str, with_history: bool = False) -> dict[str, Any]:
 
 @callback
 def async_register_websocket(hass: HomeAssistant) -> None:
+    """Register panel websocket commands and the userscript and relay HTTP views."""
     websocket_api.async_register_command(hass, ws_overview)
     websocket_api.async_register_command(hass, ws_set_detail)
     websocket_api.async_register_command(hass, ws_collection)
@@ -125,6 +127,7 @@ def async_register_websocket(hass: HomeAssistant) -> None:
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/overview"})
 @callback
 def ws_overview(hass, connection, msg):
+    """Send panel overview data, or a not-loaded error when no coordinator is available."""
     coord = _coord(hass)
     if coord is None:
         connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")

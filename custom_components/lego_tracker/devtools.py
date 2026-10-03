@@ -110,6 +110,7 @@ def outliers(coord: Any, apply: bool = False) -> list[dict[str, Any]]:
 
 
 def set_debug(on: bool) -> bool:
+    """Set the integration log level to DEBUG or INFO and return the requested toggle."""
     logging.getLogger(__package__).setLevel(logging.DEBUG if on else logging.INFO)
     return on
 

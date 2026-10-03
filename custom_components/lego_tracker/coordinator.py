@@ -98,6 +98,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return resolve(self.opt(self.entry, CONF_LANGUAGE, DEFAULT_LANGUAGE), self.hass.config.language)
 
     async def async_load(self) -> None:
+        """Load and migrate stored data, initialize the fetcher, and restore cooldowns."""
         await self.hass.async_add_executor_job(catalog.load)
         set_language(self.language)
         set_custom_words(self.opt(self.entry, CONF_BLOCK_WORDS, []), self.opt(self.entry, CONF_ALLOW_WORDS, []))
@@ -226,6 +227,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def deal_filter(self) -> dict[str, Any]:
+        """Return deal filter defaults merged with the configured overrides."""
         return {**DEAL_FILTER_DEFAULT, **(self.opt(self.entry, CONF_DEAL_FILTER, None) or {})}
 
     def deal_blocked(self, num: str, status: dict[str, Any] | None = None) -> str | None:
@@ -606,6 +608,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def ticker(self) -> dict[str, Any]:
+        """Return ticker defaults merged with the configured overrides."""
         return {**TICKER_DEFAULT, **(self.opt(self.entry, CONF_TICKER, None) or {})}
 
     async def ticker_data(self, lang: str) -> dict[str, Any]:
@@ -651,6 +654,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
         st = self._cstore(src)
         def age(n: str) -> float:
+            """Return seconds since the last check, or -1 while a failed lookup is deferred."""
             e = st.get(n) or {}
             if e.get("status") in ("missing", "unreadable") and now - e.get("ts", 0) < COMPARE_MISSING_HOURS * 3600:
                 return -1
@@ -663,6 +667,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._market_busy = True
 
         async def run() -> None:
+            """Refresh the selected market value and always release the busy flag and publish state."""
             try:
                 await self._compare_one(src, num, False, False, False)
             except Exception:  # noqa: BLE001 - an extra source must never break anything
@@ -680,14 +685,17 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         what the shops ask (or, for a purchase price, the RRP) and the amount / 100 matches it. Anything
         else, e.g. a real €2500, stays as it is."""
         def fits(v: float, ref: float | None) -> bool:
+            """Check whether dividing an outlying amount by 100 brings it near the reference."""
             return bool(ref) and not 0.3 <= v / ref <= 3 and 0.4 <= (v / 100) / ref <= 2.5
 
         def shop_median(num: str) -> float | None:
+            """Return the upper median of available automatic shop prices, or None."""
             prices = sorted(o["last_price"] for o in (self.store["offers"].get(num) or {}).values()
                             if o.get("available") and o.get("last_price") and not o.get("manual_price"))
             return prices[len(prices) // 2] if prices else None
 
         def fix(num: str, rec: dict[str, Any], key: str, ref: float | None) -> None:
+            """Correct and log an amount above 1000 when the reference supports a lost comma."""
             v = rec.get(key)
             if isinstance(v, (int, float)) and v > 1000 and fits(v, ref):
                 rec[key] = round(v / 100, 2)
@@ -1471,6 +1479,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return status
 
     def _relay_page(self, item: dict[str, Any]) -> str | dict[str, Any]:
+        """Process a browser comparison result and return a follow-up page or outcome key."""
         src, url = item.get("source"), str(item.get("url") or "")
         num = normalize_set_number(str(item.get("set_number") or ""))
         if src not in compare.SOURCES or not compare.is_compare_url(url) or num not in self.store["sets"]:
@@ -1638,6 +1647,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     SECRET_KEYS = (CONF_BRICKSET_KEY, CONF_REBRICKABLE_KEY, CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET)
 
     def settings_get(self) -> dict[str, Any]:
+        """Return panel settings and shop state with configured secret values masked."""
         o = {**self.entry.data, **self.entry.options}
         mask = lambda v: f"••••{v[-4:]}" if v and len(v) > 4 else ("••••" if v else "")  # noqa: E731
         shops = []
@@ -2022,6 +2032,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             snaps.append(row)
 
     def _fire_events(self, num: str, before: dict, after: dict) -> None:
+        """Emit eligible deal events once per day and schedule notifications for changed status."""
         s = self.store["sets"][num]
         payload = {"set_number": num, "name": s.get("name"), "theme": s.get("theme"),
                    "price": after.get("best_price"), "retailer": after.get("best_retailer"),
@@ -2243,6 +2254,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
     def retailer_stats(self) -> dict[str, dict[str, Any]]:
+        """Summarize each retailer's offers, errors, cheapest prices, and cooldown."""
         statuses = (self.data or self.compute())["statuses"]
         out: dict[str, dict[str, Any]] = {}
         for rid, (label, _) in RETAILERS.items():

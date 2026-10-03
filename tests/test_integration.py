@@ -1754,6 +1754,7 @@ def test_review_fixes_hosts_sizes_groups_and_lego_urls():
 
 
 async def test_lost_decimal_comma_is_repaired_and_absurd_rrp_ignored(hass: HomeAssistant, entry, no_network):
+    """Verify comma repairs require price evidence and preserve plausible high amounts."""
     from custom_components.lego_tracker.models import is_suspicious_price
 
     # the RRP typed on a phone came in as 16499 (164,99): shops that agree are not rejected because of it
@@ -1778,6 +1779,7 @@ async def test_lost_decimal_comma_is_repaired_and_absurd_rrp_ignored(hass: HomeA
 
 
 async def test_suspicious_price_can_be_approved(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    """Verify approval records a held price, accepts nearby prices, and cannot be repeated."""
     from custom_components.lego_tracker.models import query_activity
 
     c = await _setup(hass, entry)
@@ -1802,6 +1804,7 @@ async def test_suspicious_price_can_be_approved(hass: HomeAssistant, entry, no_n
 
 
 async def test_developer_tools(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    """Verify developer tools report state, preview and remove outliers, reset caches, and parse pages."""
     c = await _setup(hass, entry)
     await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
     c.store["offers"]["10281"]["bol"] = {"url": "https://www.bol.com/nl/nl/p/x-10281/9300000012345678/",
@@ -1810,6 +1813,7 @@ async def test_developer_tools(hass: HomeAssistant, entry, no_network, hass_ws_c
     ws = await hass_ws_client(hass)
 
     async def call(i, **kw):
+        """Send a developer-tool websocket command and return its response."""
         await ws.send_json({"id": i, "type": "lego_tracker/dev/tool", **kw})
         return await ws.receive_json()
 

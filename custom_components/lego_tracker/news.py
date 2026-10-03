@@ -32,6 +32,7 @@ def _safe_link(link: str) -> str:
 
 
 def parse(text: str) -> list[dict[str, Any]]:
+    """Parse titled news blocks, sanitize links, and return up to MAX_ITEMS newest entries."""
     out = []
     for block in re.split(r"^\s*---\s*$", text.replace("\r\n", "\n"), flags=re.M):
         item: dict[str, Any] = {}
@@ -68,12 +69,14 @@ def for_language(items: list[dict[str, Any]], lang: str) -> list[dict[str, Any]]
 
 class NewsFeed:
     def __init__(self, session_getter: Any) -> None:
+        """Initialize an empty news cache with a callable that supplies the HTTP session."""
         self._session = session_getter
         self.items: list[dict[str, Any]] = []
         self.ts = 0.0
         self.error: str | None = None
 
     async def get(self) -> list[dict[str, Any]]:
+        """Refresh expired news; retain cached items on failure and retry after 15 minutes."""
         if time.time() - self.ts < CACHE_SECONDS:
             return self.items
         self.ts = time.time()

@@ -222,6 +222,7 @@ class Notifier:
         return True
 
     def shop_link(self, num: str, status: dict[str, Any]) -> str | None:
+        """Return the selected notification offer's product URL, or None if unavailable."""
         return self.shop_offer(num, status)[2]
 
     def shop_offer(self, num: str, status: dict[str, Any]) -> tuple[float | None, str | None, str | None]:
@@ -242,6 +243,7 @@ class Notifier:
 
     # ---------------------------------------------------------------- events
     async def on_set_change(self, num: str, before: dict[str, Any], after: dict[str, Any]) -> None:
+        """Send enabled, in-scope rule notifications for triggers outside their cooldowns."""
         s = self.store["sets"].get(num, {})
         blocked = self.coord.deal_blocked(num, after)        # left out under Deals → Settings
         for rule in self.rules:
@@ -262,6 +264,7 @@ class Notifier:
                             data={"set_number": num, "triggers": [h[0] for h in hits], "price": price})
 
     async def on_digest(self, digest: dict[str, Any]) -> None:
+        """Send each enabled digest rule the deals allowed by its scope and shop filters."""
         for rule in self.rules:
             if not rule.get("enabled") or "digest" not in rule["triggers"]:
                 continue

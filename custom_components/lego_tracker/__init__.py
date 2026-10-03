@@ -112,6 +112,7 @@ async def _send_digest(hass: HomeAssistant, coord: LegoCoordinator) -> None:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up the coordinator, platforms, panel, services, and scheduled refreshes."""
     apply_shop_options(dict(entry.options))
     # New built-in shops (e.g. Dreamland) are switched on once; afterwards the user's choice wins.
     known = set(entry.options.get(CONF_KNOWN_SHOPS) or ("amazon_nl", "amazon_de", "amazon_be", "bol", "kruidvat_be"))
