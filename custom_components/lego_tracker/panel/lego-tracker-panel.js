@@ -73,7 +73,7 @@ const signPct = (v) => (v == null ? "–" : `${v > 0 ? "+" : ""}${v.toLocaleStri
 const DATE = (ts, o = { day: "2-digit", month: "short" }) => new Date(ts * 1000).toLocaleDateString(LOC, o);
 const TIME = (ts) => new Date(ts * 1000).toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" });
 /** What this panel needs from the server (API_LEVEL in const.py). Different = Home Assistant still runs older code. */
-const API_LEVEL = 3;
+const API_LEVEL = 4;
 const SRC = { kieskeurig: "Kieskeurig", shoparize: "Shoparize", channable: "Channable Shopping", producthero: "Producthero", brickeconomy: "Market value" };
 /** How a price was read, as one letter: ⓤ your own browser (userscript), ⓢ ⓚ ⓒ ⓟ ⓑ a comparison site, ⌂ the shop's own site. */
 const VIA_MARK = { relay: "ⓤ", userscript: "ⓤ", shoparize: "ⓢ", kieskeurig: "ⓚ", channable: "ⓒ", producthero: "ⓟ", brickeconomy: "ⓜ" };
@@ -388,7 +388,7 @@ fieldset{border:1px solid var(--lt-line);border-radius:14px;padding:12px 14px 4p
 // ------------------------------------------------------------------ component
 // labels are English source strings, translated with t() when rendered
 const SECTIONS = {
-  deals: { label: "🏷️ Deals & watchlist", hint: "sets you keep an eye on", subs: [["today", "Today"], ["watch", "Watchlist"], ["all", "All prices"], ["dset", "Settings"]] },
+  deals: { label: "🏷️ Deals & watchlist", hint: "sets you keep an eye on", subs: [["today", "Today"], ["watch", "Watchlist"], ["all", "All prices"], ["new", "New sets"], ["dset", "Settings"]] },
   collection: { label: "📦 My collection", hint: "what you own", subs: [["overview", "Overview"], ["sets", "Sets"]] },
   log: { label: "📜 Logbook", hint: "checks, prices, errors", subs: [["all", "Everything"], ["checks", "Shop checks"], ["errors", "Open errors"]] },
   manage: { label: "⚙️ Manage", hint: "add, import, shops, settings", subs: [["add", "Add"], ["import", "Import"], ["links", "Link check"], ["notify", "Notifications"], ["shops", "Shops & jobs"], ["settings", "Settings"], ["userscript", "Userscript"], ["backup", "Backup"]] },
@@ -749,6 +749,7 @@ class LegoTrackerPanel extends HTMLElement {
     let n = 0;
     if (sec === "deals" && sub === "today") n = d.sets.filter((s) => s.watched && this.isDeal(s)).length;
     if (sec === "deals" && sub === "watch") n = d.sets.filter((s) => s.watched).length;
+    if (sec === "deals" && sub === "new") n = d.new_sets_week || 0;
     if (sec === "manage" && sub === "shops") n = Object.keys(d.paused || {}).length;
     if (sec === "log" && sub === "errors") n = this.errorRows().length;
     if (sec === "manage" && sub === "links") n = d.sets.reduce((a, s) => a + (s.offers_suspect || 0), 0);
@@ -765,7 +766,7 @@ class LegoTrackerPanel extends HTMLElement {
     const s = this.state, el = this.shadowRoot.getElementById("content"); if (!el) return;
     if (s.err) { el.innerHTML = `<div class="empty"><span class="big">⚠️</span>${t("Could not load data: {error}", { error: esc(s.err) })}<br><br><button class="btn" id="retry">${t("Try again")}</button></div>`; el.querySelector("#retry").onclick = () => this.load(true); return; }
     if (!s.data) { el.innerHTML = `<div class="kpis">${"<div class='skel' style='height:86px'></div>".repeat(4)}</div><div class="grid">${"<div class='skel' style='height:260px'></div>".repeat(8)}</div>`; return; }
-    const view = { deals: { today: this.vToday, watch: this.vWatch, all: this.vAll, dset: this.vDealSettings }, collection: { overview: this.vCollOverview, sets: this.vCollSets }, log: { all: this.vLog, checks: this.vLog, errors: this.vErrors }, manage: { notify: this.vNotify, add: this.vAdd, import: this.vImport, links: this.vLinks, shops: this.vShops, settings: this.vSettings, userscript: this.vUserscript, backup: this.vBackup, secret: this.vSecret } }[s.section][s.sub[s.section]];
+    const view = { deals: { today: this.vToday, watch: this.vWatch, all: this.vAll, new: this.vNewSets, dset: this.vDealSettings }, collection: { overview: this.vCollOverview, sets: this.vCollSets }, log: { all: this.vLog, checks: this.vLog, errors: this.vErrors }, manage: { notify: this.vNotify, add: this.vAdd, import: this.vImport, links: this.vLinks, shops: this.vShops, settings: this.vSettings, userscript: this.vUserscript, backup: this.vBackup, secret: this.vSecret } }[s.section][s.sub[s.section]];
     el.className = animate && !REDUCED ? "enter" : "";
     el.innerHTML = view.call(this);
     this.bindContent(el);
@@ -927,6 +928,45 @@ class LegoTrackerPanel extends HTMLElement {
   rWatch() { const l = this.sorted(this.filtered(this.sets.filter((s) => s.watched)), this.state.f.sort); return l.length ? this.gridOf(l, undefined, "watch") : `<div class="grid">${this.addTile("watch")}</div>` + this.emptyState("🔍", t("Nothing found with these filters.")); }
   vAll() {
     return `${this.banner()}${this.filterBar({ list: this.sets, threshold: true, retire: true, sorts: [["score", "Deal score"], ["discount", "Highest discount"], ["price", "Lowest price"], ["ppp", "Price per piece"], ["drop", "Biggest drop"], ["deal_new", "Latest deal notification"], ["name", "Name"], ["number", "Set number"]] })}<div id="results" data-fn="rAll">${this.rAll()}</div>`;
+  }
+  /** Deals → New sets: sets that appeared in the LEGO set database (downloaded once a day). */
+  vNewSets() {
+    const N = this.state.newsets;
+    if (!N || Date.now() - N.at > 300000) {
+      this._hass.callWS({ type: "lego_tracker/new_sets" }).then((r) => { this.state.newsets = { ...r, at: Date.now() }; if (this.state.section === "deals" && this.state.sub.deals === "new") this.renderContent(); })
+        .catch((e) => { this.state.newsets = { items: [], error: e.message, at: Date.now() }; });
+      if (!N) return `<div class="skel" style="height:300px"></div>`;
+    }
+    const q = (this.state.nsq || "").toLowerCase(), th = this.state.nsth || "";
+    const items = N.items.filter((x) => (!th || x.theme === th) && (!q || `${x.set_number} ${x.name} ${x.theme} ${x.subtheme || ""}`.toLowerCase().includes(q)));
+    const themes = [...new Set(N.items.map((x) => x.theme).filter(Boolean))].sort();
+    const when = (ts) => DATE(ts, { day: "numeric", month: "short", year: "numeric" });
+    const info = N.count ? t("LEGO set database: {n} sets, updated {when}", { n: N.count.toLocaleString(LOC), when: ago(N.updated) })
+      : N.busy ? t("The LEGO set database is being downloaded…") : t("The LEGO set database is downloaded within 10 minutes after Home Assistant starts, then once a day.");
+    const card = (x) => {
+      const btns = `<div class="cbtns">${x.watched ? "" : `<button class="cbtn" data-stop data-nswatch="${esc(x.set_number)}" title="${esc(t("Add to watchlist"))}" aria-label="${esc(t("Add to watchlist"))}">W</button>`}${x.owned ? "" : `<button class="cbtn" data-stop data-nsown="${esc(x.set_number)}" title="${esc(t("Add to my collection"))}" aria-label="${esc(t("Add to my collection"))}">＋</button>`}</div>`;
+      return `<div class="card${x.tracked ? " click" : ""}" ${x.tracked ? `data-set="${esc(x.set_number)}"` : ""}><div class="img">${this.img(x)}${btns}</div>
+        <div class="n">${esc(x.name || x.set_number)}</div><div class="m">${esc(x.set_number)}${x.theme ? " · " + esc(x.theme) : ""}${x.subtheme ? " · " + esc(x.subtheme) : ""}</div>
+        <div class="m">${x.year ? esc(x.year) + " · " : ""}${x.pieces ? t("{n} pieces", { n: x.pieces }) : ""}</div>
+        <div class="m muted">${t("new since {date}", { date: when(x.first_seen) })}${x.owned ? " · 📦 " + t("owned") : x.watched ? " · 👁 " + t("on your watchlist") : ""}</div></div>`;
+    };
+    return `<div class="panel"><p style="margin:0">${t("New LEGO sets, newest first. Add one to your watchlist (W) or your collection (＋) to follow its prices. Themes and piece limits switched off under Deals → Settings are left out.")}</p>
+        <p class="muted" style="font-size:12px;margin:6px 0 0">${esc(info)}${N.error ? ` · <span class="warn">${esc(tx(N.error))}</span>` : ""}</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><input id="ns_q" placeholder="${t("Search a set")}" value="${esc(this.state.nsq || "")}" style="max-width:240px">
+          <select id="ns_th"><option value="">${t("All themes")}</option>${themes.map((x) => `<option ${x === th ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></div></div>
+      ${items.length ? `<div class="grid">${items.map(card).join("")}</div>` : this.emptyState("🆕", t("No new sets yet."))}`;
+  }
+  bindNewSets(root, $) {
+    const qi = $("ns_q"); if (qi) qi.oninput = () => { this.state.nsq = qi.value; clearTimeout(this._nsT); this._nsT = setTimeout(() => { this.renderContent(); const n = this.shadowRoot.getElementById("ns_q"); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }, 250); };
+    const ts = $("ns_th"); if (ts) ts.onchange = () => { this.state.nsth = ts.value; this.renderContent(); };
+    const find = (n) => (this.state.newsets.items || []).find((x) => x.set_number === n);
+    root.querySelectorAll("[data-nswatch]").forEach((b) => b.onclick = (e) => { e.stopPropagation(); this.busy(b, "", async () => {
+      const n = b.dataset.nswatch;
+      if (this.sets.find((x) => x.set_number === n)) await this._hass.callWS({ type: "lego_tracker/update_set", set_number: n, fields: { watch: true } });
+      else await this.svc("add_set", { set_number: n });
+      this.state.newsets = null; await this.load(); this.toast(t("{set} is on your watchlist", { set: n }), "ok");
+    }); });
+    root.querySelectorAll("[data-nsown]").forEach((b) => b.onclick = (e) => { e.stopPropagation(); this.goAdd("own", find(b.dataset.nsown)); });
   }
   /** Deals → Settings: what counts as a deal, and which themes / prices / sets are left out (also of notifications). */
   vDealSettings() {
@@ -1115,6 +1155,8 @@ class LegoTrackerPanel extends HTMLElement {
     return `<div class="panel"><h3>＋ ${t("Add a set")}</h3>${preBox}
       <div class="radio"><label class="${m === "watch" ? "on" : ""}"><input type="radio" name="mode" value="watch" ${m === "watch" ? "checked" : ""}><b>👀 ${t("Keep an eye on it")}</b><span>${t("Track prices and get notified of a deal")}</span></label>
       <label class="${m === "own" ? "on" : ""}"><input type="radio" name="mode" value="own" ${m === "own" ? "checked" : ""}><b>📦 ${t("Add to my collection")}</b><span>${t("I already own this set")}</span></label></div>
+      <div style="margin:0 0 12px"><label style="display:block;font-size:13px">🔎 ${t("Search the LEGO set database (name or number)")}<input id="a_find" autocomplete="off" placeholder="${t("e.g. {example}", { example: "Millennium Falcon" })}" style="width:100%;max-width:420px;margin-top:4px"></label>
+        <div id="a_found" class="tlx" style="margin-top:6px"></div></div>
       <div class="form"><label>${t("Set number")} *<input id="a_num" inputmode="numeric" placeholder="${t("e.g. {example}", { example: "10281" })}" autocomplete="off" value="${esc(pre ? pre.num : "")}"><div class="hint" id="a_hint"></div></label><label>${t("Name")}<input id="a_name" placeholder="${t("optional, filled in automatically")}"></label>
       <label>${t("Theme")}<input id="a_theme" list="themes" placeholder="Botanicals, Technic, Icons…"></label><label>${t("Subtheme")}<input id="a_sub"></label><label>${t("RRP")} (€)<input id="a_rrp" type="text" inputmode="decimal" autocomplete="off" data-money></label><label>${t("Pieces")}<input id="a_pcs" type="number" min="0"></label></div>
       ${m === "watch" ? `<div class="form"><label>${t("Target price (€) – notify when the price drops below it")}<input id="a_target" type="text" inputmode="decimal" autocomplete="off" data-money></label><label>${t("Priority")}<select id="a_prio"><option value="0">–</option><option value="1">★</option><option value="2">★★</option><option value="3">★★★</option></select></label></div>`
@@ -1757,6 +1799,24 @@ class LegoTrackerPanel extends HTMLElement {
     const thr = $("thr"); if (thr) { thr.addEventListener("input", (e) => { const v = $("thrv"); if (v) v.textContent = e.target.value + "%"; }); thr.addEventListener("change", (e) => { s.threshold = +e.target.value; this.render(); }); }
     // add
     on("input[name=mode]", "change", (e) => { s.addMode = e.target.value; this.renderContent(); });
+    const fi = $("a_find"); if (fi) fi.addEventListener("input", () => {
+      clearTimeout(this._afT);
+      this._afT = setTimeout(async () => {
+        const out = $("a_found"), q = fi.value.trim(); if (!out) return;
+        if (q.length < 2) { out.innerHTML = ""; return; }
+        let r; try { r = await this._hass.callWS({ type: "lego_tracker/setdb/search", q, limit: 12 }); } catch (e) { out.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+        this._afItems = r.items;
+        out.innerHTML = !r.count ? `<p class="muted" style="font-size:12px">${t("The LEGO set database is not downloaded yet (within 10 minutes after Home Assistant starts).")}</p>`
+          : !r.items.length ? `<p class="muted" style="font-size:12px">${t("Nothing found.")}</p>`
+          : `<ul style="list-style:none;padding:0;margin:0">${r.items.map((x, i) => `<li class="tlr click" data-afi="${i}" style="cursor:pointer;padding:4px 0"><div class="tthumb">${this.img(x)}</div><div class="tbody"><b>${esc(x.set_number)} ${esc(x.name)}</b><div class="t">${[x.theme, x.subtheme, x.year, x.pieces ? t("{n} pieces", { n: x.pieces }) : ""].filter(Boolean).map(esc).join(" · ")}${x.owned ? " · 📦 " + t("owned") : x.tracked ? " · " + t("Already tracked") : ""}</div></div></li>`).join("")}</ul>`;
+        out.querySelectorAll("[data-afi]").forEach((li) => li.onclick = () => {
+          const x = this._afItems[+li.dataset.afi]; if (!x) return;
+          const set = (id, v) => { const el = $(id); if (el && v != null && v !== "") el.value = v; };
+          set("a_num", x.set_number); set("a_name", x.name); set("a_theme", x.theme); set("a_sub", x.subtheme); set("a_pcs", x.pieces);
+          $("a_num").dispatchEvent(new Event("input")); out.innerHTML = ""; fi.value = "";
+        });
+      }, 250);
+    });
     const num = $("a_num"); if (num) num.addEventListener("input", () => {
       const n = (num.value.match(/\d{3,7}/) || [""])[0], hint = $("a_hint"), ex = this.sets.find((x) => x.set_number === n);
       hint.innerHTML = !num.value ? "" : !n ? `<span class="err">${t("A set number has 3–7 digits")}</span>` : ex ? `<span style="color:#9a6a00">${t(ex.owned ? "Already tracked and in your collection" : "Already tracked")}: ${esc(ex.name || "")} – ${t("its data will be updated")}</span>` : `<span class="ok">✓ ${t("new")}</span>`;
@@ -1796,6 +1856,7 @@ class LegoTrackerPanel extends HTMLElement {
     if ($("x_cmp")) this.bindCompare(root, $);
     if ($("o_save")) this.bindSettings(root, $);
     if ($("df_save")) this.bindDealSettings(root, $);
+    if ($("ns_q")) this.bindNewSets(root, $);
     if ($("e_scope")) this.bindErrors(root, $);
     if ($("lg_reload")) this.bindLog(root, $);
     if (root.querySelector("[data-nf]")) this.bindNotify(root, $);

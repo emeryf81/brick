@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable
 from datetime import date, timedelta
 from typing import Any
 
+import aiohttp
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -34,7 +35,7 @@ from .models import (
 from .i18n import DEFAULT_LANGUAGE, LANGUAGES, LocalizedError, T, resolve, set_language
 from .notifications import Notifier, default_rules
 from .bol_api import BolApi, BolApiError
-from . import catalog, sitemaps, compare
+from . import catalog, sitemaps, compare, setdb
 from .shops import all_domains, domain_of
 from .parsers import Parsed, title_check
 from .shops import SEARCH, valid_search
@@ -51,6 +52,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         super().__init__(hass, _LOGGER, name=DOMAIN, config_entry=entry, update_interval=None)
         self.entry = entry
         self._store = Store[dict[str, Any]](hass, STORAGE_VERSION, STORAGE_KEY)
+        # the LEGO set database (every set there is), in its own file: it is large and changes once a day
+        self._setdb_store = Store[dict[str, Any]](hass, 1, f"{STORAGE_KEY}.setdb")
+        self.setdb: dict[str, list[Any]] = {}
+        self.setdb_info: dict[str, Any] = {"ts": 0, "count": 0, "error": None, "busy": False}
         self.store: dict[str, Any] = new_store()
         self.fetcher = Fetcher(hass, bool(self.opt(entry, CONF_IMPERSONATE, True)))
         self.fetcher.no_autopause = set(self.opt(entry, CONF_NO_AUTOPAUSE, []) or [])
@@ -105,6 +110,9 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self.fetcher.async_setup()
         if (data := await self._store.async_load()):
             self.store = {**new_store(), **data}
+        if (db := await self._setdb_store.async_load()):
+            self.setdb = db.get("sets") or {}
+            self.setdb_info.update(ts=db.get("ts", 0), count=len(self.setdb))
         self._drop_old_source_links()
         self._fix_lost_commas()
         self._rename_market_source()
@@ -2105,6 +2113,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if owned is None and s.get("watch") is False:
             s.pop("watch")                                    # added to the watchlist again
         known = catalog.apply(num, s, self.store["offers"].setdefault(num, {}))   # built-in catalogue first
+        self._fill_from_setdb(num, s)                                              # then the LEGO set database
         if known and catalog.complete(s):
             meta, source = {}, "LEGO.com"                     # nothing to look up online
             self.log("info", "enrich", T("set data from the built-in catalogue"), set_number=num, source="catalog")
@@ -2130,6 +2139,104 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self.discover_set(num)
         self.push_update()
         return num
+
+    def _fill_from_setdb(self, num: str, s: dict[str, Any]) -> bool:
+        """Empty fields of a set from the LEGO set database (no network). Values already there win."""
+        row = self.setdb.get(num)
+        if not row:
+            return False
+        known = setdb.as_set(num, row)
+        changed = False
+        if known["name"] and not s.get("name"):
+            s["name"], s["name_source"] = known["name"], setdb.SOURCE
+            changed = True
+        for key in ("theme", "subtheme", "year", "pieces", "image"):
+            if known[key] and not s.get(key):
+                s[key] = known[key]
+                if key in self.SOURCE_KEYS:
+                    s[self.SOURCE_KEYS[key]] = setdb.SOURCE
+                changed = True
+        return changed
+
+    # ------------------------------------------------------------ the LEGO set database + new sets
+    @callback
+    def setdb_tick(self, _now: Any = None) -> None:
+        """Every few hours: when the set database is a day old, download it again (in the background)."""
+        if self.setdb_info["busy"] or time.time() - self.setdb_info["ts"] < setdb.REFRESH_HOURS * 3600:
+            return
+        self.setdb_info["busy"] = True
+        self.entry.async_create_background_task(self.hass, self.refresh_setdb(), f"{DOMAIN}_setdb")
+
+    async def _download(self, url: str) -> bytes:
+        session = async_get_clientsession(self.hass)
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=120)) as resp:
+            if resp.status != 200:
+                raise ValueError(f"HTTP {resp.status}")
+            data = bytearray()
+            async for chunk in resp.content.iter_chunked(65536):
+                data += chunk
+                if len(data) > setdb.MAX_BYTES:
+                    raise ValueError("set list too large")
+            return bytes(data)
+
+    async def refresh_setdb(self) -> list[str]:
+        """Download every LEGO set, store it, and remember the sets that are new since last time."""
+        self.setdb_info["busy"] = True
+        try:
+            sets_gz, themes_gz = await self._download(setdb.SETS_URL), await self._download(setdb.THEMES_URL)
+            new = await self.hass.async_add_executor_job(setdb.parse, sets_gz, themes_gz)
+            if len(new) < 1000:
+                raise ValueError(f"only {len(new)} sets in the download")
+        except Exception as err:  # noqa: BLE001 - the set database is optional
+            self.setdb_info.update(error=str(err)[:150], ts=time.time() - setdb.REFRESH_HOURS * 3600 + 3 * 3600)  # retry in 3 h
+            self.log("warning", "meta", T("set database could not be updated: {error}", error=str(err)[:150]), source=setdb.SOURCE)
+            return []
+        finally:
+            self.setdb_info["busy"] = False
+        first = not self.setdb
+        found = setdb.find_new(self.setdb, new, first=first)
+        now = time.time()
+        seen = self.store.setdefault("new_sets", {})
+        fresh = [n for n in found if n not in seen]
+        for n in fresh:
+            seen[n] = now
+        self.store["new_sets"] = setdb.prune_new(seen, now)
+        self.setdb = new
+        self.setdb_info.update(ts=now, count=len(new), error=None)
+        await self._setdb_store.async_save({"ts": now, "sets": new})
+        self.log("ok", "meta", T("set database updated: {n} sets, {new} new", n=len(new), new=len(fresh)), source=setdb.SOURCE)
+        if fresh and not first:                  # the first download only fills the list, it doesn't notify
+            await self.notifier.on_new_sets([n for n in fresh if not self.deal_blocked_theme(n)])
+        self.push_update()
+        return fresh
+
+    def deal_blocked_theme(self, num: str) -> bool:
+        """A set in a theme switched off under Deals → Settings (also for sets that are not tracked)."""
+        from .themes import key as theme_key
+
+        off = {theme_key(x) for x in self.deal_filter["themes_off"]}
+        row = self.setdb.get(num)
+        theme = (self.store["sets"].get(num) or {}).get("theme") or (row[setdb.THEME] if row else "")
+        return bool(theme) and theme_key(theme) in off
+
+    def new_sets(self, limit: int = 300) -> dict[str, Any]:
+        """Deals → New sets: sets that appeared in the set database, newest first, without the themes and
+        piece limits switched off under Deals → Settings."""
+        f = self.deal_filter
+        items = []
+        for num, ts in sorted(self.store.get("new_sets", {}).items(), key=lambda x: -x[1]):
+            row = self.setdb.get(num)
+            if not row or self.deal_blocked_theme(num):
+                continue
+            if (f["min_pieces"] is not None and row[setdb.PIECES] < f["min_pieces"]) or \
+                    (f["max_pieces"] is not None and row[setdb.PIECES] > f["max_pieces"]):
+                continue
+            items.append({**setdb.as_set(num, row), "first_seen": ts, "tracked": num in self.store["sets"],
+                          "owned": num in self.store["collection"], "watched": num in self.store["sets"] and self.is_watched(num)})
+            if len(items) >= limit:
+                break
+        return {"items": items, "updated": self.setdb_info["ts"], "count": self.setdb_info["count"],
+                "error": self.setdb_info["error"], "busy": self.setdb_info["busy"]}
 
     def remove_set(self, set_number: str) -> None:
         num = normalize_set_number(set_number)

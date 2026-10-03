@@ -6,7 +6,7 @@ STORAGE_KEY = f"{DOMAIN}.data"
 STORAGE_VERSION = 1
 
 PANEL_URL = "lego-tracker"
-API_LEVEL = 3          # raise together with API_LEVEL in the panel when the panel needs new server commands
+API_LEVEL = 4          # raise together with API_LEVEL in the panel when the panel needs new server commands
 PANEL_ELEMENT = "lego-tracker-panel"
 STATIC_URL = f"/{DOMAIN}_static"
 

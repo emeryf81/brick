@@ -2117,3 +2117,79 @@ async def test_backup_from_before_0919_gets_the_new_market_label(hass: HomeAssis
         del c.store["sets"]["10281"]
     c.import_backup(data, merge)
     assert c.store["sets"]["10281"]["exit_date_source"] == "Market value"
+
+
+def _gz(text: str) -> bytes:
+    import gzip as _g
+    return _g.compress(text.encode())
+
+
+SETS_CSV = ("set_num,name,year,theme_id,num_parts,img_url\n"
+            "10281-1,Bonsai Tree,2021,2,878,https://cdn.rebrickable.com/media/sets/10281-1.jpg\n"
+            "10281-2,Bonsai Tree (second edition),2022,2,878,\n"
+            "75192-1,Millennium Falcon,2017,3,7541,https://cdn.rebrickable.com/media/sets/75192-1.jpg\n"
+            "5007-1,Book,2015,4,0,\n"
+            "fig-0001-1,Minifig,2020,3,4,\n")
+THEMES_CSV = "id,name,parent_id\n1,Icons,\n2,Botanical Collection,1\n3,Star Wars,\n4,Books,\n"
+
+
+def test_setdb_parse_search_and_new():
+    from custom_components.lego_tracker import setdb
+
+    db = setdb.parse(_gz(SETS_CSV), _gz(THEMES_CSV))
+    assert set(db) == {"10281", "75192"}                                   # first version, numbered, with pieces
+    assert db["10281"][:5] == ["Bonsai Tree", 2021, "Icons", "Botanical Collection", 878]
+    assert setdb.search(db, "falcon") == ["75192"] and setdb.search(db, "102") == ["10281"]
+    assert setdb.find_new(db, {**db, "10368": ["Chrysanthemum", 2024, "Icons", "", 278, ""]}, first=False) == ["10368"]
+
+
+async def test_setdb_refresh_new_sets_and_add(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    from datetime import date as _date
+
+    c = await _setup(hass, entry)
+    year = _date.today().year
+    first = SETS_CSV + "".join(f"{60000 + i}-1,City set {i},{year},5,{100 + i},\n" for i in range(1000))
+    themes = THEMES_CSV + "5,City,\n"
+    files = {"sets": _gz(first), "themes": _gz(themes)}
+    c._download = AsyncMock(side_effect=lambda url: files["sets" if "sets.csv" in url else "themes"])
+    sent = []
+    c.notifier.on_new_sets = AsyncMock(side_effect=lambda nums: sent.append(nums))
+    fresh = await c.refresh_setdb()
+    assert len(fresh) == 1000 and not sent                                  # first download: this year's sets, no notification
+    files["sets"] = _gz(first + f"76300-1,New Batman set,{year},6,500,\n42200-1,Technic car,{year},7,900,\n")
+    files["themes"] = _gz(themes + "6,Batman,\n7,Technic,\n")
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "deal_filter": {"themes_off": ["Technic"]}})
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][entry.entry_id]
+    c._download = AsyncMock(side_effect=lambda url: files["sets" if "sets.csv" in url else "themes"])
+    c.notifier.on_new_sets = AsyncMock(side_effect=lambda nums: sent.append(nums))
+    fresh = await c.refresh_setdb()
+    assert sorted(fresh) == ["42200", "76300"] and sent == [["76300"]]     # Technic switched off: no notification
+    items = c.new_sets()["items"]
+    assert items[0]["set_number"] in ("76300", "42200") and "42200" not in [x["set_number"] for x in items]
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/setdb/search", "q": "batman"})
+    r = (await ws.receive_json())["result"]
+    assert r["items"][0]["set_number"] == "76300" and r["count"] == len(c.setdb)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "76300"}, blocking=True)
+    s = c.store["sets"]["76300"]
+    assert s["name"] == "New Batman set" and s["theme"] == "Batman" and s["pieces"] == 500 and s["name_source"] == "Rebrickable"
+    # stored in its own file and read back on start
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert "76300" in hass.data[DOMAIN][entry.entry_id].setdb
+
+
+async def test_new_set_notification_rule(hass: HomeAssistant, entry, no_network):
+    c = await _setup(hass, entry)
+    c.setdb = {"76300": ["New Batman set", 2026, "Batman", "", 500, ""], "10400": ["Icons thing", 2026, "Icons", "", 900, ""]}
+    sent = []
+
+    async def fake_send(rule, title, message, **kw):
+        sent.append((rule["id"], title, message))
+    c.notifier.send = fake_send
+    c.notifier.rules[:] = [{"id": "a", "enabled": True, "scope": {"type": "all"}, "triggers": ["new_set"], "params": {}, "shops": []},
+                           {"id": "t", "enabled": True, "scope": {"type": "themes", "themes": ["Icons"]}, "triggers": ["new_set"],
+                            "params": {}, "shops": []}]
+    await c.notifier.on_new_sets(["76300", "10400"])
+    assert [x[0] for x in sent] == ["a", "t"] and "2" in sent[0][1] and "10400" in sent[1][1]
