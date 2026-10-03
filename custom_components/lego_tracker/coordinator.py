@@ -600,7 +600,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     @property
     def compare_enabled(self) -> bool:
         """Price-comparison sites as extra price sources: on for everyone unless switched off in Settings
-        (the option has a new name since 0.9.18, so earlier choices start from 'on')."""
+        (the option has a new name since 0.9.19, so earlier choices start from 'on')."""
         return bool(self.opt(self.entry, CONF_COMPARE, True))
 
     @property
@@ -694,7 +694,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     OLD_MARKET_LABEL, MARKET_LABEL = "BrickEconomy", "Market value"
 
     def _rename_market_source(self) -> None:
-        """Data stored before 0.9.18 names the market value source; it is shown as 'Market value' now."""
+        """Data stored before 0.9.19 names the market value source; it is shown as 'Market value' now."""
         old, new = self.OLD_MARKET_LABEL, self.MARKET_LABEL
         for rec in [*self.store["sets"].values(), *self.store["collection"].values()]:
             for k, v in list(rec.items()):
@@ -1774,7 +1774,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 opts[key] = bool(fields[key])
         if CONF_COMPARE in fields:
             opts.pop(CONF_COMPARE_OLD, None)
-            opts.pop("compare", None)                       # the option's name before 0.9.18
+            opts.pop("compare", None)                       # the option's name before 0.9.19
         for key in (CONF_BLOCK_WORDS, CONF_ALLOW_WORDS):
             if key in fields:
                 raw = fields[key]

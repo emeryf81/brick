@@ -904,7 +904,7 @@ def _pages(**by_fragment):
 
 async def test_comparison_sites_hidden_source(hass: HomeAssistant, entry, no_network, hass_ws_client):
     c = await _setup(hass, entry)
-    assert c.compare_enabled                                                     # on by default since 0.9.18
+    assert c.compare_enabled                                                     # on by default since 0.9.19
     hass.config_entries.async_update_entry(entry, options={**entry.options, "compare_sites": False})
     await hass.async_block_till_done()
     ws = await hass_ws_client(hass)
