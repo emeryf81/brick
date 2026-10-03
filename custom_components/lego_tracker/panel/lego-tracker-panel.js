@@ -363,7 +363,7 @@ fieldset{border:1px solid var(--lt-line);border-radius:14px;padding:12px 14px 4p
 .ticker:hover .tk,.ticker:focus-within .tk{animation-play-state:paused}@keyframes tick{to{transform:translateX(-100%)}}
 .ticker .ti{cursor:pointer;display:inline-flex;gap:6px;align-items:center;border:0;background:none;color:inherit;font:inherit;padding:0}.ticker .ti:hover b{text-decoration:underline}
 .ticker .big{color:var(--lt-ok,#1a7f37);font-weight:700}.ticker .small{color:var(--lt-ok,#1a7f37)}.ticker .up{color:var(--lt-muted,#888)}
-.ticker .deal{color:var(--lt-accent)}.ticker .news{font-weight:600}.ticker .news .dot{color:var(--lt-accent)}
+.ticker .deal{color:var(--lt-accent)}.ticker .tktag{display:inline-grid;place-items:center;width:18px;height:18px;border-radius:50%;background:var(--lt-accent);color:var(--lt-on-accent,#fff);font-size:10px;font-weight:800;flex:none}.ticker .fire{letter-spacing:-2px}.ticker .news{font-weight:600}.ticker .news .dot{color:var(--lt-accent)}
 .ticker .lbl{flex:none;padding:0 10px;font-weight:700;height:100%;display:flex;align-items:center;background:var(--lt-soft);border-right:1px solid var(--lt-line);z-index:1}
 @media(prefers-reduced-motion:reduce){.ticker .tk{animation:none;padding-left:10px;overflow-x:auto}}
 .toasts{position:fixed;right:18px;bottom:40px;display:flex;flex-direction:column;gap:8px;z-index:20}
@@ -531,13 +531,16 @@ class LegoTrackerPanel extends HTMLElement {
     const el = this._tickerEl, tk = this.state.ticker; if (!el || !tk) return;
     let seen = []; try { seen = JSON.parse(localStorage.getItem("lt_news_seen") || "[]"); } catch (e) { /* private mode */ }
     const parts = (tk.news || []).map((n, i) => `<button class="ti news" type="button" data-tnews="${i}">${seen.includes(n.id) ? "📰" : `<span class="dot">●</span> 📰`} <b>${esc(n.title)}</b></button>`);
+    // 🔥 good price (deal score ≥ 45), 🔥🔥 super price (≥ 70), 🔥🔥🔥 amazing price (≥ 85)
+    const fire = (sc) => { const n = sc >= 85 ? 3 : sc >= 70 ? 2 : sc >= 45 ? 1 : 0; return n ? ` <span class="fire" title="${esc(n === 3 ? t("Amazing price") : n === 2 ? t("Super price") : t("Good price"))}">${"🔥".repeat(n)}</span>` : ""; };
+    const tag = (l, title) => `<span class="tktag" title="${esc(title)}">${l}</span>`;
     for (const it of tk.items || []) {
       const who = `<b>${esc(it.set_number)}</b> ${esc((it.name || "").slice(0, 40))}`;
       if (it.kind === "deal") {
-        parts.push(`<button class="ti deal" type="button" data-tset="${esc(it.set_number)}">🔥 ${who} ${it.price != null ? EUR(it.price) : ""}${it.discount ? ` −${Math.round(it.discount)}%` : ""}${it.shop ? ` · ${esc(it.shop)}` : ""}</button>`);
+        parts.push(`<button class="ti deal" type="button" data-tset="${esc(it.set_number)}">${tag("D", t("Deal notification"))}${fire(it.score)} ${who} ${it.price != null ? EUR(it.price) : ""}${it.discount ? ` −${Math.round(it.discount)}%` : ""}${it.shop ? ` · ${esc(it.shop)}` : ""}</button>`);
       } else {
         const p = it.pct, cls = p == null ? "" : p <= -10 ? "big" : p < 0 ? "small" : "up", mark = p == null ? "•" : p <= -10 ? "⬇⬇" : p < 0 ? "↓" : "↑";
-        parts.push(`<button class="ti ${cls}" type="button" data-tset="${esc(it.set_number)}">${mark} ${who} ${it.old != null ? `<s class="muted">${EUR(it.old)}</s> ` : ""}${EUR(it.price)}${p != null ? ` (${p > 0 ? "+" : ""}${p}%)` : ""}${it.shop ? ` · ${esc(it.shop)}` : ""}</button>`);
+        parts.push(`<button class="ti ${cls}" type="button" data-tset="${esc(it.set_number)}">${tag("W", t("Watchlist"))}${fire(it.score)} ${mark} ${who} ${it.old != null ? `<s class="muted">${EUR(it.old)}</s> ` : ""}${EUR(it.price)}${p != null ? ` (${p > 0 ? "+" : ""}${p}%)` : ""}${it.shop ? ` · ${esc(it.shop)}` : ""}</button>`);
       }
     }
     const cfg = tk.config || {};
@@ -554,7 +557,7 @@ class LegoTrackerPanel extends HTMLElement {
     if (!n) return;
     try { const seen = JSON.parse(localStorage.getItem("lt_news_seen") || "[]"); if (!seen.includes(n.id)) { seen.push(n.id); localStorage.setItem("lt_news_seen", JSON.stringify(seen.slice(-100))); } } catch (e) { /* private mode */ }
     const linkify = (txt) => esc(txt).replace(/https:\/\/[^\s<]+[^\s<.,;:!?)]/g, (u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`);
-    const body = (n.body || "").split(/\n\s*\n/).map((p) => `<p>${linkify(p).replace(/\n/g, "<br>")}</p>`).join("");
+    const body = !(n.body || "").trim() ? `<p class="muted">${esc(t("This news item has no text."))}</p>` : (n.body || "").split(/\n\s*\n/).map((p) => `<p>${linkify(p).replace(/\n/g, "<br>")}</p>`).join("");
     const link = n.link ? (n.link.startsWith("/") ? `<a class="btn" href="${esc(n.link)}" target="_top">${t("Open")} →</a>` : `<a class="btn" href="${esc(n.link)}" target="_blank" rel="noopener noreferrer">${t("Open")} ↗</a>`) : "";
     const dlg = this.shadowRoot.getElementById("dlg");
     this._dlgGen = (this._dlgGen || 0) + 1; clearInterval(this._shopTimer);

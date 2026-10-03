@@ -31,22 +31,33 @@ def _safe_link(link: str) -> str:
     return ""
 
 
+BODY_FIELDS = ("body", "text", "tekst", "bericht", "message", "inhoud")
+
+
 def parse(text: str) -> list[dict[str, Any]]:
-    """Parse titled news blocks, sanitize links, and return up to MAX_ITEMS newest entries."""
+    """Parse titled news blocks, sanitize links, and return up to MAX_ITEMS newest entries.
+    The text may follow the header fields directly or after an empty line, or start with 'tekst:' / 'body:';
+    Windows and old Mac line ends and a byte-order mark are accepted."""
     out = []
-    for block in re.split(r"^\s*---\s*$", text.replace("\r\n", "\n"), flags=re.M):
+    text = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+    for block in re.split(r"^\s*---+\s*$", text, flags=re.M):
         item: dict[str, Any] = {}
         body: list[str] = []
         in_body = False
         for line in block.strip("\n").split("\n"):
             m = None if in_body else re.match(r"^\s*(\w+)\s*:\s*(.*)$", line)
-            if m and m.group(1).lower() in FIELDS:
-                item[m.group(1).lower()] = m.group(2).strip()
-            elif item and (in_body or not line.strip()):
+            key = m.group(1).lower() if m else ""
+            if key in FIELDS:
+                item[key] = m.group(2).strip()
+            elif key in BODY_FIELDS and item:
+                in_body = True
+                if m.group(2).strip():
+                    body.append(m.group(2).rstrip())
+            elif not item:
+                continue                                  # comment lines and anything before the first field
+            elif in_body or line.strip():
                 in_body = True
                 body.append(line.rstrip())
-            elif line.strip().startswith("#"):
-                continue
         if not item.get("title"):
             continue
         item["body"] = "\n".join(body).strip()[:5000]

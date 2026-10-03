@@ -2193,3 +2193,13 @@ async def test_new_set_notification_rule(hass: HomeAssistant, entry, no_network)
                             "params": {}, "shops": []}]
     await c.notifier.on_new_sets(["76300", "10400"])
     assert [x[0] for x in sent] == ["a", "t"] and "2" in sent[0][1] and "10400" in sent[1][1]
+
+
+def test_news_body_without_empty_line_and_other_line_ends():
+    from custom_components.lego_tracker import news
+
+    a = news.parse("id: x\ndate: 2026-10-03\ntitle: Hallo\nlink: /hacs/dashboard\nDe tekst.\nTweede regel.")
+    b = news.parse("﻿id: y\r\ntitle: T\r\ntekst: Eerste regel\r\nTweede\r\n")
+    c = news.parse("# comment\rtitle: Z\r\rMac line ends")
+    assert a[0]["body"] == "De tekst.\nTweede regel." and a[0]["link"] == "/hacs/dashboard"
+    assert b[0]["body"] == "Eerste regel\nTweede" and c[0]["body"] == "Mac line ends"

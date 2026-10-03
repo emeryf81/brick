@@ -627,6 +627,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         from .news import NewsFeed, for_language
 
         cfg, now, out = self.ticker, time.time(), []
+        statuses = (self.data or self.compute())["statuses"]
         if cfg["watch"] and cfg["max_watch"]:
             seen: set[str] = set()
             for e in reversed(self.store.get("activity", [])):
@@ -640,16 +641,16 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 old, price = e.get("old_price"), e["price"]
                 out.append({"kind": "price", "ts": e["ts"], "set_number": num, "name": self.store["sets"][num].get("name") or "",
                             "price": price, "old": old, "pct": round((price - old) / old * 100, 1) if old else None,
+                            "score": statuses.get(num, {}).get("deal_score"),
                             "shop": RETAILERS.get(e.get("retailer"), ("",))[0], "url": e.get("url")})
             # no recent changes: the current lowest price of the watched sets that were checked last
-            statuses = (self.data or self.compute())["statuses"]
             rest = sorted((n for n in self.store["sets"] if n not in seen and self.is_watched(n)
                            and statuses.get(n, {}).get("best_price") is not None),
                           key=lambda n: -max([o.get("last_checked") or 0 for o in self.store["offers"].get(n, {}).values()] or [0]))
             for num in rest[: max(0, cfg["max_watch"] - len(seen))]:
                 st = statuses[num]
                 out.append({"kind": "price", "ts": now, "set_number": num, "name": self.store["sets"][num].get("name") or "",
-                            "price": st["best_price"], "old": None, "pct": None,
+                            "price": st["best_price"], "old": None, "pct": None, "score": st.get("deal_score"),
                             "shop": RETAILERS.get(st.get("best_retailer"), ("",))[0], "url": st.get("best_url")})
         if cfg["deals"] and cfg["max_deals"]:
             for ev in list(reversed(self.store.get("events", [])))[: cfg["max_deals"]]:
