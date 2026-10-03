@@ -1,4 +1,5 @@
 """Fetcher against a local server: block cooldown, transports."""
+import asyncio
 import time
 
 import pytest
@@ -97,11 +98,12 @@ async def test_oversized_pages_are_refused(hass, aiohttp_server, impersonate, mo
     monkeypatch.setattr(client, "MAX_BODY", 5000)
 
     async def handler(request):
-        if request.path == "/big":                      # no Content-Length: only the streamed count can stop it
+        if request.path in ("/big", "/endless"):        # no Content-Length: only the streamed count can stop it
             resp = web.StreamResponse()
             await resp.prepare(request)
-            for _ in range(20):
+            for _ in range(20 if request.path == "/big" else 400):
                 await resp.write(b"x" * 1000)
+                await asyncio.sleep(0.01)                   # in portions: read(n) may return before the end
             await resp.write_eof()
             return resp
         return web.Response(text=PAGE_OK, content_type="text/html", charset="utf-8")
@@ -115,6 +117,9 @@ async def test_oversized_pages_are_refused(hass, aiohttp_server, impersonate, mo
     await f.async_setup()
     parsed, err = await f.fetch_offer("bol", str(srv.make_url("/big")))
     assert parsed is None and "over" in err
+    t0 = time.time()                                       # the transfer itself stops: no waiting for 4 s of data
+    parsed, err = await f.fetch_offer("bol", str(srv.make_url("/endless")))
+    assert parsed is None and "over" in err and time.time() - t0 < 3
     parsed, err = await f.fetch_offer("bol", str(srv.make_url("/p")))
     assert err is None and parsed.price == 12.34
     await f.async_close()

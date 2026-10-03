@@ -182,6 +182,7 @@ class Fetcher:
             if self._curl_ok:
                 # streamed: a body over MAX_BODY is never held in memory as a whole
                 resp = await sess.get(url, headers=headers, allow_redirects=False, stream=True)
+                complete = False
                 try:
                     status, loc = resp.status_code, resp.headers.get("location")
                     if status in REDIRECTS and loc:
@@ -194,7 +195,10 @@ class Fetcher:
                         _too_big(size)
                         chunks.append(chunk)
                     raw, charset = b"".join(chunks), resp.encoding
+                    complete = True
                 finally:
+                    if not complete and getattr(resp, "quit_now", None) is not None:
+                        resp.quit_now.set()       # stop the transfer itself (redirect body, too big, error)
                     await resp.aclose()
             else:
                 async with sess.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=60 if binary else 30),
@@ -204,8 +208,11 @@ class Fetcher:
                         url = urljoin(url, loc)
                         continue
                     _too_big(resp.headers.get("Content-Length"))
-                    raw = await resp.content.read(MAX_BODY + 1)
-                    _too_big(len(raw))
+                    buf = bytearray()             # read(n) may return early: read until the end or past the limit
+                    while len(buf) <= MAX_BODY and (chunk := await resp.content.read(min(65536, MAX_BODY + 1 - len(buf)))):
+                        buf += chunk
+                    _too_big(len(buf))
+                    raw = bytes(buf)
                     try:
                         charset = resp.get_encoding()
                     except Exception:  # noqa: BLE001 - unknown / undetectable charset
