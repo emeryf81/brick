@@ -95,10 +95,11 @@ def digest(coord: LegoCoordinator) -> dict:
     for num, st in data["statuses"].items():
         if st["is_all_time_low"] or st["high_discount"]:
             s = coord.store["sets"][num]
+            price, retailer, url = coord.notifier.shop_offer(num, st)
             rows.append({"set_number": num, "name": s.get("name"), "theme": s.get("theme"),
-                         "price": st["best_price"], "retailer": st["best_retailer"],
+                         "price": price, "retailer": retailer,
                          "discount": st["discount_rrp"], "all_time_low": st["is_all_time_low"],
-                         "owned": num in coord.store["collection"], "url": coord.notifier.shop_link(num, st)})
+                         "owned": num in coord.store["collection"], "url": url})
     rows.sort(key=lambda r: (not r["all_time_low"], -(r["discount"] or 0)))
     return {"deals": rows, "collection": data["summary"], "threshold": coord.threshold}
 

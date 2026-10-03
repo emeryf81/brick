@@ -222,19 +222,23 @@ class Notifier:
         return True
 
     def shop_link(self, num: str, status: dict[str, Any]) -> str | None:
+        return self.shop_offer(num, status)[2]
+
+    def shop_offer(self, num: str, status: dict[str, Any]) -> tuple[float | None, str | None, str | None]:
         """The product page at the cheapest shop (never a comparison page or a search page when a real
         product link exists), so one tap opens the item where it is cheapest."""
         from .compare import is_compare_url
         from .parsers import is_search_url
 
         best = status.get("best_url")
+        selected = (status.get("best_price"), status.get("best_retailer"), best)
         if best and not is_compare_url(best) and not is_search_url(best):
-            return best
+            return selected
         offers = self.store["offers"].get(num, {})
-        priced = sorted((o["last_price"], o["url"]) for o in offers.values()
+        priced = sorted((o["last_price"], rid, o["url"]) for rid, o in offers.items()
                         if o.get("available") and o.get("last_price") and o.get("url")
                         and not is_compare_url(o["url"]) and not is_search_url(o["url"]))
-        return priced[0][1] if priced else best
+        return priced[0] if priced else selected
 
     # ---------------------------------------------------------------- events
     async def on_set_change(self, num: str, before: dict[str, Any], after: dict[str, Any]) -> None:
@@ -249,12 +253,13 @@ class Notifier:
                     if self._cooled(f"{rule['id']}|{num}|{h[0]}", rule.get("cooldown_hours", 24))]
             if not hits:
                 continue
-            shop = RETAILERS.get(after.get("best_retailer"), ("",))[0]
+            price, retailer, url = self.shop_offer(num, after)
+            shop = RETAILERS.get(retailer, ("",))[0]
             title = f"🧱 {num} {s.get('name') or ''}".strip()
-            message = tr("€{price} at {shop}", price=f"{after['best_price']:.2f}", shop=shop) + ": " + ", ".join(h[1] for h in hits)
-            await self.send(rule, title, message, url=self.shop_link(num, after),
+            message = tr("€{price} at {shop}", price=f"{price:.2f}", shop=shop) + ": " + ", ".join(h[1] for h in hits)
+            await self.send(rule, title, message, url=url,
                             image=s.get("image") if rule.get("image") else None,
-                            data={"set_number": num, "triggers": [h[0] for h in hits], "price": after["best_price"]})
+                            data={"set_number": num, "triggers": [h[0] for h in hits], "price": price})
 
     async def on_digest(self, digest: dict[str, Any]) -> None:
         for rule in self.rules:
@@ -267,7 +272,7 @@ class Notifier:
                 continue
             lines = [f"• {d['set_number']} {d['name'] or ''}: " + tr("€{price} at {shop}", price=f"{d['price']:.2f}", shop=RETAILERS.get(d["retailer"], ("",))[0])
                      + (f" (−{d['discount']:.0f}%)" if d.get("discount") else "") + (" 🔻" if d.get("all_time_low") else "")
-                     + (f"\n  {u}" if (u := self.shop_link(d["set_number"], {"best_url": d.get("url")})) else "")
+                     + (f"\n  {u}" if (u := d.get("url")) else "")
                      for d in deals[:15]]
             more = "\n" + tr("… and {n} more", n=len(deals) - 15) if len(deals) > 15 else ""
             await self.send(rule, "🧱 " + tr("LEGO deals today ({n})", n=len(deals)), "\n".join(lines) + more,

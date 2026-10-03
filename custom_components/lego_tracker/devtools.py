@@ -110,7 +110,7 @@ def outliers(coord: Any, apply: bool = False) -> list[dict[str, Any]]:
 
 
 def set_debug(on: bool) -> bool:
-    logging.getLogger(__package__).setLevel(logging.DEBUG if on else logging.NOTSET)
+    logging.getLogger(__package__).setLevel(logging.DEBUG if on else logging.INFO)
     return on
 
 
