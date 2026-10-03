@@ -1,4 +1,4 @@
-"""Collection CSV import (BrickEconomy / Brickset / Rebrickable / own spreadsheet) with validation.
+"""Collection CSV import (collection sites / Brickset / Rebrickable / own spreadsheet) with validation.
 
 Flow: ``analyze_csv`` parses and checks every line without touching the store (used for the
 preview in the panel); ``apply_import`` then merges only the lines without errors.

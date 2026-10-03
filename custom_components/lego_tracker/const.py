@@ -6,6 +6,7 @@ STORAGE_KEY = f"{DOMAIN}.data"
 STORAGE_VERSION = 1
 
 PANEL_URL = "lego-tracker"
+API_LEVEL = 3          # raise together with API_LEVEL in the panel when the panel needs new server commands
 PANEL_ELEMENT = "lego-tracker-panel"
 STATIC_URL = f"/{DOMAIN}_static"
 
@@ -24,13 +25,13 @@ CONF_BOL_COUNTRY = "bol_country"            # auto | NL | BE
 CONF_RELAY = "browser_relay"                # userscript fetches shop pages from the user's browser
 CONF_RELAY_HOURS = "relay_hours"
 DEFAULT_RELAY_HOURS = 6
-CONF_COMPARE = "compare"                    # hidden option: price-comparison sites as extra price sources
-CONF_MARKET = "market_value"               # BrickEconomy market value + retirement date, once a day per set
+CONF_COMPARE = "compare_sites"              # price-comparison sites as extra price sources (on by default)
+CONF_MARKET = "market_value"               # market value + retirement date, once a day per set
 CONF_DEAL_FILTER = "deal_filter"           # Deals → Settings: themes switched off, price / discount / pieces limits
 DEAL_FILTER_DEFAULT = {"themes_off": [], "min_price": None, "max_price": None, "min_discount": None,
                        "min_pieces": None, "max_pieces": None, "skip_owned": False, "skip_retired": False}
 CONF_TICKER = "ticker"                      # bottom ticker: {"watch": bool, "deals": bool, "news": bool, "max_*": int}
-TICKER_DEFAULT = {"watch": True, "deals": True, "news": True, "max_watch": 15, "max_deals": 10, "max_news": 5}
+TICKER_DEFAULT = {"watch": True, "deals": True, "news": True, "max_watch": 3, "max_deals": 3, "max_news": 3}
 CONF_COMPARE_OLD = "brickwatch"             # name of that option before 0.9.10 (still read once)
 CONF_BLOCK_WORDS = "block_words"            # your own words: a product with one of these is never the set
 CONF_ALLOW_WORDS = "allow_words"            # exceptions: words/phrases that may appear in a real set's title

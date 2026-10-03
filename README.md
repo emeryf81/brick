@@ -121,12 +121,14 @@ Every price notification (and the daily digest, per set) contains a direct link 
 Every rule has a test button; sent notifications appear in the logbook.
 
 ## Settings in the panel
+After updating via HACS, restart Home Assistant: until then the new panel talks to the old integration, and the panel shows a banner saying so.
+
 Everything is under *Manage → Settings* (administrators only); the integration options in Home Assistant keep working too:
 - language; discount threshold, history, time of the daily digest;
 - automatic price checks (spread / fixed times / off) and the cycle;
-- **collection value**: shop price first, or the imported value first (e.g. BrickEconomy);
-- **market value (BrickEconomy)**: the market value (new and used) and expected retirement date of every set, fetched once a day per set and spread over the whole day; sets you own get it as their value, the set window shows it (on by default);
-- **ticker**: the bar at the bottom of the panel with the latest prices of your watchlist (big drops ⬇⬇ in bold, small drops ↓, rises ↑), deal notifications and news. Switch each part on or off and choose how many items it shows. Click a price or deal to open the set, a news item to read it;
+- **collection value**: shop price first, or the imported value first (e.g. from your CSV);
+- **price-comparison sites** (on by default): per set, Kieskeurig, Shoparize, Channable and Producthero are read at most every 6 hours. A shop that fails itself (e.g. bol.com) gets the comparison price, a shop without a link gets one, and the set window lists every shop the sites know. Accessories such as LED kits are skipped. Switch the whole source or single sites off, see their status, test a site with a set, or fetch all sites for all sets at once. When a site refuses the server, the userscript fetches the page in your browser. Prices that came from a comparison site have a mark in the logbook (ⓢ Shoparize, ⓚ Kieskeurig, ⓒ Channable, ⓟ Producthero);
+- **ticker**: the bar at the bottom of the panel with the latest prices of your watchlist (big drops ⬇⬇ in bold, small drops ↓, rises ↑), deal notifications and news. On by default with 3 items per part; switch each part on or off and choose how many items it shows. Click a price or deal to open the set, a news item to read it;
 - **API keys** for Brickset and Rebrickable, with a test button. Keys are never sent back to the browser (only `••••1234`);
 - **shops**: on/off, lift a pause, *pause automatically* per shop, search URL per shop, LEGO.com country, your own shops.
 
@@ -142,7 +144,6 @@ Shops block servers far more often than browsers. With the continuous check swit
 2. **Open errors** (the list under *Logbook → Open errors* and *Shops & jobs*): the link is fetched in your browser, at most once an hour each. A price solves the error: it disappears from the lists by itself, also when you had ignored it. Suspicious prices wait for your approval.
 3. **Sets without any price at all**: the shops without a link are searched in your browser. A product found there must pass the same title check (set number, LEGO, no accessory, no knock-off); it is linked and its price page is fetched right away. A search without result is not repeated for a week.
 4. **Links the server can't fetch** (blocked, paused), each at most every 6 hours.
-5. **Market values** (BrickEconomy) the server can't fetch (blocked, paused, errors), at most once a day per set and only after everything above.
 
 It is calm: every site at most twice a minute, a search at most once every 2 minutes per site, 4–9 seconds between pages, and a site that blocks your browser twice is left alone for an hour. Only one tab per browser does the work. Prices that came from your browser get the mark **ⓤ** next to the price (set → Shops, and on the cards); the logbook entries have the source *relay*.
 

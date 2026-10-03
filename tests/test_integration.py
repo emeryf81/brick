@@ -904,11 +904,13 @@ def _pages(**by_fragment):
 
 async def test_comparison_sites_hidden_source(hass: HomeAssistant, entry, no_network, hass_ws_client):
     c = await _setup(hass, entry)
+    assert c.compare_enabled                                                     # on by default since 0.9.18
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare_sites": False})
+    await hass.async_block_till_done()
     ws = await hass_ws_client(hass)
     await ws.send_json({"id": 1, "type": "lego_tracker/compare/fetch"})
-    assert (await ws.receive_json())["error"]["code"] == "not_enabled"          # off by default
-    # the option's name before 0.9.10 is still read
-    hass.config_entries.async_update_entry(entry, options={**entry.options, "brickwatch": True, "compare_sources": ["kieskeurig"]})
+    assert (await ws.receive_json())["error"]["code"] == "not_enabled"          # switched off in Settings
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare_sites": True, "compare_sources": ["kieskeurig"]})
     await hass.async_block_till_done()
     c = hass.data[DOMAIN][entry.entry_id]
     assert c.compare_enabled
@@ -939,10 +941,10 @@ async def test_comparison_sites_hidden_source(hass: HomeAssistant, entry, no_net
     ov = (await ws.receive_json())["result"]["compare"]
     assert ov["sources"]["kieskeurig"]["sets"] == 1 and "brickwatch" not in ov["sources"]
     # switching it through the settings stores the new option name
-    await ws.send_json({"id": 4, "type": "lego_tracker/settings/set", "fields": {"compare": False}})
+    await ws.send_json({"id": 4, "type": "lego_tracker/settings/set", "fields": {"compare_sites": False}})
     assert (await ws.receive_json())["success"]
     await hass.async_block_till_done()
-    assert "brickwatch" not in entry.options and entry.options["compare"] is False
+    assert "brickwatch" not in entry.options and entry.options["compare_sites"] is False
 
 
 async def test_builtin_catalogue_skips_lookups(hass: HomeAssistant, entry, no_network):
@@ -993,7 +995,7 @@ async def test_removed_source_keeps_data_but_no_links(hass: HomeAssistant, entry
 
 
 async def test_missing_set_not_retried_within_a_day(hass: HomeAssistant, entry, no_network):
-    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare": True, "compare_sources": ["kieskeurig"]})
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare_sites": True, "compare_sources": ["kieskeurig"]})
     c = await _setup(hass, entry)
     await hass.services.async_call(DOMAIN, "add_set", {"set_number": "385"}, blocking=True)
     page = AsyncMock(return_value=(404, "", None))
@@ -1110,7 +1112,7 @@ def test_compare_parsers_skip_accessories_and_follow():
 
 
 async def test_compare_network_errors_pause_one_hour_and_job_stops(hass: HomeAssistant, entry, no_network):
-    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare": True, "compare_sources": ["kieskeurig"]})
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare_sites": True, "compare_sources": ["kieskeurig"]})
     c = await _setup(hass, entry)
     for n in ("10281", "10300", "10305", "10311", "10313", "10316", "10317"):
         await hass.services.async_call(DOMAIN, "add_set", {"set_number": n}, blocking=True)
@@ -1143,7 +1145,7 @@ KK_CARDS = """<html><body><ul class="productlist_grid">
 
 
 async def test_kieskeurig_product_page_403_uses_search_results(hass: HomeAssistant, entry, no_network):
-    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare": True, "compare_sources": ["kieskeurig"]})
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare_sites": True, "compare_sources": ["kieskeurig"]})
     c = await _setup(hass, entry)
     await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10368"}, blocking=True)
 
@@ -1184,7 +1186,7 @@ async def test_brickeconomy_market_value_and_retirement(hass: HomeAssistant, ent
     assert compare.parse("brickeconomy", BE_PAGE.replace("10368-1</div>", "10369-1</div>").replace("10368", "x"), "10368", "u", {}).kind == "missing"
     assert compare._eur("$24.99") is None                                  # only euro values
 
-    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare": True, "compare_sources": ["brickeconomy"]})
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare_sites": True, "compare_sources": ["brickeconomy"]})
     c = await _setup(hass, entry)
     await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10368"}, blocking=True)
     await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
@@ -1197,8 +1199,8 @@ async def test_brickeconomy_market_value_and_retirement(hass: HomeAssistant, ent
         await c.compare_refresh("10281")
     assert page.await_args_list[0].args[1] == "https://www.brickeconomy.com/set/10368-1/"
     s, e = c.store["sets"]["10368"], c.store["collection"]["10368"]
-    assert s["exit_date"] == "2027-05-31" and s["exit_date_source"] == "BrickEconomy" and s["market"]["market_new"] == 22.31
-    assert e["current_value"] == 22.31 and e["value_source"] == "BrickEconomy" and len(e["value_history"]) == 1
+    assert s["exit_date"] == "2027-05-31" and s["exit_date_source"] == "Market value" and s["market"]["market_new"] == 22.31
+    assert e["current_value"] == 22.31 and e["value_source"] == "Market value" and len(e["value_history"]) == 1
     assert c.store["sets"]["10281"]["exit_date"] == "2026-12-31"           # your own date wins
     assert c.compare_prices("10368") == {}                                  # no shop prices from BrickEconomy
     c.store["compare"]["brickeconomy"]["10368"]["ts"] -= 12 * 3600
@@ -1208,7 +1210,7 @@ async def test_brickeconomy_market_value_and_retirement(hass: HomeAssistant, ent
 
 
 async def test_relay_fetches_comparison_pages(hass: HomeAssistant, entry, no_network, hass_client):
-    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare": True, "compare_sources": ["kieskeurig"]})
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare_sites": True, "compare_sources": ["kieskeurig"]})
     c = await _setup(hass, entry)
     await hass.services.async_call(DOMAIN, "add_set", {"set_number": "60454"}, blocking=True)
     c.fetcher.blocked_until["kieskeurig"] = time.time() + 3600       # the server is refused
@@ -1234,7 +1236,7 @@ async def test_relay_fetches_comparison_pages(hass: HomeAssistant, entry, no_net
     ("producthero", "https://shopping.producthero.com/nl/product/123"),
 ])
 async def test_relay_comparison_page_with_many_priceless_links(hass: HomeAssistant, entry, no_network, hass_client, source, url):
-    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare": True, "compare_sources": [source]})
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare_sites": True, "compare_sources": [source]})
     c = await _setup(hass, entry)
     await hass.services.async_call(DOMAIN, "add_set", {"set_number": "60454"}, blocking=True)
     page = '<div>' + '<a href="https://noise.example/item">LEGO 60454</a>' * 2000 + '</div>'
@@ -2079,3 +2081,27 @@ def test_debug_dump_redacts_url_credentials():
 
     out = redact({"a": ["https://user:pw@shop.be/p/1?id=5&token=abc", "see https://x.be/?apikey=1 now", 3]})
     assert out == {"a": ["https://***@shop.be/p/1?id=5&token=***", "see https://x.be/?apikey=*** now", 3]}
+
+
+async def test_ticker_defaults_api_level_and_market_label(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    from custom_components.lego_tracker.const import API_LEVEL
+
+    c = await _setup(hass, entry)
+    assert c.ticker == {"watch": True, "deals": True, "news": True, "max_watch": 3, "max_deals": 3, "max_news": 3}
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
+    c.store["offers"]["10281"]["bol"] = {"url": "https://www.bol.com/nl/nl/p/x/1/", "available": True, "last_price": 39.99,
+                                         "last_checked": time.time(), "history": [[time.time(), 39.99]]}
+    c.push_update()
+    from custom_components.lego_tracker.news import NewsFeed
+    c.news = NewsFeed(lambda: None)
+    c.news.ts = time.time()
+    tk = await c.ticker_data("nl")                  # no recent price change: the current price is shown anyway
+    assert tk["items"][0]["set_number"] == "10281" and tk["items"][0]["price"] == 39.99
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/overview"})
+    assert (await ws.receive_json())["result"]["api"] == API_LEVEL
+    c.store["sets"]["10281"].update(exit_date_source="BrickEconomy", market={"source": "BrickEconomy"})
+    c.store["activity"].append({"ts": 1, "level": "info", "kind": "fetch", "message": "not on BrickEconomy", "source": "BrickEconomy"})
+    c._rename_market_source()
+    assert c.store["sets"]["10281"]["exit_date_source"] == "Market value" and c.store["sets"]["10281"]["market"]["source"] == "Market value"
+    assert c.store["activity"][-1]["source"] == "Market value" and "BrickEconomy" not in c.store["activity"][-1]["message"]

@@ -21,7 +21,7 @@ Wat is er nieuw?
 • Het userscript lost openstaande fouten zelf op: het haalt de prijs in je browser en de fout verdwijnt uit de lijst.
 • In het logboek zie je meteen hoe elke prijs gelezen werd: ⌂ rechtstreeks van de winkel, ⓤ via je browser (userscript).
 • Sorteren op datum: wanneer een set op je watchlist kwam en wanneer de laatste dealmelding binnenkwam.
-• Marktwaarde van BrickEconomy, één keer per dag per set.
+• Marktwaarde (nieuw en gebruikt) van elke set, één keer per dag per set.
 • Deze ticker! In te stellen bij Beheer → Instellingen → Ticker.
 • Meldingen bevatten nu altijd een directe link naar het product bij de goedkoopste winkel.
 • Bedragen met een komma (164,99) worden overal juist gelezen.
@@ -42,7 +42,7 @@ What's new?
 • The userscript solves open errors by itself: it fetches the price in your browser and the error leaves the list.
 • The logbook shows how every price was read: ⌂ directly from the shop, ⓤ via your browser (userscript).
 • Sort by date: when a set came on your watchlist and when the latest deal notification came in.
-• Market value from BrickEconomy, once a day per set.
+• Market value (new and used) of every set, once a day per set.
 • This ticker! Set it up under Manage → Settings → Ticker.
 • Notifications always contain a direct link to the product at the cheapest shop.
 • Amounts with a decimal comma (164,99) are read correctly everywhere.
