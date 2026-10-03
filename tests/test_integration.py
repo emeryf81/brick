@@ -38,6 +38,16 @@ def no_manual_gap():
 
 
 @pytest.fixture(autouse=True)
+def no_first_check(request):
+    """Most tests count every fetch: the first check right after adding a set only runs where a test asks for it."""
+    if request.node.get_closest_marker("first_check"):
+        yield
+        return
+    with patch("custom_components.lego_tracker.coordinator.LegoCoordinator.queue_first_check"):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def no_catalogue():
     """Tests use real set numbers: without this the built-in catalogue would fill them in."""
     from custom_components.lego_tracker import catalog
@@ -2107,6 +2117,27 @@ async def test_ticker_defaults_api_level_and_market_label(hass: HomeAssistant, e
     assert c.store["activity"][-1]["source"] == "Market value" and "BrickEconomy" not in c.store["activity"][-1]["message"]
 
 
+@pytest.mark.parametrize("price, retailer, expected_score", [
+    (39.99, "bol", True),
+    (49.99, "bol", False),
+    (39.99, "amazon_nl", False),
+    (49.99, "amazon_nl", False),
+])
+async def test_ticker_recent_price_score_matches_best_offer(hass: HomeAssistant, entry, price, retailer, expected_score):
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "ticker": {"news": False, "deals": False}})
+    c = await _setup(hass, entry)
+    await c.add_set("10281", name="Bonsai", rrp=100)
+    c.store["offers"]["10281"] = {"bol": {"available": True, "last_price": 39.99}}
+    c.store["activity"] = [{"kind": "price", "ts": time.time(), "set_number": "10281",
+                            "price": price, "old_price": 59.99, "retailer": retailer}]
+    c.push_update()
+    score = c.data["statuses"]["10281"]["deal_score"]
+    assert score > 0
+    item = (await c.ticker_data("en"))["items"][0]
+    assert item["price"] == price
+    assert item["score"] == (score if expected_score else None)
+
+
 @pytest.mark.parametrize("merge", [False, True])
 async def test_backup_from_before_0919_gets_the_new_market_label(hass: HomeAssistant, entry, no_network, merge):
     c = await _setup(hass, entry)
@@ -2117,3 +2148,349 @@ async def test_backup_from_before_0919_gets_the_new_market_label(hass: HomeAssis
         del c.store["sets"]["10281"]
     c.import_backup(data, merge)
     assert c.store["sets"]["10281"]["exit_date_source"] == "Market value"
+
+
+def _gz(text: str) -> bytes:
+    """Encode fixture text as UTF-8 and compress it as a gzip download."""
+    import gzip as _g
+    return _g.compress(text.encode())
+
+
+SETS_CSV = ("set_num,name,year,theme_id,num_parts,img_url\n"
+            "10281-1,Bonsai Tree,2021,2,878,https://cdn.rebrickable.com/media/sets/10281-1.jpg\n"
+            "10281-2,Bonsai Tree (second edition),2022,2,878,\n"
+            "75192-1,Millennium Falcon,2017,3,7541,https://cdn.rebrickable.com/media/sets/75192-1.jpg\n"
+            "5007-1,Book,2015,4,0,\n"
+            "fig-0001-1,Minifig,2020,3,4,\n")
+THEMES_CSV = "id,name,parent_id\n1,Icons,\n2,Botanical Collection,1\n3,Star Wars,\n4,Books,\n"
+
+
+def test_setdb_parse_search_and_new():
+    """Check set filtering, theme ancestry, search, and detection of added sets."""
+    from custom_components.lego_tracker import setdb
+
+    db = setdb.parse(_gz(SETS_CSV), _gz(THEMES_CSV))
+    assert set(db) == {"10281", "75192"}                                   # first version, numbered, with pieces
+    assert db["10281"][:5] == ["Bonsai Tree", 2021, "Icons", "Botanical Collection", 878]
+    assert setdb.search(db, "falcon") == ["75192"] and setdb.search(db, "102") == ["10281"]
+    assert setdb.find_new(db, {**db, "10368": ["Chrysanthemum", 2024, "Icons", "", 278, ""]}, first=False) == ["10368"]
+
+
+async def test_setdb_refresh_new_sets_and_add(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    """Verify refresh, theme filtering, search, enrichment, save failure, and reload."""
+    from datetime import date as _date
+
+    c = await _setup(hass, entry)
+    year = _date.today().year
+    first = SETS_CSV + "".join(f"{60000 + i}-1,City set {i},{year},5,{100 + i},\n" for i in range(1000))
+    themes = THEMES_CSV + "5,City,\n"
+    files = {"sets": _gz(first), "themes": _gz(themes)}
+    c._download = AsyncMock(side_effect=lambda url: files["sets" if "sets.csv" in url else "themes"])
+    sent = []
+    c.notifier.on_new_sets = AsyncMock(side_effect=lambda nums: sent.append(nums))
+    original_save = c._setdb_store.async_save
+
+    async def save_while_busy(data):
+        assert c.setdb_info["busy"] and not c.setdb
+        c.setdb_tick()
+        await original_save(data)
+        assert c.setdb_info["busy"] and not c.setdb
+
+    with patch.object(c._setdb_store, "async_save", side_effect=save_while_busy), \
+         patch.object(entry, "async_create_background_task") as background:
+        fresh = await c.refresh_setdb()
+        background.assert_not_called()
+    assert not c.setdb_info["busy"]
+    assert len(fresh) == 1000 and not sent                                  # first download: this year's sets, no notification
+    files["sets"] = _gz(first + f"76300-1,New Batman set,{year},6,500,\n42200-1,Technic car,{year},7,900,\n")
+    files["themes"] = _gz(themes + "6,Batman,\n7,Technic,\n")
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "deal_filter": {"themes_off": ["Technic"]}})
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][entry.entry_id]
+    c._download = AsyncMock(side_effect=lambda url: files["sets" if "sets.csv" in url else "themes"])
+
+    async def notify_while_busy(nums):
+        assert c.setdb_info["busy"] and "76300" in c.setdb
+        sent.append(nums)
+
+    c.notifier.on_new_sets = AsyncMock(side_effect=notify_while_busy)
+    fresh = await c.refresh_setdb()
+    assert not c.setdb_info["busy"]
+    assert sorted(fresh) == ["42200", "76300"] and sent == [["76300"]]     # Technic switched off: no notification
+    items = c.new_sets()["items"]
+    assert items[0]["set_number"] in ("76300", "42200") and "42200" not in [x["set_number"] for x in items]
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/setdb/search", "q": "batman"})
+    r = (await ws.receive_json())["result"]
+    assert r["items"][0]["set_number"] == "76300" and r["count"] == len(c.setdb)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "76300"}, blocking=True)
+    s = c.store["sets"]["76300"]
+    assert s["name"] == "New Batman set" and s["theme"] == "Batman" and s["pieces"] == 500 and s["name_source"] == "Rebrickable"
+    # a failed save changes nothing in memory
+    before, seen = dict(c.setdb), dict(c.store["new_sets"])
+    files["sets"] = _gz(first + f"76300-1,New Batman set,{year},6,500,\n42200-1,Technic car,{year},7,900,\n10999-1,Later set,{year},1,50,\n")
+    with patch.object(c._setdb_store, "async_save", AsyncMock(side_effect=OSError("disk full"))):
+        assert await c.refresh_setdb() == []
+    assert not c.setdb_info["busy"]
+    assert c.setdb == before and c.store["new_sets"] == seen and "disk full" in c.setdb_info["error"]
+    # Home Assistant's Store logs a write error and returns normally: the read-back notices it
+    with patch.object(c._setdb_store, "async_save", AsyncMock(return_value=None)):
+        assert await c.refresh_setdb() == []
+    assert c.setdb == before and c.store["new_sets"] == seen and "could not be written" in c.setdb_info["error"]
+    # stored in its own file and read back on start
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert "76300" in hass.data[DOMAIN][entry.entry_id].setdb
+
+
+@pytest.mark.parametrize("stage, cancelled", [("download", False), ("download", True), ("save", True)])
+async def test_setdb_refresh_clears_busy_on_failure(hass: HomeAssistant, entry, stage, cancelled):
+    import asyncio
+    from custom_components.lego_tracker import setdb
+
+    c = await _setup(hass, entry)
+    new = {str(60000 + i): ["City set", 2026, "City", "", 100, ""] for i in range(1000)}
+
+    async def fail(*args):
+        assert c.setdb_info["busy"]
+        raise asyncio.CancelledError if cancelled else OSError("download failed")
+
+    c._download = AsyncMock(side_effect=fail if stage == "download" else None, return_value=b"")
+    with patch.object(setdb, "parse", return_value=new), patch.object(c._setdb_store, "async_save", side_effect=fail):
+        if cancelled:
+            with pytest.raises(asyncio.CancelledError):
+                await c.refresh_setdb()
+        else:
+            assert await c.refresh_setdb() == []
+    assert not c.setdb_info["busy"] and not c.setdb
+
+
+async def test_new_set_notification_rule(hass: HomeAssistant, entry, no_network):
+    """Check that new-set notifications respect all-set and theme-specific scopes."""
+    c = await _setup(hass, entry)
+    c.setdb = {"76300": ["New Batman set", 2026, "Batman", "", 500, ""], "10400": ["Icons thing", 2026, "Icons", "", 900, ""]}
+    sent = []
+
+    async def fake_send(rule, title, message, **kw):
+        """Capture notification rule IDs, titles, and messages for assertions."""
+        sent.append((rule["id"], title, message))
+    c.notifier.send = fake_send
+    c.notifier.rules[:] = [{"id": "a", "enabled": True, "scope": {"type": "all"}, "triggers": ["new_set"], "params": {}, "shops": []},
+                           {"id": "t", "enabled": True, "scope": {"type": "themes", "themes": ["Icons"]}, "triggers": ["new_set"],
+                            "params": {}, "shops": []}]
+    await c.notifier.on_new_sets(["76300", "10400"])
+    assert [x[0] for x in sent] == ["a", "t"] and "2" in sent[0][1] and "10400" in sent[1][1]
+
+
+def test_news_body_without_empty_line_and_other_line_ends():
+    """Check inline news bodies, body aliases, a BOM, and alternate line endings."""
+    from custom_components.lego_tracker import news
+
+    a = news.parse("id: x\ndate: 2026-10-03\ntitle: Hallo\nlink: /hacs/dashboard\nDe tekst.\nTweede regel.")
+    b = news.parse("﻿id: y\r\ntitle: T\r\ntekst: Eerste regel\r\nTweede\r\n")
+    c = news.parse("# comment\rtitle: Z\r\rMac line ends")
+    assert a[0]["body"] == "De tekst.\nTweede regel." and a[0]["link"] == "/hacs/dashboard"
+    assert b[0]["body"] == "Eerste regel\nTweede" and c[0]["body"] == "Mac line ends"
+
+
+@pytest.mark.first_check
+async def test_new_set_gets_prices_and_market_value_right_away(hass: HomeAssistant, entry, no_network):
+    """A set that was never checked is fetched right after adding (one set at a time), with its market value;
+    adding it again or a set that already has prices does not start another check."""
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][entry.entry_id]
+    order = []
+
+    async def compare(num, refresh=False, force=False, retry_missing=False, sources=None):
+        order.append(("compare", num, tuple(sources or ())))
+        return {}
+
+    async def discover(retailer, num, force=False, url=None):
+        return f"https://www.amazon.nl/dp/B0{num}0" if retailer == "amazon_nl" else None
+
+    with patch.object(c.fetcher, "discover", discover), patch.object(c, "compare_refresh", side_effect=compare):
+        await c.add_set("10281")
+        await c.add_set("42143")
+        await hass.async_block_till_done(wait_background_tasks=True)
+    linked = sum(len(c.store["offers"][n]) for n in ("10281", "42143"))
+    assert linked == 2 and no_network.await_count == 2      # the linked shop of both sets, right away
+    assert [x[1] for x in order] == ["10281", "42143"]       # one after the other, in the order they were added
+    for num in ("10281", "42143"):
+        assert c.store["offers"][num]["amazon_nl"].get("last_checked")
+        assert any(e["kind"] == "check" and e.get("set_number") == num and e.get("source") == "added"
+                   for e in c.store["activity"])
+    assert not c._first_busy and not c._first_checks and c.job_info()["first_checks"] == []
+
+    no_network.reset_mock()
+    order.clear()
+    await c.add_set("10281")                                  # already has prices: no extra check
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert no_network.await_count == 0 and not order
+
+    # comparison sites switched off: the market value is still fetched for a new set
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare_sites": False})
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][entry.entry_id]
+    with patch.object(c.fetcher, "discover", AsyncMock(return_value=None)), \
+         patch.object(c, "compare_refresh", side_effect=compare):
+        await c.add_set("21028")
+        await hass.async_block_till_done(wait_background_tasks=True)
+    assert order == [("compare", "21028", ("brickeconomy",))]
+
+    # a set removed while waiting is skipped
+    c._first_checks.extend(["99999"])
+    c._first_busy = True
+    await c._run_first_checks()
+    assert not c._first_busy and not c._first_checks
+
+
+def test_scan_helpers():
+    """Which sets of the database are looked up, in which order, and what counts as a deal."""
+    from custom_components.lego_tracker import scan
+
+    db = {"76300": ["Batman", 2026, "Batman", "", 500, ""], "10281": ["Bonsai", 2021, "Icons", "", 878, ""],
+          "42200": ["Technic car", 2025, "Technic", "", 900, ""], "30650": ["Polybag", 2026, "City", "", 40, ""],
+          "71000": ["Old set", 2018, "City", "", 300, ""], "75192": ["Falcon", 2024, "Star Wars", "", 7541, ""]}
+    sc = {"75192": {"retired": "2024", "rts": 1}}
+    cands = scan.candidates(db, sc, {"42200": {}}, {"technic"}, 50, None, year=2026)
+    assert sorted(cands) == ["76300"]                                      # tracked, retired, old, too small, Technic: out
+    assert sorted(scan.candidates(db, sc, {}, set(), year=2026)) == ["30650", "42200", "76300"]
+    now = 1_000_000.0
+    sc = {"76300": {"ts": now - 100}, "42200": {"ts": now - 50_000, "miss": 3}}
+    assert scan.pick(["76300", "42200", "30650"], sc, db, now) == "30650"   # never looked up first
+    assert scan.pick(["76300", "42200"], sc, db, now) == "76300"            # no offers 3 times: only after 14 days
+    assert scan.pick(["42200"], sc, db, now) is None
+    assert scan.needs_retired_check(None) and not scan.needs_retired_check({"rts": now}, now + 86400)
+    shops = [{"retailer": None, "price": 10.0, "url": "x"}, {"retailer": "bol", "price": 12.0, "url": "y"},
+             {"retailer": "amazon_nl", "price": 70.0, "url": "a"}, {"retailer": "bol", "price": 75.0, "url": "b"}]
+    assert scan.best_offer(shops, {"bol": 1, "amazon_nl": 1}, 100.0) == {"price": 70.0, "shop": "amazon_nl", "url": "a"}
+    e = {"price": 70.0, "rrp": 100.0}
+    flt = {"min_price": None, "max_price": None, "min_discount": None}
+    assert scan.discount(e) == 30.0 and scan.deal(e, 25, flt) == 30.0 and scan.deal(e, 35, flt) is None
+    assert scan.deal(e, 25, {**flt, "max_price": 50}) is None and scan.deal(e, 25, {**flt, "min_discount": 40}) is None
+    assert scan.deal({"price": 10.0, "rrp": 100.0}, 25, flt) is None       # 90 % off: not the set
+    assert scan.deal({**e, "retired": "2025"}, 25, flt) is None
+    assert [scan.status(x) for x in (None, {"ts": 1}, {"ts": 1, "price": 9}, {"deal": 30}, {"retired": "2024"})] == \
+        ["unknown", "none", "sale", "deal", "retired"]
+
+
+async def test_scan_sets_deals_retirement_and_catalog(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    """Sets of the database are looked up on a comparison site, retired sets on the market value page are
+    left out from then on, a deal is notified once (again only when cheaper), and Deals → All LEGO sets shows it all."""
+    from custom_components.lego_tracker import compare
+
+    c = await _setup(hass, entry)
+    year = time.localtime().tm_year
+    c.setdb = {"76300": ["New Batman set", year, "Batman", "", 500, ""], "10305": ["Lion Knights", year - 1, "Icons", "", 4514, ""],
+               "60400": ["Police car", year, "City", "", 100, ""], "10281": ["Bonsai Tree", year - 5, "Icons", "", 878, ""]}
+    pages = {"76300": (compare.Result("data", data={"retired": None, "retail": 100.0}),
+                       compare.Result("offers", shops=[{"retailer": "bol", "price": 70.0, "url": "https://www.bol.com/p/1"}])),
+             "10305": (compare.Result("data", data={"retired": "2025", "retail": 349.99}), None),
+             "60400": (compare.Result("missing"), compare.Result("missing"))}
+    asked = []
+
+    async def page(src, num):
+        asked.append((src, num))
+        return pages[num][0 if src == "brickeconomy" else 1]
+    notified = []
+    c.notifier.on_catalog_deal = AsyncMock(side_effect=lambda num, e: notified.append((num, e["price"])))
+    with patch.object(c, "_scan_page", side_effect=page):
+        e = await c.scan_set("76300")
+        assert e["price"] == 70.0 and e["rrp"] == 100.0 and e["deal"] == 30.0 and e["shop"] == "bol"
+        r = await c.scan_set("10305")
+        assert r["retired"] == "2025" and "price" not in r and ("kieskeurig", "10305") not in asked
+        n = await c.scan_set("60400")
+        assert n["miss"] == 1 and "price" not in n and "deal" not in n
+        await hass.async_block_till_done()
+        assert notified == [("76300", 70.0)]
+        await c.scan_set("76300")                                          # same price: not notified again
+        pages["76300"] = (pages["76300"][0], compare.Result("offers", shops=[{"retailer": "bol", "price": 65.0, "url": "u"}]))
+        await c.scan_set("76300")                                          # 7 % cheaper: notified
+        await hass.async_block_till_done()
+        assert notified == [("76300", 70.0), ("76300", 65.0)]
+        assert [x for x in asked if x == ("brickeconomy", "76300")] == [("brickeconomy", "76300")]   # retirement: once a month
+        pages["76300"] = (pages["76300"][0], compare.Result("offers", shops=[{"retailer": "bol", "price": 95.0, "url": "u"}]))
+        await c.scan_set("76300")
+        assert "deal" not in c.scan["76300"] and "notified" not in c.scan["76300"]
+        pages["76300"] = (pages["76300"][0], compare.Result("offers", shops=[{"retailer": "bol", "price": 70.0, "url": "u"}]))
+        await c.scan_set("76300")
+    assert sorted(c.scan_candidates()) == ["60400", "76300"]              # retired and old: out
+
+    cat = c.catalog(status="deal")
+    assert [x["set_number"] for x in cat["items"]] == ["76300"] and cat["items"][0]["discount"] == 30.0
+    assert cat["items"][0]["shop"] == "bol.com" and cat["scan"]["counts"]["deal"] == 1 and cat["scan"]["counts"]["retired"] == 1
+    assert [x["set_number"] for x in c.catalog(status="retired")["items"]] == ["10305"]
+    assert [x["set_number"] for x in c.catalog(q="bonsai")["items"]] == ["10281"]
+    assert c.catalog(sort="new")["items"][0]["year"] == year and c.catalog()["total"] == 4
+    await c.add_set("76300", discover=False)                                # followed now: shown with its own prices
+    assert c.catalog(q="batman")["items"][0]["status"] == "followed"
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/catalog", "status": "retired"})
+    res = (await ws.receive_json())["result"]
+    assert [x["set_number"] for x in res["items"]] == ["10305"] and res["count"] == 4
+
+    # the tick looks up one due set in the background, then waits 86400 / sets-per-day seconds
+    c.scan_info["next"] = 0
+    with patch.object(c, "scan_set", AsyncMock()) as one:
+        c.scan_tick()
+        await hass.async_block_till_done(wait_background_tasks=True)
+        one.assert_awaited_once_with("60400")
+        assert not c.scan_info["busy"] and c.scan_info["next"] > time.time() + 200
+        c.scan_tick()
+        assert one.await_count == 1
+
+    # comparison sites switched off: no price lookups; the setting is validated
+    from custom_components.lego_tracker.i18n import LocalizedError
+    for bad in (7, 100.7, "nan", "inf", "x", None):
+        with pytest.raises(LocalizedError):
+            c.settings_validate({"catalog_scan": bad})
+    assert c.settings_validate({"catalog_scan": "600"})["catalog_scan"] == 600
+    assert c.settings_validate({"catalog_scan": 0})["catalog_scan"] == 0
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare_sites": False, "catalog_scan": 600})
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][entry.entry_id]
+    assert c.scan_per_day == 600 and c._scan_source("76300") is None
+
+
+async def test_scan_page_follows_and_handles_errors(hass: HomeAssistant, entry, no_network):
+    """A comparison site's search page is followed to the product page; a refused page gives None (and the
+    search page's prices when it had any), a missing page 'missing'."""
+    from custom_components.lego_tracker import compare
+
+    c = await _setup(hass, entry)
+    answers = [(200, "<search>", None), (200, "<product>", None)]
+    results = [compare.Result("follow", url="https://www.kieskeurig.be/lego/123", shops=[{"retailer": "bol", "price": 80.0}]),
+               compare.Result("offers", shops=[{"retailer": "bol", "price": 79.0}])]
+    with patch.object(c.fetcher, "get_page", AsyncMock(side_effect=lambda *a, **k: answers.pop(0))), \
+         patch.object(compare, "parse", side_effect=lambda *a, **k: results.pop(0)), \
+         patch.object(compare, "is_compare_url", return_value=True):
+        res = await c._scan_page("kieskeurig", "76300")
+        assert res.kind == "offers" and res.shops[0]["price"] == 79.0
+        answers[:] = [(200, "<search>", None), (403, "", "blocked (HTTP 403)")]
+        results[:] = [compare.Result("follow", url="https://www.kieskeurig.be/lego/123", shops=[{"retailer": "bol", "price": 80.0}])]
+        res = await c._scan_page("kieskeurig", "76300")
+        assert res.kind == "offers" and res.shops[0]["price"] == 80.0
+        answers[:] = [(503, "", "busy")]
+        assert await c._scan_page("kieskeurig", "76300") is None and "busy" in c.scan_info["error"]
+        answers[:] = [(404, "", None)]
+        assert (await c._scan_page("kieskeurig", "76300")).kind == "missing"
+    assert c.scan_info["today"] == 6
+
+
+async def test_catalog_deal_notification_rule(hass: HomeAssistant, entry, no_network):
+    """A deal on a set you don't follow is sent to rules with that trigger, a theme rule only for its themes."""
+    c = await _setup(hass, entry)
+    c.setdb = {"76300": ["New Batman set", 2026, "Batman", "", 500, "https://img/1.jpg"]}
+    sent = []
+
+    async def fake_send(rule, title, message, **kw):
+        sent.append((rule["id"], title, message, kw.get("url")))
+    c.notifier.send = fake_send
+    c.notifier.rules[:] = [{"id": "a", "enabled": True, "scope": {"type": "all"}, "triggers": ["catalog_deal"], "params": {}, "shops": []},
+                           {"id": "t", "enabled": True, "scope": {"type": "themes", "themes": ["Icons"]}, "triggers": ["catalog_deal"],
+                            "params": {}, "shops": []},
+                           {"id": "n", "enabled": True, "scope": {"type": "all"}, "triggers": ["new_set"], "params": {}, "shops": []}]
+    await c.notifier.on_catalog_deal("76300", {"price": 70.0, "shop": "bol", "url": "https://www.bol.com/p/1", "rrp": 100.0, "deal": 30.0})
+    assert len(sent) == 1 and sent[0][0] == "a" and "76300" in sent[0][1] and "70.00" in sent[0][2] and "30%" in sent[0][2]
+    assert sent[0][3] == "https://www.bol.com/p/1"

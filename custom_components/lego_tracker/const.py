@@ -6,7 +6,7 @@ STORAGE_KEY = f"{DOMAIN}.data"
 STORAGE_VERSION = 1
 
 PANEL_URL = "lego-tracker"
-API_LEVEL = 3          # raise together with API_LEVEL in the panel when the panel needs new server commands
+API_LEVEL = 5          # raise together with API_LEVEL in the panel when the panel needs new server commands
 PANEL_ELEMENT = "lego-tracker-panel"
 STATIC_URL = f"/{DOMAIN}_static"
 
@@ -27,6 +27,7 @@ CONF_RELAY_HOURS = "relay_hours"
 DEFAULT_RELAY_HOURS = 6
 CONF_COMPARE = "compare_sites"              # price-comparison sites as extra price sources (on by default)
 CONF_MARKET = "market_value"               # market value + retirement date, once a day per set
+CONF_SCAN = "catalog_scan"                 # deals on every LEGO set: how many sets are looked up per day (0 = off)
 CONF_DEAL_FILTER = "deal_filter"           # Deals → Settings: themes switched off, price / discount / pieces limits
 DEAL_FILTER_DEFAULT = {"themes_off": [], "min_price": None, "max_price": None, "min_discount": None,
                        "min_pieces": None, "max_pieces": None, "skip_owned": False, "skip_retired": False}

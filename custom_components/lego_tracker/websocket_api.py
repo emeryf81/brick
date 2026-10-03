@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -120,6 +121,9 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_notify_test)
     websocket_api.async_register_command(hass, ws_dev_tool)
     websocket_api.async_register_command(hass, ws_ticker)
+    websocket_api.async_register_command(hass, ws_new_sets)
+    websocket_api.async_register_command(hass, ws_catalog)
+    websocket_api.async_register_command(hass, ws_setdb_search)
     hass.http.register_view(UserscriptView())
     hass.http.register_view(RelayView())
 
@@ -136,6 +140,7 @@ def ws_overview(hass, connection, msg):
 
     connection.send_result(msg["id"], {
         "version": VERSION, "api": API_LEVEL, "transport": coord.fetcher.transport,
+        "new_sets_week": sum(1 for ts in coord.store.get("new_sets", {}).values() if time.time() - ts < 7 * 86400),
         "threshold": coord.threshold,
         "themes": coord.all_themes(),
         "retailers": {k: v[0] for k, v in RETAILERS.items()},
@@ -774,3 +779,47 @@ async def ws_ticker(hass, connection, msg):
         connection.send_result(msg["id"], {"items": [], "news": []})
         return
     connection.send_result(msg["id"], await coord.ticker_data(msg["lang"]))
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/new_sets"})
+@callback
+def ws_new_sets(hass, connection, msg):
+    """Deals → New sets: sets that appeared in the LEGO set database."""
+    coord = _coord(hass)
+    if coord is None:
+        connection.send_result(msg["id"], {"items": [], "count": 0})
+        return
+    connection.send_result(msg["id"], coord.new_sets())
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/catalog", vol.Optional("q", default=""): vol.All(str, vol.Length(max=80)),
+                                  vol.Optional("theme", default=""): vol.All(str, vol.Length(max=80)),
+                                  vol.Optional("status", default=""): vol.In(["", "deal", "sale", "none", "unknown", "retired", "followed"]),
+                                  vol.Optional("sort", default="deal"): vol.In(["deal", "new", "price", "name"]),
+                                  vol.Optional("offset", default=0): vol.All(int, vol.Range(min=0, max=100000)),
+                                  vol.Optional("limit", default=120): vol.All(int, vol.Range(min=1, max=500))})
+@callback
+def ws_catalog(hass, connection, msg):
+    """Deals → All LEGO sets: the whole set database with prices, deals and retirement."""
+    coord = _coord(hass)
+    if coord is None:
+        connection.send_result(msg["id"], {"items": [], "total": 0, "count": 0, "themes": [], "scan": {}})
+        return
+    connection.send_result(msg["id"], coord.catalog(msg["q"], msg["theme"], msg["status"], msg["sort"], msg["offset"], msg["limit"]))
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/setdb/search", vol.Required("q"): vol.All(str, vol.Length(max=80)),
+                                  vol.Optional("limit", default=20): vol.All(int, vol.Range(min=1, max=50))})
+@callback
+def ws_setdb_search(hass, connection, msg):
+    """Add a set: search the LEGO set database by number or name."""
+    from .setdb import as_set, search
+
+    coord = _coord(hass)
+    if coord is None:
+        connection.send_result(msg["id"], {"items": []})
+        return
+    nums = search(coord.setdb, msg["q"], msg["limit"])
+    connection.send_result(msg["id"], {"items": [{**as_set(n, coord.setdb[n]), "tracked": n in coord.store["sets"],
+                                                  "owned": n in coord.store["collection"]} for n in nums],
+                                       "count": len(coord.setdb)})

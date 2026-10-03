@@ -38,6 +38,8 @@ TRIGGERS: dict[str, tuple[str, bool, str | None]] = {
     "back_in_stock": ("Back in stock / first price", True, None),
     "any_change": ("Any price change", True, None),
     "digest": ("Daily digest", False, None),
+    "new_set": ("New LEGO set announced", False, None),
+    "catalog_deal": ("Deal on a set you don't follow", False, None),
     "job_done": ("Job finished (refresh, link search…)", False, None),
     "problems": ("Problems (shop paused, errors)", False, None),
 }
@@ -281,6 +283,56 @@ class Notifier:
             more = "\n" + tr("… and {n} more", n=len(deals) - 15) if len(deals) > 15 else ""
             await self.send(rule, "🧱 " + tr("LEGO deals today ({n})", n=len(deals)), "\n".join(lines) + more,
                             data={"deals": [d["set_number"] for d in deals]}, notification_id=f"{DOMAIN}_digest_{rule['id']}")
+
+    async def on_new_sets(self, nums: list[str]) -> None:
+        """New sets in the LEGO set database (themes switched off under Deals → Settings are already left out).
+        A rule for certain themes only hears about new sets in those themes."""
+        from .parsers import lego_product_url
+        from .setdb import THEME, as_set
+
+        db = self.coord.setdb
+        for rule in self.rules:
+            if not rule.get("enabled") or "new_set" not in rule["triggers"]:
+                continue
+            sc = rule["scope"]
+            mine = [n for n in nums if n in db and (sc["type"] != "themes" or db[n][THEME] in sc.get("themes", []))]
+            if not mine:
+                continue
+            sets = [as_set(n, db[n]) for n in mine]
+            lines = [f"• {x['set_number']} {x['name']}" + (f" ({x['theme']}, {x['year']}, " + tr("{n} pieces", n=x["pieces"]) + ")"
+                                                          if x["theme"] and x["pieces"] else "") for x in sets[:15]]
+            more = "\n" + tr("… and {n} more", n=len(sets) - 15) if len(sets) > 15 else ""
+            title = "🆕 " + (tr("New LEGO set: {name}", name=f"{sets[0]['set_number']} {sets[0]['name']}") if len(sets) == 1
+                             else tr("{n} new LEGO sets", n=len(sets)))
+            await self.send(rule, title, "\n".join(lines) + more, url=lego_product_url(sets[0]["set_number"]) if len(sets) == 1 else None,
+                            image=sets[0]["image"] if len(sets) == 1 and rule.get("image") else None,
+                            data={"new_sets": mine}, notification_id=f"{DOMAIN}_new_sets_{rule['id']}")
+
+    async def on_catalog_deal(self, num: str, e: dict[str, Any]) -> None:
+        """A deal found on a set of the LEGO set database that you don't follow (Deals → All LEGO sets).
+        A rule for certain themes only hears about those themes; switched-off themes never get here."""
+        from .setdb import as_set
+
+        db = self.coord.setdb
+        if num not in db or not e.get("price"):
+            return
+        x = as_set(num, db[num])
+        shop = RETAILERS.get(e.get("shop"), (e.get("shop") or "",))[0]
+        text = tr("€{price} at {shop}", price=f"{e['price']:.2f}", shop=shop)
+        if e.get("rrp") and e.get("deal") is not None:
+            text += " · " + tr("{pct}% below RRP (€{rrp})", pct=f"{e['deal']:.0f}", rrp=f"{e['rrp']:.2f}")
+        if x["theme"]:
+            text += f"\n{x['theme']}" + (f", {x['year']}" if x["year"] else "")
+        for rule in self.rules:
+            if not rule.get("enabled") or "catalog_deal" not in rule["triggers"]:
+                continue
+            sc = rule["scope"]
+            if sc["type"] == "themes" and x["theme"] not in sc.get("themes", []):
+                continue
+            await self.send(rule, "🏷️ " + tr("Deal: {name}", name=f"{num} {x['name']}"), text, url=e.get("url"),
+                            image=x["image"] if rule.get("image") else None,
+                            data={"set_number": num, "price": e["price"], "retailer": e.get("shop"), "discount": e.get("deal")},
+                            notification_id=f"{DOMAIN}_catalog_{num}_{rule['id']}")
 
     async def on_job_done(self, job: dict[str, Any]) -> None:
         label = tr(job.get("label") or "Job")
