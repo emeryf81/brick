@@ -67,7 +67,7 @@ def _card(coord, num: str, with_history: bool = False) -> dict[str, Any]:
                   "available": o.get("available"), "error": o.get("error"), "checked": o.get("last_checked"),
                   "low": min((p for _, p in o.get("history", [])), default=None),
                   "title": o.get("title"), "link_status": o.get("link_status"), "link_reason": o.get("link_reason"),
-                  "via": o.get("last_via") if o.get("available") else None,
+                  "via": o.get("last_via") if o.get("available") else None, "found_via": o.get("found_via"),
                   "ignored": bool(o.get("error") and o.get("ignored_error") == o.get("error"))}
             for rid, o in offers.items() if rid in RETAILERS
         },
@@ -110,6 +110,7 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_logs_export)
     websocket_api.async_register_command(hass, ws_report)
     websocket_api.async_register_command(hass, ws_shop_detail)
+    websocket_api.async_register_command(hass, ws_shop_sitemap)
     websocket_api.async_register_command(hass, ws_notify_set)
     websocket_api.async_register_command(hass, ws_notify_test)
     hass.http.register_view(UserscriptView())
@@ -545,6 +546,20 @@ def ws_shop_detail(hass, connection, msg):
         connection.send_error(msg["id"], "not_found", "Unknown shop")
         return
     connection.send_result(msg["id"], coord.shop_detail(msg["retailer"]))
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/shop/sitemap", vol.Required("retailer"): str})
+@callback
+def ws_shop_sitemap(hass, connection, msg):
+    """Read a shop's sitemap now (in the background) and link the sets found there."""
+    coord = _coord(hass)
+    try:
+        coord.start_sitemap(msg["retailer"])
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid", str(err))
+        return
+    connection.send_result(msg["id"], {"started": True})
 
 
 _CLIENT_ERRORS: list[float] = []

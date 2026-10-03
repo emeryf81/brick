@@ -429,9 +429,13 @@ class LegoTrackerPanel extends HTMLElement {
     const queue = rel.enabled === false ? t("Browser relay is off (Settings)") : t("Waiting: {a} links without a price · {b} searches for sets without any price · {c} links the server can't fetch", { a: q.no_price || 0, b: q.search || 0, c: q.server_fails || 0 });
     return `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${local}${remote}<span class="hsp" style="flex:1"></span>
       <button class="btn sm${on ? " ghost" : ""}" id="contgo" ${here && here.token && rel.enabled !== false ? "" : "disabled"}>${on ? `■ ${t("Switch off in this browser")}` : `▶ ${t("Switch on in this browser")}`}</button></div>
-      <div class="muted" style="font-size:13px;margin-top:6px">${queue}</div>${now}`;
+      <div class="muted" style="font-size:13px;margin-top:6px">${queue}</div>${now}
+      <label class="chk" style="display:flex;gap:8px;align-items:flex-start;margin-top:10px" title="${esc(t("Needs the userscript version that asks for the right to open tabs; Tampermonkey asks you to confirm when it updates."))}"><input type="checkbox" id="rendertabs" ${here && here.render ? "checked" : ""} ${here && here.token ? "" : "disabled"}>
+        <span>${t("Search shops that build their results with JavaScript (e.g. Smyths) in a background tab")}<br><span class="muted" style="font-size:12px">${t("A tab opens in the background for a few seconds, the script reads the finished page and the tab closes again. At most one search per shop every 2 minutes.")}</span></span></label>`;
   }
   bindCont(box) {
+    const rt = box.querySelector("#rendertabs");
+    if (rt) rt.onchange = () => { window.postMessage({ source: "lego-tracker-panel", type: "render-set", on: rt.checked }, "*"); this.toast(rt.checked ? t("Background tabs switched on in this browser") : t("Background tabs switched off"), "ok"); };
     const b = box.querySelector("#contgo"); if (!b) return;
     b.onclick = () => {
       const run = this.state.contRun || {}, here = this.state.relayHere || {}, on = run.on != null ? run.on : !!here.continuous;
@@ -1493,7 +1497,8 @@ class LegoTrackerPanel extends HTMLElement {
     setTimeout(() => this.relayPing(), 50);
     const how = [t("Links that never had a price come first."), t("Then sets without any price: the shops that have no link yet are searched in your browser; a product found there is linked and fetched right away."),
       t("Then links the server can't fetch (blocked, paused, errors), each at most every 6 hours."), t("Calm: every site at most twice a minute, a search at most once every 2 minutes per site, 4–9 s between pages; a site that blocks your browser twice is left alone for an hour."),
-      t("Prices from your browser get the mark ⓤ next to the price (set → Shops, and on the cards).")];
+      t("Prices from your browser get the mark ⓤ next to the price (set → Shops, and on the cards)."),
+      t("Shops whose search is built with JavaScript (e.g. Smyths) can be searched in a background tab: switch it on below.")];
     return `<div class="panel"><h3>♾️ ${t("Continuous check")}</h3><p>${t("The userscript can also keep checking by itself, as long as a Home Assistant tab is open in that browser. It focuses on what the server can't do:")}</p>
       <ol style="margin:0 0 10px;padding-left:20px">${how.map((x) => `<li>${x}</li>`).join("")}</ol><div id="contbox">${this.contBoxInner()}</div></div>
       <div class="panel"><h3>🔁 ${t("Browser relay")}</h3><p>${t("While Home Assistant is open in a browser with the userscript, that browser fetches the shop pages that fail on the server (for example bol.com) in the background, calmly one by one, and sends the prices to Home Assistant. It runs automatically at most every few hours (Settings), or now with the button.")}</p><div id="relaybox">${this.relayBoxInner()}</div></div>
@@ -1925,7 +1930,7 @@ class LegoTrackerPanel extends HTMLElement {
         <td><input class="ou" data-orig="" placeholder="${t("product URL, ASIN or search URL")}" title="${t("Paste the product page (or an Amazon ASIN) and save, or paste a search page of this shop and press 🔎 Find: the set is then looked for on that page.")}"></td><td class="num"><input class="op" type="number" min="0" step="0.01" data-orig="" placeholder="€" disabled title="${t("Add a link first")}"></td><td class="oact">${fetchBtn(rid, false)}</td></tr>`;
       const autoP = o.manual_price != null ? o.auto_price : o.price;
       return `<tr class="orow${focus === rid ? " focus" : ""}" data-rid="${rid}"><td><b>${esc(o.label)}</b>${p} ${lk(o)}${o.title ? `<div class="muted" style="font-size:12px;max-width:240px">${esc(o.title.slice(0, 90))}</div>` : ""}${o.link_status === "suspect" ? `<div class="err">${esc(tx(o.link_reason || ""))}</div>` : ""}${o.error ? `<div class="err">${esc(tx(o.error))}${o.ignored ? ` <span class="muted">(${t("ignored")})</span>` : ""}</div>` : ""}</td>
-        <td><div style="display:flex;gap:6px;align-items:center">${o.manual_url ? man : auto}${o.url ? `<a href="${esc(o.url)}" target="_blank" rel="noopener noreferrer" data-stop style="font-size:12px;white-space:nowrap">${t("open")} ↗</a>` : ""}</div><input class="ou" value="${esc(o.url || "")}" data-orig="${esc(o.url || "")}" placeholder="${t("empty = search automatically")}" style="margin-top:4px"></td>
+        <td><div style="display:flex;gap:6px;align-items:center">${o.manual_url ? man : auto}${o.found_via === "sitemap" ? `<span class="abadge" title="${esc(t("Found in the shop's sitemap"))}">🗺</span>` : ""}${o.url ? `<a href="${esc(o.url)}" target="_blank" rel="noopener noreferrer" data-stop style="font-size:12px;white-space:nowrap">${t("open")} ↗</a>` : ""}</div><input class="ou" value="${esc(o.url || "")}" data-orig="${esc(o.url || "")}" placeholder="${t("empty = search automatically")}" style="margin-top:4px"></td>
         <td class="num"><div>${o.manual_price != null ? man : auto} ${o.price != null ? `<b class="${o.price === cheapest ? "ok" : ""}">${EUR(o.price)}</b>${viaBadge(o.via)}` : "–"}</div>
           <input class="op" type="number" min="0" step="0.01" value="${o.manual_price ?? ""}" data-orig="${o.manual_price ?? ""}" placeholder="${autoP != null ? EUR(autoP) : t("auto")}" title="${t("empty = automatic price")}" style="margin-top:4px">
           <div class="muted" style="font-size:11px;margin-top:2px">${o.manual_price != null ? t("shop: {price}", { price: EUR(autoP) }) + " · " : ""}${t("low {price}", { price: EUR(o.low) })} · ${ago(o.checked)}</div></td>
@@ -2047,7 +2052,7 @@ class LegoTrackerPanel extends HTMLElement {
     const scroll = dlg.open ? dlg.scrollTop : 0, r = d.stats || {};
     const at = (ts) => (ts ? `${DATE(ts, { day: "numeric", month: "short" })} ${TIME(ts)}` : "–");
     const secs = (x) => (x > 0 ? t("in {s} s", { s: Math.ceil(x) }) : t("now"));
-    const kind = { page: t("price page"), search: t("search") };
+    const kind = { page: t("price page"), search: t("search"), sitemap: t("sitemap") };
     const trace = d.trace.length ? `<div class="tscroll"><table class="tbl"><tr><th>${t("When")}</th><th>${t("What")}</th><th>HTTP</th><th>${t("Size")}</th><th>${t("Result")}</th></tr>${d.trace.map((x) => `<tr><td style="white-space:nowrap">${at(x.ts)}<div class="muted" style="font-size:11px">${x.ms} ms</div></td>
         <td>${esc(kind[x.kind] || x.kind)}${x.set_number ? ` <b>${esc(x.set_number)}</b>` : ""}<div style="font-size:11px;word-break:break-all"><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url.replace(/^https?:\/\/(www\.)?/, "").slice(0, 90))}</a></div></td>
         <td class="num ${x.status >= 400 || !x.status ? "err" : ""}">${x.status ?? "–"}</td><td class="num">${x.size ? `${Math.round(x.size / 1024)} kB` : "–"}</td>
@@ -2058,12 +2063,17 @@ class LegoTrackerPanel extends HTMLElement {
         <div class="muted" style="font-size:12px;margin-top:4px">🔄 ${t("Updates every 5 seconds")} · ${t("updated {time}", { time: TIME(d.now) })}</div></div><div><button class="x" id="x" aria-label="${t("Close")}">✕</button></div></div>
       <div class="dbody">${d.hints.length ? `<div class="panel" style="background:var(--lt-soft)"><h3 style="margin-top:0">🩺 ${t("Diagnosis")}</h3><ul style="margin:0;padding-left:18px">${d.hints.map((h) => `<li>${esc(tx(h))}</li>`).join("")}</ul></div>` : ""}
         <div class="pstats">${kv(t("Links"), r.offers ?? 0)}${kv(t("With a price"), r.ok ?? 0)}${kv(t("Errors"), r.errors ?? 0)}${kv(t("Cheapest for"), t("{n} sets", { n: r.cheapest ?? 0 }))}${kv(t("Last success"), ago(r.last_ok))}${kv(t("Blocks in a row"), d.blocks)}${kv(t("Last request"), at(d.last_request))}${kv(t("Next request possible"), secs(d.next_free))}${kv(t("Next search possible"), secs(d.next_search))}</div>
-        ${d.search ? `<p class="muted" style="font-size:12px;margin:10px 0 0">${t("Search URL")}: <code style="word-break:break-all">${esc(d.search)}</code></p>` : ""}
+        ${d.search ? `<p class="muted" style="font-size:12px;margin:10px 0 0">${t("Search URL")}: <code style="word-break:break-all">${esc(d.search)}</code>${d.js ? ` · ⚠ ${t("built with JavaScript")}` : ""}</p>` : ""}
+        ${d.sitemap_ok ? `<div class="panel" style="margin:12px 0 0"><h3 style="margin-top:0">🗺 ${t("Sitemap of the shop")}<span class="hsp"></span><button class="btn ghost sm" id="smgo" ${d.sitemap.busy ? "disabled" : ""}>↻ ${t("Read the sitemap now")}</button></h3>
+          <p class="muted" style="font-size:13px;margin:0">${t("Shops list all their product pages for search engines. The integration reads that list once a week and links every set whose product page it finds there, also when the shop's search doesn't work.")}</p>
+          <div class="pstats">${kv(t("Last read"), d.sitemap.ts ? at(d.sitemap.ts) : t("not yet"))}${kv(t("LEGO product pages"), d.sitemap.count)}${kv(t("Files read"), d.sitemap.files ?? "–")}${kv(t("Links from the sitemap"), d.sitemap.linked)}</div>
+          ${d.sitemap.busy ? `<p class="muted" style="font-size:12px">${t("Reading… (calmly, one file at a time)")}</p>` : ""}${d.sitemap.error ? `<p class="err" style="font-size:12px">${esc(tx(d.sitemap.error))}</p>` : ""}</div>` : ""}
         <h3>📡 ${t("Last requests")}</h3>${trace}
         <h3>📜 ${t("Logbook")}</h3>${log}</div>`;
     if (!dlg.open) dlg.showModal();
     dlg.scrollTop = scroll;
     dlg.querySelector("#x").onclick = () => { clearInterval(this._shopTimer); this.closeDialog(); };
+    const sm = dlg.querySelector("#smgo"); if (sm) sm.onclick = () => this.busy(sm, "…", async () => { await this._hass.callWS({ type: "lego_tracker/shop/sitemap", retailer: rid }); this.toast(t("The sitemap is read in the background; new links appear here and in the logbook."), "ok"); this.openShop(rid); });
     dlg.querySelectorAll("[data-set]").forEach((el) => el.onclick = () => { clearInterval(this._shopTimer); this.openSet(el.dataset.set); });
     this._shopTimer = setInterval(() => { if (!dlg.open || !dlg.querySelector("#x") || !this.isConnected) { clearInterval(this._shopTimer); return; } this.openShop(rid); }, 5000);
   }

@@ -15,7 +15,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.event import async_track_time_change, async_track_time_interval
+from homeassistant.helpers.event import async_call_later, async_track_time_change, async_track_time_interval
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -153,6 +153,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if coord.refresh_mode == "spread":
         coord.start_spread()
+    # product links from the shops' sitemaps: first look 15 minutes after start, then every 6 hours (weekly per shop)
+    entry.async_on_unload(async_call_later(hass, 900, coord.sitemap_tick))
+    entry.async_on_unload(async_track_time_interval(hass, coord.sitemap_tick, timedelta(hours=6)))
     if coord.auto_refresh:
         for hour, minute in coord.refresh_times:
             entry.async_on_unload(async_track_time_change(hass, _scheduled_refresh, hour, minute, 0))

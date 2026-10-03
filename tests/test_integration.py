@@ -1598,3 +1598,84 @@ async def test_continuous_check_priorities_search_and_via(hass: HomeAssistant, e
     body = await r.json()
     assert body["follow"][0]["url"] == "https://www.bol.com/nl/nl/p/lego-technic-ferrari-daytona-sp3-42143/9300000088/"
     assert offers["42143"]["bol"]["url"] == body["follow"][0]["url"]                # linked: the browser fetches it next
+
+
+def test_sitemap_parsing_and_matching():
+    import gzip as _gz
+
+    from custom_components.lego_tracker import sitemaps
+
+    assert sitemaps.robots_sitemaps("User-agent: *\nSitemap: https://www.smythstoys.com/be/sitemap.xml\n") == ["https://www.smythstoys.com/be/sitemap.xml"]
+    index = '<sitemapindex><sitemap><loc>https://x.be/sitemap-cms.xml</loc></sitemap><sitemap><loc>https://x.be/sitemap-products-1.xml.gz</loc></sitemap></sitemapindex>'
+    kids, pages = sitemaps.parse(index)
+    assert pages == [] and sitemaps.order_children(kids)[0].endswith("products-1.xml.gz")
+    urlset = ('<urlset><url><loc>https://www.smythstoys.com/be/nl-be/speelgoed/lego/lego-icons-10368-chrysant/p/236401</loc></url>'
+              '<url><loc>https://www.smythstoys.com/be/nl-be/speelgoed/lego/led-verlichting-voor-lego-10368/p/999001</loc></url>'
+              '<url><loc>https://www.smythstoys.com/be/nl-be/speelgoed/playmobil/71234-boot/p/111</loc></url>'
+              '<url><loc>https://www.smythstoys.com/be/nl-be/speelgoed/lego/lego-city-60510-brandweer/p/10368</loc></url></urlset>')
+    assert sitemaps.body_text(_gz.compress(urlset.encode())) == urlset                   # .xml.gz files
+    urls = sitemaps.lego_urls(sitemaps.parse(urlset)[1], "smythstoys.com")
+    assert len(urls) == 3                                                                 # no Playmobil
+    assert sitemaps.match(urls, "10368").endswith("lego-icons-10368-chrysant/p/236401")   # not the LED kit, not product code 10368
+    assert sitemaps.match(urls, "60510").endswith("/p/10368")
+    assert sitemaps.match(urls, "42143") is None
+
+
+async def test_links_from_sitemap_ean_and_redirect(hass: HomeAssistant, entry, no_network):
+    from custom_components.lego_tracker.client import Fetcher
+
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10368"}, blocking=True)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "60510"}, blocking=True)
+    files = {
+        "https://www.dreamland.be/robots.txt": b"Sitemap: https://www.dreamland.be/sitemap_index.xml",
+        "https://www.dreamland.be/sitemap_index.xml": b"<sitemapindex><sitemap><loc>https://www.dreamland.be/sitemap_products.xml</loc></sitemap></sitemapindex>",
+        "https://www.dreamland.be/sitemap_products.xml": b"<urlset><url><loc>https://www.dreamland.be/e/nl/dl/lego-icons-chrysant-10368-123456</loc></url></urlset>",
+    }
+
+    async def get_raw(rid, url):
+        return (200, files[url], None) if url in files else (404, b"", "HTTP error 404")
+    with patch.object(c.fetcher, "get_raw", get_raw):
+        res = await c.refresh_sitemap("dreamland_be")
+    assert res == {"urls": 1, "files": 2, "found": 1}          # the index + the product file (robots.txt aside)
+    assert c.store["offers"]["10368"]["dreamland_be"]["url"] == "https://www.dreamland.be/e/nl/dl/lego-icons-chrysant-10368-123456"
+    assert c.store["offers"]["10368"]["dreamland_be"]["found_via"] == "sitemap"
+    # a rejected link is never taken from the sitemap again
+    del c.store["offers"]["10368"]["dreamland_be"]
+    c.store.setdefault("rejected", {})["10368"] = ["/e/nl/dl/lego-icons-chrysant-10368-123456"]
+    assert c.sitemap_link("dreamland_be", "10368") is None
+
+    # EAN fallback (in a job): the search for the number finds nothing, the EAN search does
+    c.store["sets"]["60510"]["ean"] = "5702017583556"
+    seen = []
+
+    async def discover(retailer, num, force=False, url=None):
+        seen.append(url)
+        return "https://www.kruidvat.be/nl/lego-city-60510/p/123" if url and "5702017583556" in url else None
+    c.job = {"running": True, "shops": {}}
+    with patch.object(c.fetcher, "discover", discover):
+        await c.discover_set("60510", ["kruidvat_be"])
+    c.job = None
+    assert seen[-1].endswith("text=5702017583556") and c.store["offers"]["60510"]["kruidvat_be"]["url"].endswith("/p/123")
+
+    # a search that jumps straight to the product page (redirect) is taken
+    f = Fetcher(None, use_impersonation=False)
+    f.final_url["kruidvat_be"] = "https://www.kruidvat.be/nl/lego-city-brandweerkazerne-60510/p/777"
+    page = "<html><title>LEGO City 60510 Brandweerkazerne | Kruidvat</title></html>"
+    assert f._landed_on_product("kruidvat_be", "https://www.kruidvat.be/nl/search?text=60510", page, "60510").endswith("/p/777")
+    assert f._landed_on_product("kruidvat_be", "https://www.kruidvat.be/nl/search?text=60510", page.replace("60510", "1"), "60510") is None
+
+
+async def test_rendered_search_page_from_background_tab(hass: HomeAssistant, entry, no_network):
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10368"}, blocking=True)
+    # the server saw a JavaScript search page: the shop is marked, the continuous check asks for a background tab
+    c.fetcher.discover_error["dreamland_be"] = "the search page does not contain 10368: this shop probably loads its results with JavaScript. Paste the product page URL instead."
+    c._note_js("dreamland_be")
+    item = next(i for i in c.continuous_items(50)["items"] if i.get("kind") == "search" and i["retailer"] == "dreamland_be")
+    assert item["render"] is True
+    html = '<div><a href="/e/nl/dl/lego-icons-chrysant-10368-123456"><span>LEGO Icons 10368 Chrysant</span></a></div>'
+    res = c.relay_result({"kind": "search", "rendered": True, "retailer": "dreamland_be", "set_number": "10368",
+                          "url": item["url"], "status": 200, "html": html})
+    assert res["url"] == "https://www.dreamland.be/e/nl/dl/lego-icons-chrysant-10368-123456"
+    assert c.store["offers"]["10368"]["dreamland_be"]["url"] == res["url"]

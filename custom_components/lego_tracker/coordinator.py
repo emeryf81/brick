@@ -34,7 +34,7 @@ from .models import (
 from .i18n import DEFAULT_LANGUAGE, LANGUAGES, LocalizedError, T, resolve, set_language
 from .notifications import Notifier, default_rules
 from .bol_api import BolApi, BolApiError
-from . import catalog, compare
+from . import catalog, sitemaps, compare
 from .shops import all_domains, domain_of
 from .parsers import Parsed, title_check
 from .shops import SEARCH, valid_search
@@ -931,7 +931,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # a product page or ASIN is the link; the same page keeps its history, a manual price stays
                 self.update_offer(num, retailer, url=url)
         if search_page or not (offers.get(retailer) or {}).get("url"):
-            url = await self._discover(retailer, num, force=True, url=search_page)
+            url = await self._discover(retailer, num, force=True, url=search_page) \
+                or (None if search_page else await self._fallback_link(retailer, num))
             rejected = set(self.store.setdefault("rejected", {}).get(num, []))
             if not url or url_key(retailer, url) in rejected:
                 reason = T("found a link you rejected earlier; not linked again") if url else \
@@ -977,7 +978,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def discover_set(self, num: str, retailers: list[str] | None = None) -> dict[str, int]:
         live = retailers if retailers is not None else self._live_retailers(False)
         todo = self._missing(num, live)
-        urls = await asyncio.gather(*(self._discover(r, num) for r in todo))
+        urls = list(await asyncio.gather(*(self._discover(r, num) for r in todo)))
+        for i, rid in enumerate(todo):          # nothing via the search: the shop's sitemap, then (in a job) the EAN
+            if not urls[i]:
+                urls[i] = await self._fallback_link(rid, num, slow=bool(self.job and self.job.get("running")))
         rejected = set(self.store.setdefault("rejected", {}).get(num, []))
         found = 0
         for rid, url in zip(todo, urls):
@@ -1041,6 +1045,121 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return {"enabled": self.relay_enabled, "interval_hours": int(self.opt(self.entry, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS)),
                 "items": [i for _, i in items[:limit]], "total": len(items)}
 
+    # ------------------------------------------------------------ product links from shop sitemaps
+    SITEMAP_EXCLUDE = {"lego_com", "amazon_nl", "amazon_de", "amazon_be", "bol"}   # huge sitemaps / own search works
+
+    def _note_js(self, rid: str) -> None:
+        """Remember shops whose search page is built with JavaScript (the userscript can render it in a tab)."""
+        if "JavaScript" in (self.fetcher.discover_error.get(rid) or ""):
+            first = rid not in self.store.setdefault("shop_js", {})
+            self.store["shop_js"][rid] = time.time()
+            if first:                            # earlier browser searches read an empty page: allow them again
+                searched = self.store.setdefault("relay_searched", {})
+                for k in [k for k in searched if k.endswith("|" + rid)]:
+                    del searched[k]
+
+    async def _fallback_link(self, rid: str, num: str, slow: bool = False) -> str | None:
+        """Other ways to the product page when the shop's search found nothing: its sitemap (no request), and
+        a search for the EAN (barcode), which shops often send straight to the product page."""
+        self._note_js(rid)
+        if (url := self.sitemap_link(rid, num)):
+            self.log("ok", "discover", T("link found in the shop's sitemap"), set_number=num, retailer=rid, url=url)
+            return url
+        ean = str(self.store["sets"].get(num, {}).get("ean") or "")
+        tpl = SEARCH.get(rid)
+        if slow and ean.isdigit() and tpl and rid not in ("lego_com", "bol"):
+            url = await self._discover(rid, num, url=tpl.replace("{query}", ean).replace("{number}", ean))
+            if url:
+                self.log("ok", "discover", T("link found by searching the EAN {ean}", ean=ean), set_number=num, retailer=rid, url=url)
+            return url
+        return None
+
+    def sitemap_shops(self) -> list[str]:
+        return [r for r in self.retailers if r not in self.SITEMAP_EXCLUDE and domain_of(r)]
+
+    def start_sitemap(self, rid: str) -> None:
+        """Shops → a shop → 'Read the sitemap now' (once every 2 minutes per shop, like any manual action)."""
+        if rid not in self.sitemap_shops():
+            raise LocalizedError("This shop has no sitemap to read (or is switched off).")
+        if getattr(self, "_sitemap_busy", False):
+            raise LocalizedError("A sitemap is being read already; try again in a few minutes.")
+        self.manual_gate("site:" + self._site(rid))
+        self._sitemap_busy = True
+        self.entry.async_create_background_task(self.hass, self._sitemap_round([rid]), f"{DOMAIN}_sitemap_{rid}")
+
+    def sitemap_tick(self, _now: Any = None) -> None:
+        """Every few hours: shops whose sitemap is older than a week are read again (in the background)."""
+        if getattr(self, "_sitemap_busy", False):
+            return
+        maps = self.store.setdefault("sitemaps", {})
+        due = [r for r in self.sitemap_shops() if time.time() - (maps.get(r) or {}).get("ts", 0) > sitemaps.REFRESH_DAYS * 86400]
+        if due:
+            self._sitemap_busy = True
+            self.entry.async_create_background_task(self.hass, self._sitemap_round(due), f"{DOMAIN}_sitemaps")
+
+    async def _sitemap_round(self, rids: list[str]) -> None:
+        try:
+            for rid in rids:
+                await self.refresh_sitemap(rid)
+        finally:
+            self._sitemap_busy = False
+            self._save()
+            self.push_update()
+
+    async def refresh_sitemap(self, rid: str) -> dict[str, Any]:
+        """Read the shop's sitemap (robots.txt → index → product files), keep its LEGO product URLs and link
+        every set that has no link at this shop yet."""
+        domain = (domain_of(rid) or "").removeprefix("www.")
+        base = f"https://www.{domain}"
+        status, body, err = await self.fetcher.get_raw(rid, base + "/robots.txt")
+        queue = sitemaps.robots_sitemaps(sitemaps.body_text(body)) if status and status < 400 else []
+        queue = queue or [base + "/sitemap.xml"]
+        seen, urls, files, errors = set(), [], 0, []
+        while queue and files < sitemaps.MAX_FILES:
+            url = queue.pop(0)
+            if url in seen:
+                continue
+            seen.add(url)
+            files += 1
+            status, body, err = await self.fetcher.get_raw(rid, url)
+            if err or not body:
+                errors.append(url + ": " + (err or T("empty response")))
+                if err and err.startswith("paused"):
+                    break
+                continue
+            children, pages = sitemaps.parse(sitemaps.body_text(body))
+            queue = sitemaps.order_children(children) + queue
+            urls += sitemaps.lego_urls(pages, domain)
+        urls = list(dict.fromkeys(urls))[:sitemaps.MAX_URLS]
+        self.store.setdefault("sitemaps", {})[rid] = {"ts": time.time(), "files": files, "urls": urls,
+                                                      "error": errors[-1] if errors and not urls else None}
+        found = self.sitemap_link_all(rid)
+        self.log("ok" if urls else "warning", "discover",
+                 T("sitemap read: {n} LEGO product pages, {found} new links", n=len(urls), found=found) if urls
+                 else T("sitemap: no LEGO product pages found ({error})", error=(errors[-1] if errors else T("no sitemap"))[:160]),
+                 retailer=rid, source="server")
+        return {"urls": len(urls), "files": files, "found": found}
+
+    def sitemap_link(self, rid: str, num: str) -> str | None:
+        urls = (self.store.get("sitemaps", {}).get(rid) or {}).get("urls") or []
+        url = sitemaps.match(urls, num) if urls else None
+        if url and url_key(rid, url) in set(self.store.setdefault("rejected", {}).get(num, [])):
+            return None
+        return url
+
+    def sitemap_link_all(self, rid: str) -> int:
+        """Link every set without a link at this shop to its product page in the sitemap (no requests)."""
+        found = 0
+        for num in self.store["sets"]:
+            offers = self.store["offers"].setdefault(num, {})
+            if (offers.get(rid) or {}).get("url"):
+                continue
+            if url := self.sitemap_link(rid, num):
+                offers[rid] = {"url": url, "history": [], "found": time.time(), "found_via": "sitemap"}
+                self.log("ok", "discover", T("link found in the shop's sitemap"), set_number=num, retailer=rid, url=url, source="server")
+                found += 1
+        return found
+
     # ------------------------------------------------------------ continuous check (userscript)
     RELAY_SEARCH_DAYS = 7          # a set/shop searched by the browser without result: not again for a week
     RELAY_FAIL_HOURS = 6           # a link the server can't fetch: the browser checks it at most every 6 h
@@ -1074,7 +1193,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         items.append((2, o.get("last_ok") or 0, {**base, "url": o["url"], "reason": "server_fails"}))
                 elif not priced and rid != "lego_com" and (url := search_url(rid, num)) \
                         and now - searched.get(f"{num}|{rid}", 0) > self.RELAY_SEARCH_DAYS * 86400:
-                    items.append((1, searched.get(f"{num}|{rid}", 0), {**base, "kind": "search", "url": url, "reason": "search"}))
+                    items.append((1, searched.get(f"{num}|{rid}", 0), {**base, "kind": "search", "url": url, "reason": "search",
+                                                                       "render": rid in self.store.get("shop_js", {})}))
         items.sort(key=lambda x: (x[0], x[1]))
         counts: dict[str, int] = {}
         for _, _, it in items:
@@ -1110,6 +1230,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                else T("search page: HTTP error {status}", status=status) if status >= 400
                else T("no matching product found") if num in html
                else T("the search page does not contain {number}: this shop probably loads its results with JavaScript. Paste the product page URL instead.", number=num))
+        if "JavaScript" in why and not item.get("rendered"):
+            self.fetcher.discover_error[rid] = why
+            self._note_js(rid)
+            self.store["relay_searched"][f"{num}|{rid}"] = time.time()
         self.log("info", "discover", T("your browser searched: {reason}", reason=why), set_number=num, retailer=rid, url=item.get("url"), source="relay")
         return "fail"
 
@@ -1845,8 +1969,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         searches = [x for x in trace if x["kind"] == "search"]
         js = sum(1 for x in searches if "JavaScript" in (x.get("error") or ""))
         blocked = sum(1 for x in trace if x.get("status") in (403, 429, 503) or "blocked" in (x.get("error") or ""))
-        if js and js >= len(searches) / 2:
-            hints.append(T("The shop's search page loads its results with JavaScript, so the server sees no products. Paste product links by hand (set → Shops), or let the browser relay / userscript deliver prices."))
+        if (js and js >= len(searches) / 2) or rid in self.store.get("shop_js", {}):
+            hints.append(T("The shop's search page loads its results with JavaScript, so the server sees no products there. Links still come from the shop's sitemap, and the userscript can search it in a background tab (Manage → Userscript)."))
         if blocked and blocked >= len(trace) / 2:
             hints.append(T("Most requests are blocked by the shop's bot protection. The browser relay (userscript) or a manual price helps."))
         if offers and via and all(via) and not any(x["kind"] == "page" and not x.get("error") for x in trace):
@@ -1861,6 +1985,11 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "paused_until": self.fetcher.blocked_until.get(rid) if self.fetcher.cooldown_left(rid) > 0 else None,
             "last_request": self.fetcher.last_request.get(site), "next_free": self.fetcher.next_free(site),
             "next_search": self.fetcher.next_free(site, search=True), "trace": trace, "log": log, "hints": hints,
+            "js": rid in self.store.get("shop_js", {}), "sitemap_ok": rid in self.sitemap_shops(),
+            "sitemap": {k: v for k, v in (self.store.get("sitemaps", {}).get(rid) or {}).items() if k != "urls"}
+            | {"count": len((self.store.get("sitemaps", {}).get(rid) or {}).get("urls") or []),
+               "linked": sum(1 for by in self.store["offers"].values() if (by.get(rid) or {}).get("found_via") == "sitemap"),
+               "busy": getattr(self, "_sitemap_busy", False)},
             "now": time.time(),
         }
 

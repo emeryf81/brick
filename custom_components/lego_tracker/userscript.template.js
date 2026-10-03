@@ -8,6 +8,7 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
+// @grant        GM_openInTab
 // @connect      *
 // @downloadURL  {{SELF_URL}}
 // @updateURL    {{SELF_URL}}
@@ -22,6 +23,8 @@
 //    Home Assistant tab is open, this browser keeps checking by itself: first links without any price,
 //    then searches for sets without any price, then shops the server can't fetch. Calm: every site at
 //    most twice a minute, a search at most once every 2 minutes, a site that blocks is left alone for 1 h.
+//    Optional: shops that build their search results with JavaScript are opened in a background tab, so the
+//    script can read the finished page there (the tab closes itself).
 (function () {
   "use strict";
   const DEFAULT_HA = "{{HA_URL}}";
@@ -31,6 +34,11 @@
     if (url !== null) GM_setValue("ha_url", url.trim());
     const token = prompt({{tj:Long-lived access token (profile → Security)}}, GM_getValue("ha_token", ""));
     if (token !== null) GM_setValue("ha_token", token.trim());
+  });
+  GM_registerMenuCommand({{tj:Background tabs for JavaScript shops: switch on / off}}, () => {
+    const on = !GM_getValue("render_tabs", false);
+    GM_setValue("render_tabs", on);
+    note(on ? {{tj:Shops with a JavaScript search are searched in a background tab.}} : {{tj:No background tabs.}}, on);
   });
   GM_registerMenuCommand({{tj:Continuous check: switch on / off}}, () => {
     const on = !GM_getValue("continuous", false);
@@ -227,6 +235,38 @@
     }
     return { blocked, result };
   }
+  /** A search page built with JavaScript: open it in a background tab; the script in that tab sends back the
+   * finished page (see renderHere) and the tab closes. */
+  async function renderItem(it) {
+    const id = Math.random().toString(36).slice(2), site = siteOf(it.url);
+    const jobs = GM_getValue("render_jobs", {}); jobs[site] = { id, number: it.set_number, ts: Date.now() }; GM_setValue("render_jobs", jobs);
+    let tab = null;
+    try { tab = GM_openInTab(it.url, { active: false, insert: true, setParent: true }); } catch (e) { /* not allowed */ }
+    let got = null;
+    for (let i = 0; i < 35 && !got; i++) { await sleep(1000); got = GM_getValue("render_" + id, null); }
+    try { if (tab) tab.close(); } catch (e) { /* already closed */ }
+    GM_setValue("render_" + id, null);
+    const j2 = GM_getValue("render_jobs", {}); delete j2[site]; GM_setValue("render_jobs", j2);
+    return { blocked: !!(got && got.blocked), result: { kind: "search", rendered: true, retailer: it.retailer, set_number: it.set_number, url: it.url,
+      status: got ? (got.blocked ? 403 : 200) : 0, html: got && !got.blocked ? got.html : "", error: got ? null : "the background tab did not answer" } };
+  }
+  /** In a tab opened by renderItem: wait until the results are on screen, hand the page back, close. */
+  function renderHere() {
+    const job = (GM_getValue("render_jobs", {}) || {})[siteOf(location.href)];
+    if (!job || Date.now() - job.ts > 60000) return false;
+    let n = 0;
+    const tick = () => {
+      const text = document.body ? document.body.innerText || "" : "", links = document.querySelectorAll("a[href]").length;
+      if ((text.includes(job.number) && links > 20) || ++n >= 20) {
+        const html = document.documentElement.outerHTML;
+        // what a visitor sees (a page's scripts may mention "captcha" without blocking anyone)
+        GM_setValue("render_" + job.id, { html: html.slice(0, 1500000), url: location.href, blocked: BLOCKED.test(document.title + " " + text.slice(0, 5000)) });
+        setTimeout(() => { try { window.close(); } catch (e) { /* the opener closes it */ } }, 300);
+      } else setTimeout(tick, 1000);
+    };
+    setTimeout(tick, 1500);
+    return true;
+  }
   async function continuous() {
     if (cont.running || !GM_getValue("continuous", false)) return;
     cont.running = true; tellCont();
@@ -254,7 +294,7 @@
           const it = queue.splice(times.indexOf(wait), 1)[0];
           stamp(it);
           cont.shop = it.shop; cont.set_number = it.set_number; cont.next = 0;
-          const { blocked, result } = await fetchItem(it);
+          const { blocked, result } = it.kind === "search" && it.render && GM_getValue("render_tabs", false) ? await renderItem(it) : await fetchItem(it);
           const site = siteOf(it.url);
           if (blocked) {
             strikes[site] = (strikes[site] || 0) + 1;
@@ -282,12 +322,13 @@
 
   const onShop = !location.href.startsWith(HA() + "/") && !/\/lego-tracker/.test(location.pathname);
   if (onShop) {
-    setTimeout(report, 2500);   // wait for late-rendered prices
+    if (!renderHere()) setTimeout(report, 2500);   // a background tab for the continuous check, or: send this page's price
   } else {
     window.addEventListener("message", (e) => {
       const m = e.data;
       if (!m || m.source !== "lego-tracker-panel") return;
-      if (m.type === "relay-ping") { tell({ type: "relay-pong", version: "{{VERSION}}", token: !!TOKEN(), running, last: GM_getValue("relay_last", 0), continuous: GM_getValue("continuous", false) }); tellCont(); }
+      if (m.type === "relay-ping") { tell({ type: "relay-pong", version: "{{VERSION}}", token: !!TOKEN(), running, last: GM_getValue("relay_last", 0), continuous: GM_getValue("continuous", false), render: GM_getValue("render_tabs", false) }); tellCont(); }
+      if (m.type === "render-set") { GM_setValue("render_tabs", !!m.on); tell({ type: "relay-pong", version: "{{VERSION}}", token: !!TOKEN(), running, last: GM_getValue("relay_last", 0), continuous: GM_getValue("continuous", false), render: !!m.on }); }
       if (m.type === "relay-run") relay(true);
       if (m.type === "continuous-set") { GM_setValue("continuous", !!m.on); if (m.on) continuous(); else tellCont(); }
     });

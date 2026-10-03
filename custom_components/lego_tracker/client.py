@@ -15,7 +15,7 @@ import aiohttp
 from .models import normalize_set_number
 from .i18n import T
 from .shops import domain_of
-from .parsers import Parsed, find_search_result, lego_number, lego_product_url, parse_brickset_page, parse_page, search_url
+from .parsers import Parsed, find_search_result, is_search_url, lego_number, title_check, lego_product_url, parse_brickset_page, parse_page, search_url
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -83,6 +83,7 @@ class Fetcher:
         self.abort: Any = None                             # callable: True = stop waiting (the job was stopped)
         self.trace: dict[str, deque] = {}                  # per shop: the last requests, what came back and why
         self._search_meta: dict[str, tuple[int | None, int]] = {}
+        self.final_url: dict[str, str] = {}               # per shop: where the last request ended up (redirects)
 
     def _trace(self, key: str, kind: str, url: str, t0: float, status: int | None = None, size: int = 0,
                result: str | None = None, error: str | None = None, set_number: str | None = None) -> None:
@@ -135,16 +136,18 @@ class Fetcher:
                 self._sessions[retailer] = async_create_clientsession(self._hass)
         return self._sessions[retailer]
 
-    async def _request(self, retailer: str, url: str, referer: str | None = None) -> tuple[int, str]:
+    async def _request(self, retailer: str, url: str, referer: str | None = None, binary: bool = False) -> tuple[int, Any]:
         headers = dict(BROWSER_HEADERS)
         if referer:
             headers.update({"Referer": referer, "Sec-Fetch-Site": "same-origin"})
         sess = self._session(retailer)
         if self._curl_ok:
             resp = await sess.get(url, headers=headers, allow_redirects=True)
-            return resp.status_code, resp.text
-        async with sess.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=30), allow_redirects=True) as resp:
-            return resp.status, await resp.text(errors="replace")
+            self.final_url[retailer] = str(getattr(resp, "url", "") or url)
+            return resp.status_code, (resp.content if binary else resp.text)
+        async with sess.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=60 if binary else 30), allow_redirects=True) as resp:
+            self.final_url[retailer] = str(resp.url)
+            return resp.status, (await resp.read() if binary else await resp.text(errors="replace"))
 
     def next_free(self, url_or_site: str, search: bool = False) -> float:
         """Seconds until this site may be asked again (searches: also the search gap)."""
@@ -160,7 +163,7 @@ class Fetcher:
                 raise Aborted
             await asyncio.sleep(min(left, 1.0))
 
-    async def _get(self, retailer: str, url: str, search: bool = False) -> tuple[int, str]:
+    async def _get(self, retailer: str, url: str, search: bool = False, binary: bool = False) -> tuple[int, Any]:
         if self._curl_ok is None:
             await self.async_setup()
         site = site_of(url)
@@ -177,7 +180,7 @@ class Fetcher:
                 await asyncio.sleep(2 + random.random() * 2)
             await asyncio.sleep(self.min_delay + random.random() * 3)
             try:
-                return await self._request(retailer, url, referer=origin)
+                return await self._request(retailer, url, referer=None if binary else origin, binary=binary)
             finally:
                 self.last_request[site] = time.time()
                 if search:
@@ -260,6 +263,34 @@ class Fetcher:
             return status, "", T("blocked (HTTP {status})", status=status)
         return status, page, None
 
+    def _landed_on_product(self, retailer: str, url: str, page: str, set_number: str) -> str | None:
+        """A search for one exact product often jumps straight to its product page (redirect): that page is the link."""
+        final = (self.final_url.get(retailer) or "").split("#")[0]
+        if not final or final.split("?")[0] == url.split("?")[0] or is_search_url(final) or site_of(final) != site_of(url):
+            return None
+        parsed = parse_page(retailer, page, set_number)
+        title = parsed.title or ""
+        if title_check(title if "lego" in title.lower() else f"lego {title}", set_number)[0] == "ok":
+            return final
+        return None
+
+    async def get_raw(self, retailer: str, url: str) -> tuple[int, bytes, str | None]:
+        """(status, body bytes, error) for a sitemap / robots.txt of a shop, with the same pacing and pauses."""
+        t0 = time.time()
+        if self.cooldown_left(retailer) > 0:
+            return 0, b"", T("paused after being blocked")
+        try:
+            status, body = await self._get(retailer, url, binary=True)
+        except Aborted:
+            return 0, b"", T("paused: the job was stopped")
+        except Exception as err:  # noqa: BLE001
+            self._trace(retailer, "sitemap", url, t0, None, 0, None, T("network error: {error}", error=str(err)[:120]))
+            return 0, b"", T("network error: {error}", error=str(err)[:120])
+        body = body if isinstance(body, (bytes, bytearray)) else str(body or "").encode()
+        error = T("HTTP error {status}", status=status) if status >= 400 else None
+        self._trace(retailer, "sitemap", url, t0, status, len(body), None, error)
+        return status, bytes(body), error
+
     async def discover(self, retailer: str, set_number: str, force: bool = False, url: str | None = None) -> str | None:
         """Search the shop for the set; every attempt is kept in the shop's trace (Shops → click a shop)."""
         t0 = time.time()
@@ -298,7 +329,7 @@ class Fetcher:
         if status >= 400:
             self.discover_error[retailer] = T("search page: HTTP error {status}", status=status)
             return None
-        found = find_search_result(retailer, page, set_number)
+        found = find_search_result(retailer, page, set_number) or self._landed_on_product(retailer, url, page, set_number)
         if found or retailer != "lego_com":
             if not found:
                 self.discover_error[retailer] = T("no matching product found") if set_number in page else \
