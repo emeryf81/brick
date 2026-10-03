@@ -2073,48 +2073,6 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.push_update()
         return num
 
-    def _relay_page(self, item: dict[str, Any]) -> str | dict[str, Any]:
-        src, url = item.get("source"), str(item.get("url") or "")
-        num = normalize_set_number(str(item.get("set_number") or ""))
-        if src not in compare.SOURCES or not compare.is_compare_url(url) or num not in self.store["sets"]:
-            raise ValueError(f"{src}: {url}: not a comparison page of a tracked set")
-        html = item.get("html") if isinstance(item.get("html"), str) else ""
-        try:
-            status, step = int(item.get("status") or 0), max(0, min(compare.MAX_STEPS - 1, int(item.get("step") or 0)))
-        except (TypeError, ValueError):
-            status, step = 0, 0
-        if status == 0:        # the browser couldn't reach it either: log, but don't count it towards a server pause
-            self.log("warning", "userscript", T("your browser could not fetch the price either: {error}", error=str(item.get("error") or "")[:120] or "?"),
-                     set_number=num, url=url, source="relay")
-            kind, nxt = "error", None
-        else:
-            kind, nxt = self.compare_page(src, num, url, status, html, None, step, via="relay")
-        if kind == "ok":
-            self._compare_links(num)
-            self._compare_apply_prices(num)
-        rl = self.store.setdefault("relay_last", {"ts": 0, "ok": 0, "fail": 0})
-        if time.time() - rl.get("ts", 0) > 900:
-            rl.update(ok=0, fail=0)
-        rl["ts"] = time.time()
-        if kind == "follow":
-            return {"kind": "page", "source": src, "set_number": num, "shop": compare.SOURCES[src][0], "url": nxt, "step": step + 1}
-        status_key = "ok" if kind in ("ok", "missing") else "fail"
-        rl[status_key] = rl.get(status_key, 0) + 1
-        return status_key
-
-    async def discover_offers(self, set_number: str | None = None) -> int:
-        """(Re)try to find shop pages for sets that have no offer at some retailer."""
-        nums = [normalize_set_number(set_number)] if set_number else list(self.store["sets"])
-        found = 0
-        for num in nums:
-            offers = self.store["offers"].setdefault(num, {})
-            for rid in self.retailers:
-                if rid not in offers and (url := await self.fetcher.discover(rid, num)):
-                    offers[rid] = {"url": url, "history": []}
-                    found += 1
-        self.push_update()
-        return found
-
     def export_csv(self) -> str:
         return rows_to_csv(collection_rows(self.store, self.compute()["statuses"]), COLLECTION_COLUMNS)
 
