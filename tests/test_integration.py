@@ -2107,6 +2107,27 @@ async def test_ticker_defaults_api_level_and_market_label(hass: HomeAssistant, e
     assert c.store["activity"][-1]["source"] == "Market value" and "BrickEconomy" not in c.store["activity"][-1]["message"]
 
 
+@pytest.mark.parametrize("price, retailer, expected_score", [
+    (39.99, "bol", True),
+    (49.99, "bol", False),
+    (39.99, "amazon_nl", False),
+    (49.99, "amazon_nl", False),
+])
+async def test_ticker_recent_price_score_matches_best_offer(hass: HomeAssistant, entry, price, retailer, expected_score):
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "ticker": {"news": False, "deals": False}})
+    c = await _setup(hass, entry)
+    await c.add_set("10281", name="Bonsai", rrp=100)
+    c.store["offers"]["10281"] = {"bol": {"available": True, "last_price": 39.99}}
+    c.store["activity"] = [{"kind": "price", "ts": time.time(), "set_number": "10281",
+                            "price": price, "old_price": 59.99, "retailer": retailer}]
+    c.push_update()
+    score = c.data["statuses"]["10281"]["deal_score"]
+    assert score > 0
+    item = (await c.ticker_data("en"))["items"][0]
+    assert item["price"] == price
+    assert item["score"] == (score if expected_score else None)
+
+
 @pytest.mark.parametrize("merge", [False, True])
 async def test_backup_from_before_0919_gets_the_new_market_label(hass: HomeAssistant, entry, no_network, merge):
     c = await _setup(hass, entry)
@@ -2157,7 +2178,19 @@ async def test_setdb_refresh_new_sets_and_add(hass: HomeAssistant, entry, no_net
     c._download = AsyncMock(side_effect=lambda url: files["sets" if "sets.csv" in url else "themes"])
     sent = []
     c.notifier.on_new_sets = AsyncMock(side_effect=lambda nums: sent.append(nums))
-    fresh = await c.refresh_setdb()
+    original_save = c._setdb_store.async_save
+
+    async def save_while_busy(data):
+        assert c.setdb_info["busy"] and not c.setdb
+        c.setdb_tick()
+        await original_save(data)
+        assert c.setdb_info["busy"] and not c.setdb
+
+    with patch.object(c._setdb_store, "async_save", side_effect=save_while_busy), \
+         patch.object(entry, "async_create_background_task") as background:
+        fresh = await c.refresh_setdb()
+        background.assert_not_called()
+    assert not c.setdb_info["busy"]
     assert len(fresh) == 1000 and not sent                                  # first download: this year's sets, no notification
     files["sets"] = _gz(first + f"76300-1,New Batman set,{year},6,500,\n42200-1,Technic car,{year},7,900,\n")
     files["themes"] = _gz(themes + "6,Batman,\n7,Technic,\n")
@@ -2165,8 +2198,14 @@ async def test_setdb_refresh_new_sets_and_add(hass: HomeAssistant, entry, no_net
     await hass.async_block_till_done()
     c = hass.data[DOMAIN][entry.entry_id]
     c._download = AsyncMock(side_effect=lambda url: files["sets" if "sets.csv" in url else "themes"])
-    c.notifier.on_new_sets = AsyncMock(side_effect=lambda nums: sent.append(nums))
+
+    async def notify_while_busy(nums):
+        assert c.setdb_info["busy"] and "76300" in c.setdb
+        sent.append(nums)
+
+    c.notifier.on_new_sets = AsyncMock(side_effect=notify_while_busy)
     fresh = await c.refresh_setdb()
+    assert not c.setdb_info["busy"]
     assert sorted(fresh) == ["42200", "76300"] and sent == [["76300"]]     # Technic switched off: no notification
     items = c.new_sets()["items"]
     assert items[0]["set_number"] in ("76300", "42200") and "42200" not in [x["set_number"] for x in items]
@@ -2182,11 +2221,34 @@ async def test_setdb_refresh_new_sets_and_add(hass: HomeAssistant, entry, no_net
     files["sets"] = _gz(first + f"76300-1,New Batman set,{year},6,500,\n42200-1,Technic car,{year},7,900,\n10999-1,Later set,{year},1,50,\n")
     with patch.object(c._setdb_store, "async_save", AsyncMock(side_effect=OSError("disk full"))):
         assert await c.refresh_setdb() == []
+    assert not c.setdb_info["busy"]
     assert c.setdb == before and c.store["new_sets"] == seen and "disk full" in c.setdb_info["error"]
     # stored in its own file and read back on start
     await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
     assert "76300" in hass.data[DOMAIN][entry.entry_id].setdb
+
+
+@pytest.mark.parametrize("stage, cancelled", [("download", False), ("download", True), ("save", True)])
+async def test_setdb_refresh_clears_busy_on_failure(hass: HomeAssistant, entry, stage, cancelled):
+    import asyncio
+    from custom_components.lego_tracker import setdb
+
+    c = await _setup(hass, entry)
+    new = {str(60000 + i): ["City set", 2026, "City", "", 100, ""] for i in range(1000)}
+
+    async def fail(*args):
+        assert c.setdb_info["busy"]
+        raise asyncio.CancelledError if cancelled else OSError("download failed")
+
+    c._download = AsyncMock(side_effect=fail if stage == "download" else None, return_value=b"")
+    with patch.object(setdb, "parse", return_value=new), patch.object(c._setdb_store, "async_save", side_effect=fail):
+        if cancelled:
+            with pytest.raises(asyncio.CancelledError):
+                await c.refresh_setdb()
+        else:
+            assert await c.refresh_setdb() == []
+    assert not c.setdb_info["busy"] and not c.setdb
 
 
 async def test_new_set_notification_rule(hass: HomeAssistant, entry, no_network):

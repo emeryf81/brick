@@ -640,9 +640,11 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     continue
                 seen.add(num)
                 old, price = e.get("old_price"), e["price"]
+                st = statuses.get(num, {})
                 out.append({"kind": "price", "ts": e["ts"], "set_number": num, "name": self.store["sets"][num].get("name") or "",
                             "price": price, "old": old, "pct": round((price - old) / old * 100, 1) if old else None,
-                            "score": statuses.get(num, {}).get("deal_score"),
+                            "score": st.get("deal_score") if price == st.get("best_price")
+                            and e.get("retailer") == st.get("best_retailer") else None,
                             "shop": RETAILERS.get(e.get("retailer"), ("",))[0], "url": e.get("url")})
             # no recent changes: the current lowest price of the watched sets that were checked last
             rest = sorted((n for n in self.store["sets"] if n not in seen and self.is_watched(n)
@@ -2187,37 +2189,38 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Download every LEGO set, store it, and remember the sets that are new since last time."""
         self.setdb_info["busy"] = True
         try:
-            sets_gz, themes_gz = await self._download(setdb.SETS_URL), await self._download(setdb.THEMES_URL)
-            new = await self.hass.async_add_executor_job(setdb.parse, sets_gz, themes_gz)
-            if len(new) < 1000:
-                raise ValueError(f"only {len(new)} sets in the download")
-        except Exception as err:  # noqa: BLE001 - the set database is optional
-            self.setdb_info.update(error=str(err)[:150], ts=time.time() - setdb.REFRESH_HOURS * 3600 + 3 * 3600)  # retry in 3 h
-            self.log("warning", "meta", T("set database could not be updated: {error}", error=str(err)[:150]), source=setdb.SOURCE)
-            return []
+            try:
+                sets_gz, themes_gz = await self._download(setdb.SETS_URL), await self._download(setdb.THEMES_URL)
+                new = await self.hass.async_add_executor_job(setdb.parse, sets_gz, themes_gz)
+                if len(new) < 1000:
+                    raise ValueError(f"only {len(new)} sets in the download")
+            except Exception as err:  # noqa: BLE001 - the set database is optional
+                self.setdb_info.update(error=str(err)[:150], ts=time.time() - setdb.REFRESH_HOURS * 3600 + 3 * 3600)  # retry in 3 h
+                self.log("warning", "meta", T("set database could not be updated: {error}", error=str(err)[:150]), source=setdb.SOURCE)
+                return []
+            first = not self.setdb
+            now = time.time()
+            try:                                    # saved first: nothing changes in memory when that fails
+                await self._setdb_store.async_save({"ts": now, "sets": new})
+            except Exception as err:  # noqa: BLE001
+                self.setdb_info.update(error=str(err)[:150], ts=now - setdb.REFRESH_HOURS * 3600 + 3 * 3600)
+                self.log("warning", "meta", T("set database could not be updated: {error}", error=str(err)[:150]), source=setdb.SOURCE)
+                return []
+            found = setdb.find_new(self.setdb, new, first=first)
+            seen = self.store.setdefault("new_sets", {})
+            fresh = [n for n in found if n not in seen]
+            for n in fresh:
+                seen[n] = now
+            self.store["new_sets"] = setdb.prune_new(seen, now)
+            self.setdb = new
+            self.setdb_info.update(ts=now, count=len(new), error=None)
+            self.log("ok", "meta", T("set database updated: {n} sets, {new} new", n=len(new), new=len(fresh)), source=setdb.SOURCE)
+            if fresh and not first:                  # the first download only fills the list, it doesn't notify
+                await self.notifier.on_new_sets([n for n in fresh if not self.deal_blocked_theme(n)])
+            self.push_update()
+            return fresh
         finally:
             self.setdb_info["busy"] = False
-        first = not self.setdb
-        now = time.time()
-        try:                                    # saved first: nothing changes in memory when that fails
-            await self._setdb_store.async_save({"ts": now, "sets": new})
-        except Exception as err:  # noqa: BLE001
-            self.setdb_info.update(error=str(err)[:150], ts=now - setdb.REFRESH_HOURS * 3600 + 3 * 3600)
-            self.log("warning", "meta", T("set database could not be updated: {error}", error=str(err)[:150]), source=setdb.SOURCE)
-            return []
-        found = setdb.find_new(self.setdb, new, first=first)
-        seen = self.store.setdefault("new_sets", {})
-        fresh = [n for n in found if n not in seen]
-        for n in fresh:
-            seen[n] = now
-        self.store["new_sets"] = setdb.prune_new(seen, now)
-        self.setdb = new
-        self.setdb_info.update(ts=now, count=len(new), error=None)
-        self.log("ok", "meta", T("set database updated: {n} sets, {new} new", n=len(new), new=len(fresh)), source=setdb.SOURCE)
-        if fresh and not first:                  # the first download only fills the list, it doesn't notify
-            await self.notifier.on_new_sets([n for n in fresh if not self.deal_blocked_theme(n)])
-        self.push_update()
-        return fresh
 
     def deal_blocked_theme(self, num: str) -> bool:
         """A set in a theme switched off under Deals → Settings (also for sets that are not tracked)."""
