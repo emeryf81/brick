@@ -17,7 +17,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
-from .client import Fetcher, lookup_metadata
+from .client import DOMAIN_GAP, SEARCH_GAP, Fetcher, lookup_metadata
 from .const import (
     CONF_COMPARE, CONF_COMPARE_OLD, CONF_BLOCK_WORDS, CYCLE_CHOICES, CONF_WATCH_CYCLE, WATCH_CYCLE_CHOICES, WATCH_LIMIT,
     FULL_REFRESH_GAP, MANUAL_GAP, CONF_DEAL_MIN_SCORE, CONF_DEAL_ATL, CONF_DEAL_TARGET, DEFAULT_DEAL_MIN_SCORE, CONF_DEV_FIXED_TIMES, CONF_DEV_FULL_REFRESH, CONF_DEV_FREE_CYCLE, CONF_DEV_WATCH_UNLIMITED, CONF_ALLOW_WORDS, CONF_COMPARE_SOURCES, COMPARE_FRESH_HOURS, COMPARE_MISSING_HOURS, COMPARE_NET_ERRORS, COMPARE_PAUSE_HOURS,
@@ -34,11 +34,11 @@ from .models import (
 from .i18n import DEFAULT_LANGUAGE, LANGUAGES, LocalizedError, T, resolve, set_language
 from .notifications import Notifier, default_rules
 from .bol_api import BolApi, BolApiError
-from . import catalog, compare
+from . import catalog, sitemaps, compare
 from .shops import all_domains, domain_of
 from .parsers import Parsed, title_check
 from .shops import SEARCH, valid_search
-from .parsers import BUILTIN_WORDS, KNOCKOFF_RE, is_search_url, accessory_word, set_custom_words, clean_title, normalize_url, retailer_from_url, url_key
+from .parsers import BUILTIN_WORDS, KNOCKOFF_RE, find_search_result, is_search_url, search_url, accessory_word, set_custom_words, clean_title, normalize_url, retailer_from_url, url_key
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -365,7 +365,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if save:
             report.save(self.store, rep)
             what = ", ".join(rep["problems"]) or "?"
-            self.log("warning", "report", T("problem reported ({what})", what=what) + (f": {rep['comment'][:300]}" if rep["comment"] else ""),
+            # the remark itself stays in the report (export is for administrators); the shared logbook only says that there is one
+            self.log("warning", "report", T("problem reported ({what})", what=what) + (" · " + T("with a remark") if rep["comment"] else ""),
                      set_number=num, report=rep["id"], retailer=rep["shops"][0] if len(rep["shops"]) == 1 else None,
                      source="panel")
             self._save()
@@ -750,10 +751,12 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             o = self.store["offers"].get(num, {}).get(rid)
             if o and not o.get("manual_price") and (o.get("error") or not o.get("last_ok") or time.time() - o["last_ok"] > 20 * 3600
                                                      or compare.is_compare_url(o.get("url"))):
-                if is_suspicious_price(shop["price"], self.store["sets"][num], o):
+                others = [x["last_price"] for r, x in self.store["offers"].get(num, {}).items()
+                          if r != rid and x.get("available") and x.get("last_price")]
+                if is_suspicious_price(shop["price"], self.store["sets"][num], o, others):
                     continue
                 record_price(o, shop["price"])
-                o["last_ok"], o["via"] = o["last_checked"], shop["source"]
+                o["last_ok"], o["last_via"] = o["last_checked"], shop["source"]   # shown as ⓒ next to the price
                 n += 1
         return n
 
@@ -868,6 +871,11 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else:
                 old_price = offer.get("last_price") if offer.get("available") else None
                 record_price(offer, price, error=error)
+                if price is not None:
+                    if via:
+                        offer["last_via"] = via
+                    else:
+                        offer.pop("last_via", None)
                 if price is not None and (old_price is None or abs(old_price - price) >= 0.01):
                     self.log("ok", "price", T("€{old} → €{new}", old=f"{old_price:.2f}", new=f"{price:.2f}") if old_price
                              else T("first price €{price}", price=f"{price:.2f}"),
@@ -926,7 +934,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # a product page or ASIN is the link; the same page keeps its history, a manual price stays
                 self.update_offer(num, retailer, url=url)
         if search_page or not (offers.get(retailer) or {}).get("url"):
-            url = await self._discover(retailer, num, force=True, url=search_page)
+            url = await self._discover(retailer, num, force=True, url=search_page) \
+                or (None if search_page else await self._fallback_link(retailer, num))
             rejected = set(self.store.setdefault("rejected", {}).get(num, []))
             if not url or url_key(retailer, url) in rejected:
                 reason = T("found a link you rejected earlier; not linked again") if url else \
@@ -972,7 +981,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def discover_set(self, num: str, retailers: list[str] | None = None) -> dict[str, int]:
         live = retailers if retailers is not None else self._live_retailers(False)
         todo = self._missing(num, live)
-        urls = await asyncio.gather(*(self._discover(r, num) for r in todo))
+        urls = list(await asyncio.gather(*(self._discover(r, num) for r in todo)))
+        for i, rid in enumerate(todo):          # nothing via the search: the shop's sitemap, then (in a job) the EAN
+            if not urls[i]:
+                urls[i] = await self._fallback_link(rid, num, slow=bool(self.job and self.job.get("running")))
         rejected = set(self.store.setdefault("rejected", {}).get(num, []))
         found = 0
         for rid, url in zip(todo, urls):
@@ -1036,14 +1048,215 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return {"enabled": self.relay_enabled, "interval_hours": int(self.opt(self.entry, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS)),
                 "items": [i for _, i in items[:limit]], "total": len(items)}
 
+    # ------------------------------------------------------------ product links from shop sitemaps
+    SITEMAP_EXCLUDE = {"lego_com", "amazon_nl", "amazon_de", "amazon_be", "bol"}   # huge sitemaps / own search works
+
+    def _note_js(self, rid: str) -> None:
+        """Remember shops whose search page is built with JavaScript (the userscript can render it in a tab)."""
+        if "JavaScript" in (self.fetcher.discover_error.get(rid) or ""):
+            first = rid not in self.store.setdefault("shop_js", {})
+            self.store["shop_js"][rid] = time.time()
+            if first:                            # earlier browser searches read an empty page: allow them again
+                searched = self.store.setdefault("relay_searched", {})
+                for k in [k for k in searched if k.endswith("|" + rid)]:
+                    del searched[k]
+
+    async def _fallback_link(self, rid: str, num: str, slow: bool = False) -> str | None:
+        """Other ways to the product page when the shop's search found nothing: its sitemap (no request), and
+        a search for the EAN (barcode), which shops often send straight to the product page."""
+        self._note_js(rid)
+        if (url := self.sitemap_link(rid, num)):
+            self.log("ok", "discover", T("link found in the shop's sitemap"), set_number=num, retailer=rid, url=url)
+            return url
+        ean = str(self.store["sets"].get(num, {}).get("ean") or "")
+        tpl = SEARCH.get(rid)
+        if slow and ean.isdigit() and tpl and rid not in ("lego_com", "bol"):
+            url = await self._discover(rid, num, url=tpl.replace("{query}", ean).replace("{number}", ean))
+            if url:
+                self.log("ok", "discover", T("link found by searching the EAN {ean}", ean=ean), set_number=num, retailer=rid, url=url)
+            return url
+        return None
+
+    def sitemap_shops(self) -> list[str]:
+        return [r for r in self.retailers if r not in self.SITEMAP_EXCLUDE and domain_of(r)]
+
+    def start_sitemap(self, rid: str) -> None:
+        """Shops → a shop → 'Read the sitemap now' (once every 2 minutes per shop, like any manual action)."""
+        if rid not in self.sitemap_shops():
+            raise LocalizedError("This shop has no sitemap to read (or is switched off).")
+        if getattr(self, "_sitemap_busy", False):
+            raise LocalizedError("A sitemap is being read already; try again in a few minutes.")
+        self.manual_gate("site:" + self._site(rid))
+        self._sitemap_busy = True
+        self.entry.async_create_background_task(self.hass, self._sitemap_round([rid]), f"{DOMAIN}_sitemap_{rid}")
+
+    def sitemap_tick(self, _now: Any = None) -> None:
+        """Every few hours: shops whose sitemap is older than a week are read again (in the background)."""
+        if getattr(self, "_sitemap_busy", False):
+            return
+        maps = self.store.setdefault("sitemaps", {})
+        due = [r for r in self.sitemap_shops() if time.time() - (maps.get(r) or {}).get("ts", 0) > sitemaps.REFRESH_DAYS * 86400]
+        if due:
+            self._sitemap_busy = True
+            self.entry.async_create_background_task(self.hass, self._sitemap_round(due), f"{DOMAIN}_sitemaps")
+
+    async def _sitemap_round(self, rids: list[str]) -> None:
+        try:
+            for rid in rids:
+                await self.refresh_sitemap(rid)
+        finally:
+            self._sitemap_busy = False
+            self._save()
+            self.push_update()
+
+    async def refresh_sitemap(self, rid: str) -> dict[str, Any]:
+        """Read the shop's sitemap (robots.txt → index → product files), keep its LEGO product URLs and link
+        every set that has no link at this shop yet."""
+        domain = (domain_of(rid) or "").removeprefix("www.")
+        base = f"https://www.{domain}"
+        status, body, err = await self.fetcher.get_raw(rid, base + "/robots.txt")
+        queue = sitemaps.robots_sitemaps(body[:200_000].decode("utf-8", errors="replace")) if status and status < 400 else []
+        queue = [u for u in queue if sitemaps.on_site(u, domain)] or [base + "/sitemap.xml"]   # only the shop's own site
+        seen, urls, files, errors = set(), [], 0, []
+        while queue and files < sitemaps.MAX_FILES and len(urls) < sitemaps.MAX_URLS:
+            url = queue.pop(0)
+            if url in seen:
+                continue
+            seen.add(url)
+            files += 1
+            status, body, err = await self.fetcher.get_raw(rid, url)
+            if err or not body:
+                errors.append(url + ": " + (err or T("empty response")))
+                if err and err.startswith("paused"):
+                    break
+                continue
+            # unpacking and reading a large file happens outside the event loop
+            children, found_urls = await self.hass.async_add_executor_job(
+                sitemaps.read_file, body, domain, sitemaps.MAX_URLS - len(urls))
+            queue = sitemaps.order_children(children) + queue
+            urls += found_urls
+        urls = list(dict.fromkeys(urls))[:sitemaps.MAX_URLS]
+        self.store.setdefault("sitemaps", {})[rid] = {"ts": time.time(), "files": files, "urls": urls,
+                                                      "error": errors[-1] if errors and not urls else None}
+        found = self.sitemap_link_all(rid)
+        self.log("ok" if urls else "warning", "discover",
+                 T("sitemap read: {n} LEGO product pages, {found} new links", n=len(urls), found=found) if urls
+                 else T("sitemap: no LEGO product pages found ({error})", error=(errors[-1] if errors else T("no sitemap"))[:160]),
+                 retailer=rid, source="server")
+        return {"urls": len(urls), "files": files, "found": found}
+
+    def sitemap_link(self, rid: str, num: str) -> str | None:
+        urls = (self.store.get("sitemaps", {}).get(rid) or {}).get("urls") or []
+        url = sitemaps.match(urls, num) if urls else None
+        if url and url_key(rid, url) in set(self.store.setdefault("rejected", {}).get(num, [])):
+            return None
+        return url
+
+    def sitemap_link_all(self, rid: str) -> int:
+        """Link every set without a link at this shop to its product page in the sitemap (no requests)."""
+        found = 0
+        for num in self.store["sets"]:
+            offers = self.store["offers"].setdefault(num, {})
+            if (offers.get(rid) or {}).get("url"):
+                continue
+            if url := self.sitemap_link(rid, num):
+                offers[rid] = {"url": url, "history": [], "found": time.time(), "found_via": "sitemap"}
+                self.log("ok", "discover", T("link found in the shop's sitemap"), set_number=num, retailer=rid, url=url, source="server")
+                found += 1
+        return found
+
+    # ------------------------------------------------------------ continuous check (userscript)
+    RELAY_SEARCH_DAYS = 7          # a set/shop searched by the browser without result: not again for a week
+    RELAY_FAIL_HOURS = 6           # a link the server can't fetch: the browser checks it at most every 6 h
+
+    def continuous_items(self, limit: int = 20) -> dict[str, Any]:
+        """Work for the userscript's continuous check, most useful first:
+        1. links that never had a price; 2. sets without any price: search the shops that have no link yet;
+        3. links the server can't fetch (blocked, paused, errors) and not checked by the browser recently."""
+        now = time.time()
+        searched = self.store.setdefault("relay_searched", {})
+        items: list[tuple[int, float, dict[str, Any]]] = []
+        if not self.relay_enabled:
+            return {"enabled": False, "items": [], "total": 0, "counts": {}}
+        live_shops = [r for r in self.retailers if r in RETAILERS]
+        for num, s in self.store["sets"].items():
+            offers = self.store["offers"].get(num, {})
+            priced = any(o.get("available") and o.get("last_price") or o.get("manual_price") for o in offers.values())
+            for rid in live_shops:
+                o = offers.get(rid)
+                if rid == "bol" and self.bol_api:
+                    continue
+                base = {"set_number": num, "retailer": rid, "shop": RETAILERS[rid][0]}
+                if o and o.get("url") and not compare.is_compare_url(o["url"]):
+                    if o.get("manual_price") or o.get("link_status") == "rejected":
+                        continue
+                    last_try = o.get("relay_ts", 0)
+                    if not o.get("history") and not o.get("last_ok"):
+                        if now - last_try > 3600:                       # never a price: first, once an hour at most
+                            items.append((0, last_try, {**base, "url": o["url"], "reason": "no_price"}))
+                    elif (o.get("error") or self.fetcher.cooldown_left(rid) > 0) and now - max(last_try, o.get("last_ok") or 0) > self.RELAY_FAIL_HOURS * 3600:
+                        items.append((2, o.get("last_ok") or 0, {**base, "url": o["url"], "reason": "server_fails"}))
+                elif not priced and rid != "lego_com" and (url := search_url(rid, num)) \
+                        and now - searched.get(f"{num}|{rid}", 0) > self.RELAY_SEARCH_DAYS * 86400:
+                    items.append((1, searched.get(f"{num}|{rid}", 0), {**base, "kind": "search", "url": url, "reason": "search",
+                                                                       "render": rid in self.store.get("shop_js", {})}))
+        items.sort(key=lambda x: (x[0], x[1]))
+        counts: dict[str, int] = {}
+        for _, _, it in items:
+            counts[it["reason"]] = counts.get(it["reason"], 0) + 1
+        return {"enabled": True, "items": [i for _, _, i in items[:limit]], "total": len(items), "counts": counts,
+                "site_gap": DOMAIN_GAP, "search_gap": SEARCH_GAP}
+
+    def relay_heartbeat(self, beat: dict[str, Any]) -> None:
+        """The userscript's continuous check says it is alive (shown under Manage → Userscript)."""
+        keep = {k: beat.get(k) for k in ("done", "ok", "fail", "found", "waiting", "version") if isinstance(beat.get(k), (int, float, str))}
+        self.store["relay_heartbeat"] = {"ts": time.time(), "on": bool(beat.get("on", True)), **keep}
+
+    def _relay_search(self, item: dict[str, Any]) -> str | dict[str, Any]:
+        """A shop's search page fetched by the browser: find the product here (same rules as the server)."""
+        rid, num = item.get("retailer"), normalize_set_number(str(item.get("set_number") or ""))
+        if rid not in RETAILERS or num not in self.store["sets"]:
+            raise ValueError(f"{rid}: {num}: not a tracked set / shop")
+        html = item.get("html") if isinstance(item.get("html"), str) else ""
+        try:
+            status = int(item.get("status") or 0)
+        except (TypeError, ValueError):
+            status = 0
+        readable = bool(html) and 0 < status < 400
+        if readable:              # blocked / failed searches are tried again, only real answers wait a week
+            self.store.setdefault("relay_searched", {})[f"{num}|{rid}"] = time.time()
+        found = find_search_result(rid, html, num) if readable else None
+        offers = self.store["offers"].setdefault(num, {})
+        if found and url_key(rid, found) not in set(self.store.setdefault("rejected", {}).get(num, [])) \
+                and not (offers.get(rid) or {}).get("url"):
+            offers[rid] = {"url": found, "history": [], "found": time.time()}
+            self.log("ok", "discover", T("link found by your browser"), set_number=num, retailer=rid, url=found, source="relay")
+            return {"set_number": num, "retailer": rid, "shop": RETAILERS[rid][0], "url": found, "reason": "no_price"}
+        why = (T("the shop blocked the search (HTTP {status})", status=status) if status in (403, 429, 503)
+               else T("could not reach the shop: {error}", error=str(item.get("error") or "?")[:100]) if not status
+               else T("search page: HTTP error {status}", status=status) if status >= 400
+               else T("no matching product found") if num in html
+               else T("the search page does not contain {number}: this shop probably loads its results with JavaScript. Paste the product page URL instead.", number=num))
+        if "JavaScript" in why and not item.get("rendered"):
+            self.fetcher.discover_error[rid] = why
+            self._note_js(rid)
+            if readable:
+                self.store.setdefault("relay_searched", {})[f"{num}|{rid}"] = time.time()
+        self.log("info", "discover", T("your browser searched: {reason}", reason=why), set_number=num, retailer=rid, url=item.get("url"), source="relay")
+        return "fail"
+
     def relay_result(self, item: dict[str, Any]) -> str:
         """One page fetched by the user's browser: a price (stored like the userscript) or a failure.
         A comparison-site page comes back as HTML and is read here ('follow' adds the next page to fetch)."""
         if item.get("kind") == "page":
             return self._relay_page(item)
+        if item.get("kind") == "search":
+            return self._relay_search(item)
         url, price, error = item.get("url"), item.get("price"), item.get("error")
         rid = item.get("retailer") or (retailer_from_url(url) if url else None)
         num = normalize_set_number(item["set_number"]) if item.get("set_number") else None
+        if num and rid and (o := self.store["offers"].get(num, {}).get(rid)):
+            o["relay_ts"] = time.time()                      # the continuous check doesn't ask for it again at once
         if price:
             self.report_price(float(price), url=url, set_number=num, retailer=rid, title=item.get("title"), via="relay")
             status = "ok"
@@ -1764,8 +1977,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         searches = [x for x in trace if x["kind"] == "search"]
         js = sum(1 for x in searches if "JavaScript" in (x.get("error") or ""))
         blocked = sum(1 for x in trace if x.get("status") in (403, 429, 503) or "blocked" in (x.get("error") or ""))
-        if js and js >= len(searches) / 2:
-            hints.append(T("The shop's search page loads its results with JavaScript, so the server sees no products. Paste product links by hand (set → Shops), or let the browser relay / userscript deliver prices."))
+        if (js and js >= len(searches) / 2) or rid in self.store.get("shop_js", {}):
+            hints.append(T("The shop's search page loads its results with JavaScript, so the server sees no products there. Links still come from the shop's sitemap, and the userscript can search it in a background tab (Manage → Userscript)."))
         if blocked and blocked >= len(trace) / 2:
             hints.append(T("Most requests are blocked by the shop's bot protection. The browser relay (userscript) or a manual price helps."))
         if offers and via and all(via) and not any(x["kind"] == "page" and not x.get("error") for x in trace):
@@ -1780,6 +1993,11 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "paused_until": self.fetcher.blocked_until.get(rid) if self.fetcher.cooldown_left(rid) > 0 else None,
             "last_request": self.fetcher.last_request.get(site), "next_free": self.fetcher.next_free(site),
             "next_search": self.fetcher.next_free(site, search=True), "trace": trace, "log": log, "hints": hints,
+            "js": rid in self.store.get("shop_js", {}), "sitemap_ok": rid in self.sitemap_shops(),
+            "sitemap": {k: v for k, v in (self.store.get("sitemaps", {}).get(rid) or {}).items() if k != "urls"}
+            | {"count": len((self.store.get("sitemaps", {}).get(rid) or {}).get("urls") or []),
+               "linked": sum(1 for by in self.store["offers"].values() if (by.get(rid) or {}).get("found_via") == "sitemap"),
+               "busy": getattr(self, "_sitemap_busy", False)},
             "now": time.time(),
         }
 
@@ -1840,6 +2058,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         before = self.compute()["statuses"].get(num, {})
         record_price(offer, price)
         offer["last_ok"] = offer["last_checked"]
+        if url:
+            offer["last_via"] = source                       # 'relay' / 'userscript': shown as ⓤ next to the price
         msg = (T("price €{price} fetched by your browser (relay)", price=f"{price:.2f}") if source == "relay"
                else T("price €{price} received via Tampermonkey", price=f"{price:.2f}") if url
                else T("price €{price} entered by hand", price=f"{price:.2f}"))

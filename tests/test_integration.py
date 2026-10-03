@@ -921,6 +921,7 @@ async def test_comparison_sites_hidden_source(hass: HomeAssistant, entry, no_net
     assert urls[0] == "https://www.kieskeurig.be/search?q=lego+60454" and "52114913" in urls[1]
     offers = c.store["offers"]["60454"]
     assert offers["bol"]["last_price"] == 24.99 and offers["bol"]["error"] is None           # bol.com via Kieskeurig
+    assert offers["bol"]["last_via"] == "kieskeurig"                                         # shown as ⓒ
     assert offers["amazon_nl"]["via"] == "kieskeurig" and offers["amazon_nl"]["last_price"] == 27.49   # new shop via Kieskeurig
     assert c.store["sets"]["60454"]["ean"] == "5702017583723"
     check = [e for e in c.store["activity"] if e["kind"] == "check"][-1]
@@ -1554,3 +1555,186 @@ async def test_new_custom_shop_is_used_and_shop_detail(hass: HomeAssistant, entr
     d = (await ws.receive_json())["result"]
     assert d["site"] == "smythstoys.com" and d["trace"][0]["status"] == 200 and d["enabled"]
     assert any("JavaScript" in h for h in d["hints"])
+
+
+async def test_continuous_check_priorities_search_and_via(hass: HomeAssistant, entry, no_network, hass_client):
+    c = await _setup(hass, entry)
+    for n in ("10281", "10311", "42143"):
+        await hass.services.async_call(DOMAIN, "add_set", {"set_number": n}, blocking=True)
+    offers = c.store["offers"]
+    offers["10281"]["bol"] = {"url": "https://www.bol.com/nl/nl/p/lego-bonsai-10281/9300000012345678/", "history": []}
+    offers["10311"]["bol"] = {"url": "https://www.bol.com/nl/nl/p/lego-orchidee-10311/9300000012345679/", "history": [[1, 39.99]],
+                              "last_ok": 1, "error": "blocked (HTTP 403)", "available": False}
+    offers["42143"]["lego_com"] = {"url": "https://www.lego.com/nl-be/product/42143", "history": [[1, 449.99]],
+                                   "last_ok": time.time(), "available": True, "last_price": 449.99}
+    q = c.continuous_items(50)
+    reasons = [(i["reason"], i["set_number"], i["retailer"]) for i in q["items"]]
+    assert reasons[0] == ("no_price", "10281", "bol")                         # never a price: first
+    first_search = next(k for k, (r, *_x) in enumerate(reasons) if r == "search")
+    assert reasons.index(("server_fails", "10311", "bol")) > first_search      # then searches, then failing links
+    assert not any(n == "42143" and r == "search" for r, n, _ in reasons)      # has a price: no searching for it
+    assert q["counts"]["no_price"] == 1 and q["site_gap"] == 30
+
+    client = await hass_client()
+    page = '<a href="/nl/nl/p/lego-icons-orchidee-10311/9300000099/">LEGO Icons 10311 Orchidee</a>'
+    r = await client.post("/api/lego_tracker/relay", json={"heartbeat": {"on": True, "done": 3, "ok": 2, "version": "x"},
+                          "results": [{"kind": "search", "retailer": "amazon_de", "set_number": "10311", "url": "https://www.amazon.de/s?k=LEGO+10311", "status": 200, "html": "nothing"},
+                                      {"kind": "search", "retailer": "c_none", "set_number": "10311", "status": 200, "html": page}]})
+    body = await r.json()
+    assert body["fail"] == 1 and len(body["rejected"]) == 1 and c.store["relay_heartbeat"]["done"] == 3
+    assert "10311|amazon_de" in c.store["relay_searched"]
+    assert not any(i["kind"] == "search" and i["set_number"] == "10311" and i["retailer"] == "amazon_de"
+                   for i in c.continuous_items(50)["items"] if i.get("kind"))             # not searched again this week
+    # a price from the browser is marked, a server price clears the mark
+    r = await client.post("/api/lego_tracker/relay", json={"results": [{"set_number": "10281", "retailer": "bol",
+                          "url": offers["10281"]["bol"]["url"], "price": 41.5, "title": "LEGO Bonsai 10281"}]})
+    assert (await r.json())["ok"] == 1 and offers["10281"]["bol"]["last_via"] == "relay"
+    ws_card = __import__("custom_components.lego_tracker.websocket_api", fromlist=["_card"])._card(c, "10281")
+    assert ws_card["offers"]["bol"]["via"] == "relay"
+    await c.refresh_set("10281", ["bol"])
+    assert "last_via" not in offers["10281"]["bol"]
+    found = '<a href="/nl/nl/p/lego-technic-ferrari-daytona-sp3-42143/9300000088/">x</a>'
+    r = await client.post("/api/lego_tracker/relay", json={"results": [{"kind": "search", "retailer": "bol", "set_number": "42143",
+                          "url": "https://www.bol.com/nl/nl/s/?searchtext=42143", "status": 200, "html": found}]})
+    body = await r.json()
+    assert body["follow"][0]["url"] == "https://www.bol.com/nl/nl/p/lego-technic-ferrari-daytona-sp3-42143/9300000088/"
+    assert offers["42143"]["bol"]["url"] == body["follow"][0]["url"]                # linked: the browser fetches it next
+
+
+def test_sitemap_parsing_and_matching():
+    import gzip as _gz
+
+    from custom_components.lego_tracker import sitemaps
+
+    assert sitemaps.robots_sitemaps("User-agent: *\nSitemap: https://www.smythstoys.com/be/sitemap.xml\n") == ["https://www.smythstoys.com/be/sitemap.xml"]
+    index = '<sitemapindex><sitemap><loc>https://x.be/sitemap-cms.xml</loc></sitemap><sitemap><loc>https://x.be/sitemap-products-1.xml.gz</loc></sitemap></sitemapindex>'
+    kids, pages = sitemaps.parse(index)
+    assert pages == [] and sitemaps.order_children(kids)[0].endswith("products-1.xml.gz")
+    urlset = ('<urlset><url><loc>https://www.smythstoys.com/be/nl-be/speelgoed/lego/lego-icons-10368-chrysant/p/236401</loc></url>'
+              '<url><loc>https://www.smythstoys.com/be/nl-be/speelgoed/lego/led-verlichting-voor-lego-10368/p/999001</loc></url>'
+              '<url><loc>https://www.smythstoys.com/be/nl-be/speelgoed/playmobil/71234-boot/p/111</loc></url>'
+              '<url><loc>https://www.smythstoys.com/be/nl-be/speelgoed/lego/lego-city-60510-brandweer/p/10368</loc></url></urlset>')
+    assert sitemaps.body_text(_gz.compress(urlset.encode())) == urlset                   # .xml.gz files
+    urls = sitemaps.lego_urls(sitemaps.parse(urlset)[1], "smythstoys.com")
+    assert len(urls) == 3                                                                 # no Playmobil
+    assert sitemaps.match(urls, "10368").endswith("lego-icons-10368-chrysant/p/236401")   # not the LED kit, not product code 10368
+    assert sitemaps.match(urls, "60510").endswith("/p/10368")
+    assert sitemaps.match(urls, "42143") is None
+
+
+async def test_links_from_sitemap_ean_and_redirect(hass: HomeAssistant, entry, no_network):
+    from custom_components.lego_tracker.client import Fetcher
+
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10368"}, blocking=True)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "60510"}, blocking=True)
+    files = {
+        "https://www.dreamland.be/robots.txt": b"Sitemap: https://www.dreamland.be/sitemap_index.xml",
+        "https://www.dreamland.be/sitemap_index.xml": b"<sitemapindex><sitemap><loc>https://www.dreamland.be/sitemap_products.xml</loc></sitemap></sitemapindex>",
+        "https://www.dreamland.be/sitemap_products.xml": b"<urlset><url><loc>https://www.dreamland.be/e/nl/dl/lego-icons-chrysant-10368-123456</loc></url></urlset>",
+    }
+
+    async def get_raw(rid, url):
+        return (200, files[url], None) if url in files else (404, b"", "HTTP error 404")
+    with patch.object(c.fetcher, "get_raw", get_raw):
+        res = await c.refresh_sitemap("dreamland_be")
+    assert res == {"urls": 1, "files": 2, "found": 1}          # the index + the product file (robots.txt aside)
+    assert c.store["offers"]["10368"]["dreamland_be"]["url"] == "https://www.dreamland.be/e/nl/dl/lego-icons-chrysant-10368-123456"
+    assert c.store["offers"]["10368"]["dreamland_be"]["found_via"] == "sitemap"
+    # a rejected link is never taken from the sitemap again
+    del c.store["offers"]["10368"]["dreamland_be"]
+    c.store.setdefault("rejected", {})["10368"] = ["/e/nl/dl/lego-icons-chrysant-10368-123456"]
+    assert c.sitemap_link("dreamland_be", "10368") is None
+
+    # EAN fallback (in a job): the search for the number finds nothing, the EAN search does
+    c.store["sets"]["60510"]["ean"] = "5702017583556"
+    seen = []
+
+    async def discover(retailer, num, force=False, url=None):
+        seen.append(url)
+        return "https://www.kruidvat.be/nl/lego-city-60510/p/123" if url and "5702017583556" in url else None
+    c.job = {"running": True, "shops": {}}
+    with patch.object(c.fetcher, "discover", discover):
+        await c.discover_set("60510", ["kruidvat_be"])
+    c.job = None
+    assert seen[-1].endswith("text=5702017583556") and c.store["offers"]["60510"]["kruidvat_be"]["url"].endswith("/p/123")
+
+    # a search that jumps straight to the product page (redirect) is taken
+    f = Fetcher(None, use_impersonation=False)
+    f.final_url["kruidvat_be"] = "https://www.kruidvat.be/nl/lego-city-brandweerkazerne-60510/p/777"
+    page = "<html><title>LEGO City 60510 Brandweerkazerne | Kruidvat</title></html>"
+    assert f._landed_on_product("kruidvat_be", "https://www.kruidvat.be/nl/search?text=60510", page, "60510").endswith("/p/777")
+    assert f._landed_on_product("kruidvat_be", "https://www.kruidvat.be/nl/search?text=60510", page.replace("60510", "1"), "60510") is None
+
+
+async def test_rendered_search_page_from_background_tab(hass: HomeAssistant, entry, no_network):
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10368"}, blocking=True)
+    # the server saw a JavaScript search page: the shop is marked, the continuous check asks for a background tab
+    c.fetcher.discover_error["dreamland_be"] = "the search page does not contain 10368: this shop probably loads its results with JavaScript. Paste the product page URL instead."
+    c._note_js("dreamland_be")
+    item = next(i for i in c.continuous_items(50)["items"] if i.get("kind") == "search" and i["retailer"] == "dreamland_be")
+    assert item["render"] is True
+    html = '<div><a href="/e/nl/dl/lego-icons-chrysant-10368-123456"><span>LEGO Icons 10368 Chrysant</span></a></div>'
+    res = c.relay_result({"kind": "search", "rendered": True, "retailer": "dreamland_be", "set_number": "10368",
+                          "url": item["url"], "status": 200, "html": html})
+    assert res["url"] == "https://www.dreamland.be/e/nl/dl/lego-icons-chrysant-10368-123456"
+    assert c.store["offers"]["10368"]["dreamland_be"]["url"] == res["url"]
+
+
+async def test_review_fixes_low_price_relay_search_and_via(hass: HomeAssistant, entry, no_network):
+    from custom_components.lego_tracker.models import is_suspicious_price
+    from custom_components.lego_tracker.websocket_api import _card
+
+    new_set = {"set_number": "75192"}
+    assert not is_suspicious_price(100.0, new_set, {}, [100.0, 1000.0])      # one other shop says the same price
+    assert is_suspicious_price(19.99, new_set, {}, [749.99, 759.0])          # two shops that agree: an accessory
+
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10368"}, blocking=True)
+    # a blocked / failed browser search is not "searched" for a week
+    c.relay_result({"kind": "search", "retailer": "amazon_de", "set_number": "10368", "url": "https://www.amazon.de/s?k=10368", "status": 403, "html": ""})
+    c.relay_result({"kind": "search", "retailer": "amazon_nl", "set_number": "10368", "url": "https://www.amazon.nl/s?k=10368", "status": 0, "html": ""})
+    assert not any(k.startswith("10368|amazon") for k in c.store.get("relay_searched", {}))
+    # no ⓤ next to a manual price
+    o = c.store["offers"]["10368"]["bol"] = {"url": "https://www.bol.com/nl/nl/p/x-10368/1/", "history": [[1, 30.0]], "available": True,
+                                              "last_price": 30.0, "last_via": "relay"}
+    assert _card(c, "10368")["offers"]["bol"]["via"] == "relay"
+    o["manual_price"] = {"price": 25.0}
+    assert _card(c, "10368")["offers"]["bol"]["via"] is None
+
+
+def test_review_fixes_hosts_sizes_groups_and_lego_urls():
+    import gzip as _gz
+    import zlib as _zlib
+
+    from custom_components.lego_tracker import sitemaps
+    from custom_components.lego_tracker.client import check_url, registrable
+    from custom_components.lego_tracker.models import agreeing_group, is_suspicious_price
+    from custom_components.lego_tracker.parsers import normalize_url
+
+    # a host that merely contains the shop's domain is not the shop
+    evil = ["https://smythstoys.com.evil.example/lego-icons-10368/p/1", "https://www.smythstoys.com/be/lego-icons-10368/p/2"]
+    assert sitemaps.lego_urls(evil, "smythstoys.com") == evil[1:]
+    files, urls = sitemaps.read_file(b"<sitemapindex><sitemap><loc>http://127.0.0.1/admin.xml</loc></sitemap>"
+                                     b"<sitemap><loc>https://www.smythstoys.com/p1.xml</loc></sitemap></sitemapindex>", "smythstoys.com", 10)
+    assert files == ["https://www.smythstoys.com/p1.xml"]                       # never a sitemap on another host
+    with pytest.raises(ValueError):
+        normalize_url("bol", "https://bol.com.evil.example/nl/p/x/1/")
+    assert normalize_url("bol", "https://www.bol.com/nl/nl/p/x/1/").startswith("https://www.bol.com/")
+    # redirects: only within the same site
+    assert registrable("www.amazon.com.be") == "amazon.com.be" and registrable("ocean.kieskeurig.be") == "kieskeurig.be"
+    check_url("https://www.smythstoys.com/be/x", "smythstoys.com")
+    for bad in ("http://169.254.169.254/latest", "http://localhost:8123/api", "file:///etc/passwd", "https://smythstoys.com.evil.example/"):
+        with pytest.raises(ValueError):
+            check_url(bad, "smythstoys.com")
+    # a .gz file that unpacks to more than allowed is skipped, a normal one is read
+    assert sitemaps.body_text(_gz.compress(b"<urlset></urlset>")) == "<urlset></urlset>"
+    bomb = _zlib.compressobj(9, _zlib.DEFLATED, 16 + _zlib.MAX_WBITS)
+    big = bomb.compress(b"0" * (sitemaps.MAX_TEXT + 10)) + bomb.flush()
+    assert sitemaps.body_text(big) == ""
+    # agreement in groups: two shops at 100 and two at 400 still make 5 an outlier
+    assert agreeing_group([100, 100, 400, 400]) == [100, 100]
+    assert is_suspicious_price(5.0, {"set_number": "1"}, {}, [100, 100, 400, 400])
+    assert not is_suspicious_price(100.0, {"set_number": "1"}, {}, [100, 1000])
+

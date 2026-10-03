@@ -276,6 +276,16 @@ def link_check(offer: dict[str, Any], lego_set: dict[str, Any], set_number: str)
     return status, reason
 
 
+def agreeing_group(prices: list[float]) -> list[float]:
+    """The lowest group of at least two prices that agree (each within ±50 % of the group's lowest price)."""
+    ps = sorted(p for p in prices if p and p > 0)
+    for i, low in enumerate(ps):
+        group = [p for p in ps[i:] if p <= low * 1.5]
+        if len(group) >= 2:
+            return group
+    return []
+
+
 def is_suspicious_price(price: float, lego_set: dict[str, Any], offer: dict[str, Any],
                         others: list[float] | None = None) -> str | None:
     """Catch parse errors (accessory/marketplace/multi-pack prices, cents read without the comma) before
@@ -284,9 +294,14 @@ def is_suspicious_price(price: float, lego_set: dict[str, Any], offer: dict[str,
     rrp = lego_set.get("rrp")
     if not rrp and others:
         mid = median(others)
-        # far above the others: e.g. cents read without the comma; far below needs two others (an accessory)
-        if price > mid * 4 or (len(others) >= 2 and price < mid * 0.25):
+        # far above the others: e.g. cents read without the comma
+        if price > mid * 4:
             return T("suspicious price €{price} (far from €{usual}) ignored", price=f"{price:.2f}", usual=f"{mid:.2f}")
+        # far below needs two other shops that agree with each other (an accessory, not one odd quote); the lowest
+        # such group counts, also when the others form two groups ([100, 100, 400, 400])
+        group = agreeing_group(others)
+        if group and price < median(group) * 0.25:
+            return T("suspicious price €{price} (far from €{usual}) ignored", price=f"{price:.2f}", usual=f"{median(group):.2f}")
     if rrp and price < rrp * 0.2:
         return T("suspicious price €{price} (under 20% of RRP) ignored", price=f"{price:.2f}")
     if rrp and price > rrp * 4:

@@ -10,6 +10,7 @@ function panelFor(events) {
   let Panel;
   const context = vm.createContext({
     HTMLElement: class {},
+    setTimeout, clearTimeout, setInterval, clearInterval,
     customElements: { get: () => undefined, define: (_name, cls) => { Panel = cls; } },
   });
   vm.runInContext(source, context);
@@ -19,7 +20,7 @@ function panelFor(events) {
   panel.state = { section: "deals", sub: { deals: "today" }, data: { events, retailers: {} } };
   panel.shadowRoot = { getElementById: () => content };
   panel.vToday = panel.timeline;
-  panel.bindContent = panel.hookCharts = () => {};
+  panel.bindContent = panel.hookCharts = panel.tickManual = () => {};
   return { panel, content, context };
 }
 

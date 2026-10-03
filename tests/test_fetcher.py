@@ -59,3 +59,32 @@ async def test_captcha_page_counts_as_block(hass, server):
     parsed, err = await f.fetch_offer("amazon_nl", server["url"])
     assert "captcha" in err and f.cooldown_left("amazon_nl") > 0
     await f.async_close()
+
+
+@pytest.mark.parametrize("impersonate", [True, False])
+async def test_redirects_stay_on_the_same_site(hass, aiohttp_server, impersonate):
+    async def handler(request):
+        if request.path == "/same":
+            raise web.HTTPFound("/p")
+        if request.path == "/away":
+            raise web.HTTPFound(f"http://localhost:{request.url.port}/p")    # another host: never followed
+        return web.Response(text=PAGE_OK, content_type="text/html")
+
+    app = web.Application()
+    app.router.add_get("/{tail:.*}", handler)
+    srv = await aiohttp_server(app)
+    f = Fetcher(hass, impersonate)
+    f.min_delay = 0
+    f.domain_gap = f.search_gap = 0
+    await f.async_setup()
+    parsed, err = await f.fetch_offer("bol", str(srv.make_url("/same")))
+    assert err is None and parsed.price == 12.34 and f.final_url["bol"].endswith("/p")
+    parsed, err = await f.fetch_offer("bol", str(srv.make_url("/away")))
+    assert parsed is None and "another site blocked" in err
+    await f.async_close()
+
+
+async def test_lego_offer_without_set_number_is_refused(hass):
+    f = Fetcher(hass, False)
+    parsed, err = await f.fetch_offer("lego_com", "https://www.lego.com/nl-be/product/flower-bouquet")
+    assert parsed is None and "set number" in err

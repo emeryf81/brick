@@ -316,9 +316,9 @@ def normalize_url(retailer: str, url_or_id: str) -> str:
             return amazon_url(retailer, m.group(1))
     if not value.startswith("http"):
         raise ValueError("Provide a full product URL (or an ASIN for Amazon).")
-    host = urlparse(value).netloc.lower()
-    expected = domain_of(retailer)
-    if expected and expected not in host:
+    host = (urlparse(value).hostname or "").lower().rstrip(".")
+    expected = (domain_of(retailer) or "").lower().removeprefix("www.")
+    if expected and not (host == expected or host.endswith("." + expected)):      # never 'shop.be.evil.example'
         raise ValueError(f"URL host {host!r} does not match retailer {retailer}.")
     return value.split("#")[0]
 

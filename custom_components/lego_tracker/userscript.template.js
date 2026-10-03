@@ -8,6 +8,7 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
+// @grant        GM_openInTab
 // @connect      *
 // @downloadURL  {{SELF_URL}}
 // @updateURL    {{SELF_URL}}
@@ -18,6 +19,12 @@
 // 1) On a shop page: the price of a tracked product is sent to Home Assistant.
 // 2) Browser relay: while Home Assistant is open, this browser fetches the shop pages that fail on
 //    the server (e.g. bol.com) in the background, with your own connection, and sends the prices.
+// 3) Continuous check (switch on in the Tampermonkey menu or under Manage → Userscript): while a
+//    Home Assistant tab is open, this browser keeps checking by itself: first links without any price,
+//    then searches for sets without any price, then shops the server can't fetch. Calm: every site at
+//    most twice a minute, a search at most once every 2 minutes, a site that blocks is left alone for 1 h.
+//    Optional: shops that build their search results with JavaScript are opened in a background tab, so the
+//    script can read the finished page there (the tab closes itself).
 (function () {
   "use strict";
   const DEFAULT_HA = "{{HA_URL}}";
@@ -27,6 +34,17 @@
     if (url !== null) GM_setValue("ha_url", url.trim());
     const token = prompt({{tj:Long-lived access token (profile → Security)}}, GM_getValue("ha_token", ""));
     if (token !== null) GM_setValue("ha_token", token.trim());
+  });
+  GM_registerMenuCommand({{tj:Background tabs for JavaScript shops: switch on / off}}, () => {
+    const on = !GM_getValue("render_tabs", false);
+    GM_setValue("render_tabs", on);
+    note(on ? {{tj:Shops with a JavaScript search are searched in a background tab.}} : {{tj:No background tabs.}}, on);
+  });
+  GM_registerMenuCommand({{tj:Continuous check: switch on / off}}, () => {
+    const on = !GM_getValue("continuous", false);
+    GM_setValue("continuous", on);
+    note(on ? {{tj:Continuous check is on: it runs while a Home Assistant tab is open.}} : {{tj:Continuous check is off.}}, on);
+    if (on && !onShop) continuous();
   });
   const HA = () => GM_getValue("ha_url", "").replace(/\/$/, ""), TOKEN = () => GM_getValue("ha_token", "");
   const note = (text, ok) => {
@@ -137,6 +155,7 @@
     if (running || !TOKEN() || !HA()) { tell({ type: "relay-status", running, error: TOKEN() ? null : "no-token" }); return; }
     const every = GM_getValue("relay_hours", 6) * 3600 * 1000;
     if (!manual && Date.now() - GM_getValue("relay_last", 0) < every) return;
+    if (!manual && GM_getValue("continuous", false)) return;   // the continuous check already covers this
     running = true;
     const auth = { Authorization: "Bearer " + TOKEN(), "Content-Type": "application/json" };
     try {
@@ -181,16 +200,161 @@
       tell({ type: "relay-status", running: false, error: String(e) });
     } finally { running = false; }
   }
+  // ---------------------------------------------------------------- 3) continuous check
+  const SITE_GAP = 30 * 1000, SEARCH_GAP = 120 * 1000, BLOCK_PAUSE = 3600 * 1000, IDLE = 10 * 60 * 1000;
+  const tabId = Math.random().toString(36).slice(2);
+  const siteOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch (e) { return ""; } };
+  const cont = { running: false, done: 0, ok: 0, fail: 0, found: 0, shop: null, set_number: null, idle: false, other_tab: false, next: 0, error: null };
+  const tellCont = () => tell({ type: "continuous-status", on: GM_getValue("continuous", false), ...cont });
+  // one tab per browser does the work; the others wait (a tab that stops answering is taken over after 1 minute)
+  const mine = () => { const l = GM_getValue("cont_lock", null); return !l || l.id === tabId || Date.now() - l.ts > 60000; };
+  const hold = () => GM_setValue("cont_lock", { id: tabId, ts: Date.now() });
+  const owned = () => { const l = GM_getValue("cont_lock", null); return !!l && l.id === tabId; };
+  // take the lock, then look again a moment later: if two tabs grab it at the same time, only the last writer keeps it
+  const acquire = async () => { if (!mine()) return false; hold(); await sleep(300 + Math.random() * 400); return owned(); };
+  // keep the lock fresh while a slow request is running (never taking it from another tab)
+  const keepLock = async (promise) => { const t = setInterval(() => { if (owned()) hold(); }, 10000); try { return await promise; } finally { clearInterval(t); } };
+  const nap = async (ms) => { const end = Date.now() + ms; while (Date.now() < end && GM_getValue("continuous", false)) { if (mine()) hold(); await sleep(Math.min(5000, end - Date.now())); } };
+  const dueAt = (it) => {   // when this item's site may be asked again (shared by all tabs of this browser)
+    const site = siteOf(it.url), last = GM_getValue("site_last", {}), srch = GM_getValue("site_search", {}), paused = GM_getValue("site_paused", {});
+    return Math.max((last[site] || 0) + SITE_GAP, it.kind === "search" ? (srch[site] || 0) + SEARCH_GAP : 0, paused[site] || 0);
+  };
+  const stamp = (it) => {
+    const site = siteOf(it.url), last = GM_getValue("site_last", {}); last[site] = Date.now(); GM_setValue("site_last", last);
+    if (it.kind === "search") { const srch = GM_getValue("site_search", {}); srch[site] = Date.now(); GM_setValue("site_search", srch); }
+  };
+  /** Fetch one item in this browser and turn it into a result for Home Assistant; blocked = the site refused us. */
+  async function fetchItem(it) {
+    const r = await req({ method: "GET", url: it.url, headers: { "Accept-Language": "nl-BE,nl;q=0.9,en;q=0.8", Accept: "text/html" } });
+    const html = r.responseText || "", bot = !!r.status && BLOCKED.test(html.slice(0, 20000));
+    const blocked = !r.status || bot || r.status === 403 || r.status === 429 || r.status === 503;
+    if (it.kind === "page" || it.kind === "search") {   // Home Assistant reads the page (same parser as on the server)
+      return { blocked, result: { kind: it.kind, source: it.source, retailer: it.retailer, set_number: it.set_number, url: it.url, step: it.step || 0,
+        status: bot ? 403 : r.status, html: bot ? "" : html.slice(0, 1500000), error: r.status ? null : "network error" } };
+    }
+    const result = { set_number: it.set_number, retailer: it.retailer, url: it.url };
+    if (r.status >= 400 || !r.status || bot) result.error = r.status ? (bot ? "blocked (captcha / bot protection)" : "HTTP " + r.status) : "network error";
+    else {
+      const doc = new DOMParser().parseFromString(html, "text/html"), price = priceOf(doc, new URL(it.url).hostname);
+      if (price) { result.price = price; result.title = titleOf(doc); } else result.error = "price not found on the page";
+    }
+    return { blocked, result };
+  }
+  /** A search page built with JavaScript: open it in a background tab; the script in that tab sends back the
+   * finished page (see renderHere) and the tab closes. */
+  async function renderItem(it) {
+    const id = Math.random().toString(36).slice(2), site = siteOf(it.url);
+    const jobs = GM_getValue("render_jobs", {}); jobs[site] = { id, number: it.set_number, ts: Date.now() }; GM_setValue("render_jobs", jobs);
+    let tab = null;
+    try { tab = GM_openInTab(it.url, { active: false, insert: true, setParent: true }); } catch (e) { /* not allowed */ }
+    let got = null;
+    for (let i = 0; i < 35 && !got; i++) { await sleep(1000); got = GM_getValue("render_" + id, null); }
+    try { if (tab) tab.close(); } catch (e) { /* already closed */ }
+    GM_setValue("render_" + id, null);
+    const j2 = GM_getValue("render_jobs", {}); delete j2[site]; GM_setValue("render_jobs", j2);
+    return { blocked: !!(got && got.blocked), result: { kind: "search", rendered: true, retailer: it.retailer, set_number: it.set_number, url: it.url,
+      status: got ? (got.blocked ? 403 : 200) : 0, html: got && !got.blocked ? got.html : "", error: got ? null : "the background tab did not answer" } };
+  }
+  /** In a tab opened by renderItem: wait until the results are on screen, hand the page back, close. */
+  function renderHere() {
+    const job = (GM_getValue("render_jobs", {}) || {})[siteOf(location.href)];
+    if (!job || Date.now() - job.ts > 60000) return false;
+    let n = 0;
+    const tick = () => {
+      const text = document.body ? document.body.innerText || "" : "", links = document.querySelectorAll("a[href]").length;
+      if ((text.includes(job.number) && links > 20) || ++n >= 20) {
+        const html = document.documentElement.outerHTML;
+        // what a visitor sees (a page's scripts may mention "captcha" without blocking anyone)
+        GM_setValue("render_" + job.id, { html: html.slice(0, 1500000), url: location.href, blocked: BLOCKED.test(document.title + " " + text.slice(0, 5000)) });
+        setTimeout(() => { try { window.close(); } catch (e) { /* the opener closes it */ } }, 300);
+      } else setTimeout(tick, 1000);
+    };
+    setTimeout(tick, 1500);
+    return true;
+  }
+  async function continuous() {
+    if (cont.running || !GM_getValue("continuous", false)) return;
+    cont.running = true; tellCont();
+    const auth = () => ({ Authorization: "Bearer " + TOKEN(), "Content-Type": "application/json" });
+    const beat = (on = true) => ({ on, done: cont.done, ok: cont.ok, fail: cont.fail, found: cont.found, version: "{{VERSION}}" });
+    const strikes = {};
+    let lastBeat = 0;
+    const post = async (results) => {    // to Home Assistant; false = not accepted (bad token, server down)
+      const r = await keepLock(req({ method: "POST", url: HA() + "/api/lego_tracker/relay", headers: auth(), data: JSON.stringify({ results, heartbeat: beat() }) }));
+      lastBeat = Date.now();
+      cont.error = r.status === 401 ? "no-token" : r.status === 200 ? null : "HTTP " + (r.status || "?");
+      let res = {}; try { res = JSON.parse(r.responseText || "{}"); } catch (e) { /* ignore */ }
+      return r.status === 200 ? res : null;
+    };
+    try {
+      while (GM_getValue("continuous", false)) {
+        if (!TOKEN() || !HA()) { await nap(60000); continue; }
+        if (!(await acquire())) { cont.other_tab = true; tellCont(); await nap(30000); continue; }
+        cont.other_tab = false;
+        const list = await keepLock(req({ method: "GET", url: HA() + "/api/lego_tracker/relay?mode=continuous&limit=20", headers: auth() }));
+        let data = {}; try { data = JSON.parse(list.responseText || "{}"); } catch (e) { /* ignore */ }
+        cont.error = list.status === 401 ? "no-token" : list.status === 200 ? null : "HTTP " + (list.status || "?");
+        if (list.status !== 200 || !data.enabled) { cont.idle = true; tellCont(); await nap(list.status === 200 ? IDLE : 5 * 60000); continue; }
+        const queue = data.items || [];
+        cont.idle = !queue.length; tellCont();
+        if (!queue.length) {   // nothing to do: tell Home Assistant we are alive, look again in 10 minutes
+          await post([]);
+          await nap(IDLE); continue;
+        }
+        while (queue.length && GM_getValue("continuous", false)) {
+          if (!owned()) break;                    // another tab took over: it gets its own queue
+          hold();
+          const now = Date.now(), times = queue.map(dueAt), wait = Math.min(...times);
+          if (wait > now) {                       // every site still needs its pause; still say we are alive
+            cont.next = wait; tellCont();
+            if (Date.now() - lastBeat > 5 * 60000 && !(await post([]))) { tellCont(); await nap(5 * 60000); break; }
+            await nap(Math.min(wait - now, 60000)); continue;
+          }
+          const it = queue.splice(times.indexOf(wait), 1)[0];
+          stamp(it);
+          cont.shop = it.shop; cont.set_number = it.set_number; cont.next = 0;
+          const { blocked, result } = await keepLock(it.kind === "search" && it.render && GM_getValue("render_tabs", false) ? renderItem(it) : fetchItem(it));
+          if (!owned()) break;                    // lost the lock meanwhile: leave the result to the other tab
+          const site = siteOf(it.url);
+          if (blocked) {
+            strikes[site] = (strikes[site] || 0) + 1;
+            if (strikes[site] >= 2) { const p = GM_getValue("site_paused", {}); p[site] = Date.now() + BLOCK_PAUSE; GM_setValue("site_paused", p); strikes[site] = 0; }
+          } else strikes[site] = 0;
+          const res = await post([result]);
+          if (!res) {                             // not saved (token revoked, Home Assistant restarting): stop, retry later
+            tellCont(); await nap(cont.error === "no-token" ? IDLE : 5 * 60000); break;
+          }
+          cont.done++;
+          if (res.ok) cont.ok++; else if (!(res.follow || []).length) cont.fail++;
+          if (it.kind === "search" && (res.follow || []).length) cont.found++;
+          for (const f of res.follow || []) queue.unshift(f);   // found link / next page: fetch that one next
+          tellCont();
+          await nap(4000 + Math.random() * 5000);   // calm, like a person clicking through
+        }
+      }
+    } catch (e) {
+      tell({ type: "continuous-status", on: true, error: String(e) });
+    } finally {
+      cont.running = false; cont.shop = null; cont.set_number = null;
+      const l = GM_getValue("cont_lock", null); if (l && l.id === tabId) GM_setValue("cont_lock", null);
+      if (!GM_getValue("continuous", false) && TOKEN() && HA()) req({ method: "POST", url: HA() + "/api/lego_tracker/relay", headers: auth(), data: JSON.stringify({ results: [], heartbeat: beat(false) }) });
+      tellCont();
+    }
+  }
+
   const onShop = !location.href.startsWith(HA() + "/") && !/\/lego-tracker/.test(location.pathname);
   if (onShop) {
-    setTimeout(report, 2500);   // wait for late-rendered prices
+    if (!renderHere()) setTimeout(report, 2500);   // a background tab for the continuous check, or: send this page's price
   } else {
     window.addEventListener("message", (e) => {
       const m = e.data;
       if (!m || m.source !== "lego-tracker-panel") return;
-      if (m.type === "relay-ping") tell({ type: "relay-pong", version: "{{VERSION}}", token: !!TOKEN(), running, last: GM_getValue("relay_last", 0) });
+      if (m.type === "relay-ping") { tell({ type: "relay-pong", version: "{{VERSION}}", token: !!TOKEN(), running, last: GM_getValue("relay_last", 0), continuous: GM_getValue("continuous", false), render: GM_getValue("render_tabs", false) }); tellCont(); }
+      if (m.type === "render-set") { GM_setValue("render_tabs", !!m.on); tell({ type: "relay-pong", version: "{{VERSION}}", token: !!TOKEN(), running, last: GM_getValue("relay_last", 0), continuous: GM_getValue("continuous", false), render: !!m.on }); }
       if (m.type === "relay-run") relay(true);
+      if (m.type === "continuous-set") { GM_setValue("continuous", !!m.on); if (m.on) continuous(); else tellCont(); }
     });
     setTimeout(() => relay(false), 8000);   // automatic, at most once per interval, while Home Assistant is open
+    setTimeout(continuous, 12000);          // the continuous check, when switched on
   }
 })();

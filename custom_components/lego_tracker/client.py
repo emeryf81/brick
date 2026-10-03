@@ -7,7 +7,7 @@ import logging
 import random
 import time
 from collections import deque
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from typing import Any
 
 import aiohttp
@@ -15,7 +15,7 @@ import aiohttp
 from .models import normalize_set_number
 from .i18n import T
 from .shops import domain_of
-from .parsers import Parsed, find_search_result, lego_number, lego_product_url, parse_brickset_page, parse_page, search_url
+from .parsers import Parsed, find_search_result, is_search_url, lego_number, title_check, lego_product_url, parse_brickset_page, parse_page, search_url
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -52,6 +52,29 @@ def site_of(url: str) -> str:
     return urlparse(url).netloc.lower().removeprefix("www.")
 
 
+REDIRECTS = (301, 302, 303, 307, 308)
+MAX_REDIRECTS = 5
+MAX_BODY = 25_000_000            # bytes: a sitemap file or page larger than this is refused
+
+
+def registrable(host: str) -> str:
+    """'www.smythstoys.com' → 'smythstoys.com', 'www.amazon.com.be' → 'amazon.com.be' (an IP stays itself)."""
+    host = host.lower().rstrip(".")
+    labels = host.split(".")
+    if not labels or host.replace(".", "").isdigit() or ":" in host:
+        return host
+    keep = 3 if len(labels) >= 3 and labels[-2] in ("com", "co", "org", "net", "gov", "ac", "edu") else 2
+    return ".".join(labels[-keep:])
+
+
+def check_url(url: str, home: str) -> None:
+    """Only http(s), and only the site the request started on (its own subdomains included)."""
+    p = urlparse(url)
+    host = (p.hostname or "").lower().rstrip(".")
+    if p.scheme not in ("http", "https") or not host or not (host == home or host.endswith("." + home)):
+        raise ValueError(f"redirect to another site blocked ({host or url[:60]})")
+
+
 # After a block we stop asking that retailer for a while: hammering makes bot protection stricter.
 COOLDOWN_HOURS = (1, 3, 6, 12, 24)
 CURL_REQUIREMENT = "curl_cffi>=0.7.0"
@@ -83,6 +106,7 @@ class Fetcher:
         self.abort: Any = None                             # callable: True = stop waiting (the job was stopped)
         self.trace: dict[str, deque] = {}                  # per shop: the last requests, what came back and why
         self._search_meta: dict[str, tuple[int | None, int]] = {}
+        self.final_url: dict[str, str] = {}               # per shop: where the last request ended up (redirects)
 
     def _trace(self, key: str, kind: str, url: str, t0: float, status: int | None = None, size: int = 0,
                result: str | None = None, error: str | None = None, set_number: str | None = None) -> None:
@@ -135,16 +159,41 @@ class Fetcher:
                 self._sessions[retailer] = async_create_clientsession(self._hass)
         return self._sessions[retailer]
 
-    async def _request(self, retailer: str, url: str, referer: str | None = None) -> tuple[int, str]:
+    async def _request(self, retailer: str, url: str, referer: str | None = None, binary: bool = False) -> tuple[int, Any]:
+        """One page. Redirects are followed by hand and only within the same site (e.g. www.shop.be → shop.be/nl/…):
+        a page can never send the server to another host or into the local network."""
         headers = dict(BROWSER_HEADERS)
         if referer:
             headers.update({"Referer": referer, "Sec-Fetch-Site": "same-origin"})
         sess = self._session(retailer)
-        if self._curl_ok:
-            resp = await sess.get(url, headers=headers, allow_redirects=True)
-            return resp.status_code, resp.text
-        async with sess.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=30), allow_redirects=True) as resp:
-            return resp.status, await resp.text(errors="replace")
+        home = registrable(urlparse(url).hostname or "")
+        for _hop in range(MAX_REDIRECTS + 1):
+            check_url(url, home)
+            if self._curl_ok:
+                resp = await sess.get(url, headers=headers, allow_redirects=False)
+                status, loc = resp.status_code, resp.headers.get("location")
+                if status in REDIRECTS and loc:
+                    url = urljoin(url, loc)
+                    continue
+                body = resp.content if binary else resp.text
+            else:
+                async with sess.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=60 if binary else 30),
+                                    allow_redirects=False) as resp:
+                    status, loc = resp.status, resp.headers.get("Location")
+                    if status in REDIRECTS and loc:
+                        url = urljoin(url, loc)
+                        continue
+                    if binary:
+                        body = await resp.content.read(MAX_BODY + 1)
+                        if len(body) > MAX_BODY:
+                            raise ValueError(f"response over {MAX_BODY // 1_000_000} MB")
+                    else:
+                        body = await resp.text(errors="replace")
+            if binary and len(body) > MAX_BODY:
+                raise ValueError(f"response over {MAX_BODY // 1_000_000} MB")
+            self.final_url[retailer] = url
+            return status, body
+        raise ValueError("too many redirects")
 
     def next_free(self, url_or_site: str, search: bool = False) -> float:
         """Seconds until this site may be asked again (searches: also the search gap)."""
@@ -160,7 +209,7 @@ class Fetcher:
                 raise Aborted
             await asyncio.sleep(min(left, 1.0))
 
-    async def _get(self, retailer: str, url: str, search: bool = False) -> tuple[int, str]:
+    async def _get(self, retailer: str, url: str, search: bool = False, binary: bool = False) -> tuple[int, Any]:
         if self._curl_ok is None:
             await self.async_setup()
         site = site_of(url)
@@ -177,7 +226,7 @@ class Fetcher:
                 await asyncio.sleep(2 + random.random() * 2)
             await asyncio.sleep(self.min_delay + random.random() * 3)
             try:
-                return await self._request(retailer, url, referer=origin)
+                return await self._request(retailer, url, referer=None if binary else origin, binary=binary)
             finally:
                 self.last_request[site] = time.time()
                 if search:
@@ -218,6 +267,9 @@ class Fetcher:
         return parsed, error
 
     async def _fetch_offer(self, retailer: str, url: str, force: bool) -> tuple[Parsed | None, int | None, int, str | None]:
+        if retailer == "lego_com" and not lego_number(url):
+            # without the set number the page's own product can't be told from recommendations
+            return None, None, 0, T("not a LEGO.com product page with a set number in the address")
         if not force and (left := self.cooldown_left(retailer)) > 0:
             return None, None, 0, T("paused {hours} h after being blocked", hours=f"{left / 3600:.1f}")
         try:
@@ -260,6 +312,34 @@ class Fetcher:
             return status, "", T("blocked (HTTP {status})", status=status)
         return status, page, None
 
+    def _landed_on_product(self, retailer: str, url: str, page: str, set_number: str) -> str | None:
+        """A search for one exact product often jumps straight to its product page (redirect): that page is the link."""
+        final = (self.final_url.get(retailer) or "").split("#")[0]
+        if not final or final.split("?")[0] == url.split("?")[0] or is_search_url(final) or site_of(final) != site_of(url):
+            return None
+        parsed = parse_page(retailer, page, set_number)
+        title = parsed.title or ""
+        if title_check(title if "lego" in title.lower() else f"lego {title}", set_number)[0] == "ok":
+            return final
+        return None
+
+    async def get_raw(self, retailer: str, url: str) -> tuple[int, bytes, str | None]:
+        """(status, body bytes, error) for a sitemap / robots.txt of a shop, with the same pacing and pauses."""
+        t0 = time.time()
+        if self.cooldown_left(retailer) > 0:
+            return 0, b"", T("paused after being blocked")
+        try:
+            status, body = await self._get(retailer, url, binary=True)
+        except Aborted:
+            return 0, b"", T("paused: the job was stopped")
+        except Exception as err:  # noqa: BLE001
+            self._trace(retailer, "sitemap", url, t0, None, 0, None, T("network error: {error}", error=str(err)[:120]))
+            return 0, b"", T("network error: {error}", error=str(err)[:120])
+        body = body if isinstance(body, (bytes, bytearray)) else str(body or "").encode()
+        error = T("HTTP error {status}", status=status) if status >= 400 else None
+        self._trace(retailer, "sitemap", url, t0, status, len(body), None, error)
+        return status, bytes(body), error
+
     async def discover(self, retailer: str, set_number: str, force: bool = False, url: str | None = None) -> str | None:
         """Search the shop for the set; every attempt is kept in the shop's trace (Shops → click a shop)."""
         t0 = time.time()
@@ -298,22 +378,27 @@ class Fetcher:
         if status >= 400:
             self.discover_error[retailer] = T("search page: HTTP error {status}", status=status)
             return None
-        found = find_search_result(retailer, page, set_number)
+        found = find_search_result(retailer, page, set_number) or self._landed_on_product(retailer, url, page, set_number)
         if found or retailer != "lego_com":
             if not found:
                 self.discover_error[retailer] = T("no matching product found") if set_number in page else \
                     T("the search page does not contain {number}: this shop probably loads its results with JavaScript. Paste the product page URL instead.", number=set_number)
             return found
-        # LEGO.com search is partly rendered in the browser: try the product URL directly
+        # LEGO.com search is partly rendered in the browser: try the product URL directly (its own trace entry)
+        t0, purl = time.time(), lego_product_url(set_number)
         try:
-            status, page = await self._get(retailer, lego_product_url(set_number))
-        except Exception:  # noqa: BLE001 - also Aborted
+            status, page = await self._get(retailer, purl)
+        except Exception as err:  # noqa: BLE001 - also Aborted
+            self._trace(retailer, "page", purl, t0, None, 0, None, T("network error: {error}", error=str(err)[:120]), set_number)
             return None
         if status < 400:
             parsed = parse_page(retailer, page, set_number)
             if parsed.price or parsed.list_price or (parsed.title and set_number in (parsed.title + page[:200000])):
-                return lego_product_url(set_number)
+                self._trace(retailer, "page", purl, t0, status, len(page or ""), purl, None, set_number)
+                return purl
         self.discover_error[retailer] = T("no matching product found")
+        self._trace(retailer, "page", purl, t0, status, len(page or ""), None,
+                    T("HTTP error {status}", status=status) if status >= 400 else T("no matching product found"), set_number)
         return None
 
 
