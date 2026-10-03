@@ -2174,6 +2174,12 @@ async def test_setdb_refresh_new_sets_and_add(hass: HomeAssistant, entry, no_net
     await hass.services.async_call(DOMAIN, "add_set", {"set_number": "76300"}, blocking=True)
     s = c.store["sets"]["76300"]
     assert s["name"] == "New Batman set" and s["theme"] == "Batman" and s["pieces"] == 500 and s["name_source"] == "Rebrickable"
+    # a failed save changes nothing in memory
+    before, seen = dict(c.setdb), dict(c.store["new_sets"])
+    files["sets"] = _gz(first + f"76300-1,New Batman set,{year},6,500,\n42200-1,Technic car,{year},7,900,\n10999-1,Later set,{year},1,50,\n")
+    with patch.object(c._setdb_store, "async_save", AsyncMock(side_effect=OSError("disk full"))):
+        assert await c.refresh_setdb() == []
+    assert c.setdb == before and c.store["new_sets"] == seen and "disk full" in c.setdb_info["error"]
     # stored in its own file and read back on start
     await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()

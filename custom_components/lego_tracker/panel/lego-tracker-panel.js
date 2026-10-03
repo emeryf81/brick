@@ -937,7 +937,7 @@ class LegoTrackerPanel extends HTMLElement {
     const N = this.state.newsets;
     if (!N || Date.now() - N.at > 300000) {
       this._hass.callWS({ type: "lego_tracker/new_sets" }).then((r) => { this.state.newsets = { ...r, at: Date.now() }; if (this.state.section === "deals" && this.state.sub.deals === "new") this.renderContent(); })
-        .catch((e) => { this.state.newsets = { items: [], error: e.message, at: Date.now() }; });
+        .catch((e) => { this.state.newsets = { items: [], error: e.message, at: Date.now() }; if (this.state.section === "deals" && this.state.sub.deals === "new") this.renderContent(); });
       if (!N) return `<div class="skel" style="height:300px"></div>`;
     }
     const q = (this.state.nsq || "").toLowerCase(), th = this.state.nsth || "";
@@ -1803,11 +1803,13 @@ class LegoTrackerPanel extends HTMLElement {
     // add
     on("input[name=mode]", "change", (e) => { s.addMode = e.target.value; this.renderContent(); });
     const fi = $("a_find"); if (fi) fi.addEventListener("input", () => {
+      const searchId = this._afSearchId = (this._afSearchId || 0) + 1;     // answers to an older query are ignored
       clearTimeout(this._afT);
       this._afT = setTimeout(async () => {
         const out = $("a_found"), q = fi.value.trim(); if (!out) return;
         if (q.length < 2) { out.innerHTML = ""; return; }
-        let r; try { r = await this._hass.callWS({ type: "lego_tracker/setdb/search", q, limit: 12 }); } catch (e) { out.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+        let r; try { r = await this._hass.callWS({ type: "lego_tracker/setdb/search", q, limit: 12 }); } catch (e) { if (searchId !== this._afSearchId) return; out.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+        if (searchId !== this._afSearchId) return;
         this._afItems = r.items;
         out.innerHTML = !r.count ? `<p class="muted" style="font-size:12px">${t("The LEGO set database is not downloaded yet (within 10 minutes after Home Assistant starts).")}</p>`
           : !r.items.length ? `<p class="muted" style="font-size:12px">${t("Nothing found.")}</p>`
