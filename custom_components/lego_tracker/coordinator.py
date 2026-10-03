@@ -11,7 +11,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
@@ -609,6 +609,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             news = for_language(await self.news.get(), lang)[: cfg["max_news"]]
         return {"items": out, "news": news, "config": cfg}
 
+    @callback
     def market_tick(self, _now: Any = None) -> None:
         """Every minute: when it is time, the market value of the set that waited longest. All sets are
         spread over the whole day (one set every 24 h / number of sets, at least 2 minutes apart)."""
@@ -1223,6 +1224,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._sitemap_busy = True
         self.entry.async_create_background_task(self.hass, self._sitemap_round([rid]), f"{DOMAIN}_sitemap_{rid}")
 
+    @callback
     def sitemap_tick(self, _now: Any = None) -> None:
         """Every few hours: shops whose sitemap is older than a week are read again (in the background)."""
         if getattr(self, "_sitemap_busy", False):

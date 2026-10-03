@@ -1896,3 +1896,92 @@ async def test_market_value_via_userscript_when_server_fails(hass: HomeAssistant
     r = await client.post("/api/lego_tracker/relay", json={"results": [{**item, "status": 0, "html": "", "error": "timeout"}]})
     assert r.status == 200
     assert not any(i.get("reason") == "market" for i in c.continuous_items(100)["items"])      # tried: not again today
+
+
+@pytest.mark.parametrize("method", ["market_tick", "sitemap_tick"])
+async def test_scheduled_ticks_run_on_event_loop(hass: HomeAssistant, entry, method):
+    import asyncio
+    from homeassistant.core import HassJob, is_callback
+
+    c = await _setup(hass, entry)
+    await c.add_set("10281")
+    tick = getattr(c, method)
+    assert is_callback(tick)
+    loops = []
+
+    async def run(*args):
+        loops.append(asyncio.get_running_loop())
+
+    with patch.object(c, "_compare_one", run), patch.object(c, "_sitemap_round", run), \
+         patch.object(c, "sitemap_shops", return_value=["bol"]):
+        hass.async_run_hass_job(HassJob(tick))
+        await hass.async_block_till_done(wait_background_tasks=True)
+    assert loops == [asyncio.get_running_loop()]
+
+
+async def test_debug_toggle_overrides_debug_ancestor(hass: HomeAssistant, entry):
+    import logging
+    from custom_components.lego_tracker import devtools
+
+    c = await _setup(hass, entry)
+    logger = logging.getLogger("custom_components.lego_tracker")
+    parent = logging.getLogger("custom_components")
+    old_level, old_parent_level = logger.level, parent.level
+    try:
+        parent.setLevel(logging.DEBUG)
+        assert devtools.set_debug(True)
+        assert devtools.stats(c)["debug"]
+        assert not devtools.set_debug(False)
+        assert not devtools.stats(c)["debug"]
+    finally:
+        logger.setLevel(old_level)
+        parent.setLevel(old_parent_level)
+
+
+@pytest.mark.parametrize("best_url, fallback, expected_price, expected_retailer", [
+    ("https://www.amazon.nl/dp/B012345678", True, 35.0, "amazon_nl"),
+    ("https://www.kieskeurig.be/lego/product/123", True, 39.99, "bol"),
+    ("https://www.amazon.nl/s?k=lego+10281", True, 39.99, "bol"),
+    (None, True, 39.99, "bol"),
+    ("https://www.kieskeurig.be/lego/product/123", False, 35.0, "amazon_nl"),
+    (None, False, 35.0, "amazon_nl"),
+])
+async def test_notification_offer_values_stay_together(
+    hass: HomeAssistant, entry, best_url, fallback, expected_price, expected_retailer,
+):
+    from custom_components.lego_tracker import digest
+    from custom_components.lego_tracker.const import RETAILERS
+
+    c = await _setup(hass, entry)
+    await c.add_set("10281", name="Bonsai", rrp=100)
+    product_url = "https://www.bol.com/nl/nl/p/x/1/"
+    c.store["offers"]["10281"] = {
+        "amazon_nl": {"url": best_url, "available": True, "last_price": 35.0},
+        "bol": {"url": product_url, "available": fallback, "last_price": 39.99},
+        "amazon_de": {"url": "https://www.amazon.de/dp/B012345678", "available": False, "last_price": 10},
+    }
+    c.async_set_updated_data(c.compute())
+    after = c.data["statuses"]["10281"]
+    expected_url = product_url if expected_retailer == "bol" else best_url
+    expected_text = f"€{expected_price:.2f} at {RETAILERS[expected_retailer][0]}"
+    c.store["notify_rules"] = validate_rules([{
+        "id": "test", "name": "test", "triggers": ["back_in_stock", "digest"],
+        "targets": [{"type": "event"}], "cooldown_hours": 0,
+    }])
+    with patch.object(c.notifier, "send", new_callable=AsyncMock) as send:
+        await c.notifier.on_set_change("10281", {}, after)
+        assert expected_text in send.call_args.args[2]
+        assert send.call_args.kwargs["url"] == expected_url
+        assert send.call_args.kwargs["data"]["price"] == expected_price
+
+        d = digest(c)
+        row = d["deals"][0]
+        assert (row["price"], row["retailer"], row["url"]) == (expected_price, expected_retailer, expected_url)
+        # Rendering the digest must preserve its selected offer even if the store changes.
+        c.store["offers"]["10281"]["bol"]["last_price"] = 20
+        await c.notifier.on_digest(d)
+        assert expected_text in send.call_args.args[2]
+        if expected_url:
+            assert expected_url in send.call_args.args[2]
+        else:
+            assert product_url not in send.call_args.args[2]

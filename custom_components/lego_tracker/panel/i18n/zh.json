@@ -812,7 +812,7 @@
 "This year": "今年",
 "Tick the shops to check. “Pause automatically” pauses a shop after a block (1 → 3 → 6 → 12 → 24 h); switch it off if you don't want that (more risk of stricter blocks).": "勾选要检查的商店。“自动暂停”会在被拦截后暂停商店（1 → 3 → 6 → 12 → 24 小时）；如果不需要可以关闭（被更严格拦截的风险更高）。",
 "Tick what is wrong or write a remark.": "勾选问题或填写备注。",
-"Ticker": "滚动条",
+"Ticker": "滚动信息栏",
 "Tiles": "卡片",
 "Time": "时间",
 "Times (1 to 6, separated by commas)": "时间（1 到 6 个，用逗号分隔）",

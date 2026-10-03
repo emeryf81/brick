@@ -56,3 +56,17 @@ test("event labels are escaped after translation", () => {
   assert.ok(content.innerHTML.includes("Discount &lt;special&gt; &amp; savings"));
   assert.doesNotMatch(content.innerHTML, /<special>/);
 });
+
+test("shop table preserves the suspicious-price approval button and its set number", () => {
+  const { panel } = panelFor([]);
+  panel.state.data.retailers = { bol: "bol.com" };
+  panel.mLeft = () => 0;
+  const html = panel.shopTableHtml({
+    set_number: "10281",
+    offers: { bol: { label: "bol.com", price: 30, suspect: { price: 5 } } },
+  });
+  assert.match(html, /class="btn sm apprb"/);
+  assert.match(html, /data-anum="10281"/);
+  assert.match(html, /data-arid="bol"/);
+  assert.match(html, /Approve/);
+});
