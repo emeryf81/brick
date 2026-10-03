@@ -750,10 +750,12 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             o = self.store["offers"].get(num, {}).get(rid)
             if o and not o.get("manual_price") and (o.get("error") or not o.get("last_ok") or time.time() - o["last_ok"] > 20 * 3600
                                                      or compare.is_compare_url(o.get("url"))):
-                if is_suspicious_price(shop["price"], self.store["sets"][num], o):
+                others = [x["last_price"] for r, x in self.store["offers"].get(num, {}).items()
+                          if r != rid and x.get("available") and x.get("last_price")]
+                if is_suspicious_price(shop["price"], self.store["sets"][num], o, others):
                     continue
                 record_price(o, shop["price"])
-                o["last_ok"], o["via"] = o["last_checked"], shop["source"]
+                o["last_ok"], o["last_via"] = o["last_checked"], shop["source"]   # shown as ⓒ next to the price
                 n += 1
         return n
 
@@ -1212,13 +1214,15 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         rid, num = item.get("retailer"), normalize_set_number(str(item.get("set_number") or ""))
         if rid not in RETAILERS or num not in self.store["sets"]:
             raise ValueError(f"{rid}: {num}: not a tracked set / shop")
-        self.store.setdefault("relay_searched", {})[f"{num}|{rid}"] = time.time()
         html = item.get("html") if isinstance(item.get("html"), str) else ""
         try:
             status = int(item.get("status") or 0)
         except (TypeError, ValueError):
             status = 0
-        found = find_search_result(rid, html, num) if html and 0 < status < 400 else None
+        readable = bool(html) and 0 < status < 400
+        if readable:              # blocked / failed searches are tried again, only real answers wait a week
+            self.store.setdefault("relay_searched", {})[f"{num}|{rid}"] = time.time()
+        found = find_search_result(rid, html, num) if readable else None
         offers = self.store["offers"].setdefault(num, {})
         if found and url_key(rid, found) not in set(self.store.setdefault("rejected", {}).get(num, [])) \
                 and not (offers.get(rid) or {}).get("url"):
@@ -1233,7 +1237,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if "JavaScript" in why and not item.get("rendered"):
             self.fetcher.discover_error[rid] = why
             self._note_js(rid)
-            self.store["relay_searched"][f"{num}|{rid}"] = time.time()
+            if readable:
+                self.store.setdefault("relay_searched", {})[f"{num}|{rid}"] = time.time()
         self.log("info", "discover", T("your browser searched: {reason}", reason=why), set_number=num, retailer=rid, url=item.get("url"), source="relay")
         return "fail"
 

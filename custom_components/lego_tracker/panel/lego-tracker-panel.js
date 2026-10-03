@@ -394,11 +394,18 @@ class LegoTrackerPanel extends HTMLElement {
     // browser relay: progress messages from the userscript running in this browser
     window.addEventListener("message", (e) => {
       const m = e.data;
-      if (!m || m.source !== "lego-tracker-userscript") return;
-      if (m.type === "relay-pong") { this.state.relayHere = m; }
-      if (m.type === "continuous-status") this.state.contRun = m;
+      // only the userscript in this very page (not another frame or site), and only plain values
+      if (e.origin !== location.origin || (e.source && e.source !== window) || !m || typeof m !== "object" || m.source !== "lego-tracker-userscript") return;
+      const num = (v) => (Number.isFinite(+v) ? +v : 0), str = (v) => (typeof v === "string" ? v.slice(0, 80) : "");
+      if (m.type === "relay-pong") this.state.relayHere = { version: str(m.version), token: !!m.token, running: !!m.running, last: num(m.last), continuous: !!m.continuous, render: !!m.render };
+      if (m.type === "continuous-status") {
+        this.state.contRun = { on: !!m.on, running: !!m.running, idle: !!m.idle, other_tab: !!m.other_tab, done: num(m.done), ok: num(m.ok), fail: num(m.fail),
+          found: num(m.found), next: num(m.next), shop: str(m.shop), set_number: str(m.set_number), error: str(m.error) };
+      }
       if (m.type === "relay-status") {
-        this.state.relayRun = m;
+        this.state.relayRun = { running: !!m.running, finished: !!m.finished, disabled: !!m.disabled, done: num(m.done), total: num(m.total), ok: num(m.ok), fail: num(m.fail),
+          shop: str(m.shop), set_number: str(m.set_number), error: str(m.error) };
+        m.ok = num(m.ok); m.fail = num(m.fail);
         if (m.finished) { this.toast(t("Browser relay done: {ok} prices, {fail} failed", { ok: m.ok, fail: m.fail }), m.ok ? "ok" : "err"); this.load(); }
         if (m.error === "no-token") this.toast(t("The userscript has no token yet: Tampermonkey menu → LEGO Price Tracker settings"), "err");
       }
@@ -429,7 +436,7 @@ class LegoTrackerPanel extends HTMLElement {
     const queue = rel.enabled === false ? t("Browser relay is off (Settings)") : t("Waiting: {a} links without a price · {b} searches for sets without any price · {c} links the server can't fetch", { a: q.no_price || 0, b: q.search || 0, c: q.server_fails || 0 });
     return `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${local}${remote}<span class="hsp" style="flex:1"></span>
       <button class="btn sm${on ? " ghost" : ""}" id="contgo" ${here && here.token && rel.enabled !== false ? "" : "disabled"}>${on ? `■ ${t("Switch off in this browser")}` : `▶ ${t("Switch on in this browser")}`}</button></div>
-      <div class="muted" style="font-size:13px;margin-top:6px">${queue}</div>${now}
+      <div class="muted" style="font-size:13px;margin-top:6px">${queue}</div>${now}${run.error ? `<div class="err" style="font-size:12px;margin-top:4px">⚠ ${run.error === "no-token" ? t("Home Assistant rejected the token (401)") : esc(run.error)}</div>` : ""}
       <label class="chk" style="display:flex;gap:8px;align-items:flex-start;margin-top:10px" title="${esc(t("Needs the userscript version that asks for the right to open tabs; Tampermonkey asks you to confirm when it updates."))}"><input type="checkbox" id="rendertabs" ${here && here.render ? "checked" : ""} ${here && here.token ? "" : "disabled"}>
         <span>${t("Search shops that build their results with JavaScript (e.g. Smyths) in a background tab")}<br><span class="muted" style="font-size:12px">${t("A tab opens in the background for a few seconds, the script reads the finished page and the tab closes again. At most one search per shop every 2 minutes.")}</span></span></label>`;
   }
@@ -1585,8 +1592,8 @@ class LegoTrackerPanel extends HTMLElement {
       await this.load(); this.toast(t(on ? "{set} is on your watchlist" : "{set} is off your watchlist", { set: b.dataset.cwatch }), "ok");
     }); });
     on("#a_clearpre", "click", () => { s.addPrefill = null; this.renderContent(); });
-    on("[data-shop]", "click", (e) => { if (e.target.closest("button, a")) return; this.openShop(e.currentTarget.dataset.shop); });
-    on("[data-shop]", "keydown", (e) => { if (e.key === "Enter") this.openShop(e.currentTarget.dataset.shop); });
+    on(".shop[data-shop]", "click", (e) => { if (e.target.closest("button, a")) return; this.openShop(e.currentTarget.dataset.shop); });
+    on(".shop[data-shop]", "keydown", (e) => { if (e.key === "Enter" && e.target === e.currentTarget) this.openShop(e.currentTarget.dataset.shop); });
     on("[data-cz]", "click", (e) => { const v = e.currentTarget.dataset.cz; s.cz = { preset: v === "ytd" ? "ytd" : +v, from: null, to: null }; this.renderContent(); });
     for (const id of ["cz_from", "cz_to"]) { const el = $(id); if (el) el.addEventListener("change", () => {
       const a = $("cz_from").value, b = $("cz_to").value; if (!a || !b) return;
@@ -2045,10 +2052,13 @@ class LegoTrackerPanel extends HTMLElement {
   }
   /** Shops → click a shop: the last requests (what was asked, what came back, why it failed), a diagnosis and
    * its recent log. Refreshed every 5 s while open. */
-  async openShop(rid) {
+  async openShop(rid, refresh = false) {
+    // a newer open / close makes this request stale: its answer must not reopen or overwrite the dialog
+    const gen = refresh ? this._dlgGen : (this._dlgGen = (this._dlgGen || 0) + 1);
     const dlg = this.shadowRoot.getElementById("dlg");
     clearInterval(this._shopTimer);
-    let d; try { d = await this._hass.callWS({ type: "lego_tracker/shop/detail", retailer: rid }); } catch (e) { this.toast(tx(e.message), "err"); return; }
+    let d; try { d = await this._hass.callWS({ type: "lego_tracker/shop/detail", retailer: rid }); } catch (e) { if (gen === this._dlgGen) this.toast(tx(e.message), "err"); return; }
+    if (gen !== this._dlgGen) return;
     const scroll = dlg.open ? dlg.scrollTop : 0, r = d.stats || {};
     const at = (ts) => (ts ? `${DATE(ts, { day: "numeric", month: "short" })} ${TIME(ts)}` : "–");
     const secs = (x) => (x > 0 ? t("in {s} s", { s: Math.ceil(x) }) : t("now"));
@@ -2075,15 +2085,17 @@ class LegoTrackerPanel extends HTMLElement {
     dlg.querySelector("#x").onclick = () => { clearInterval(this._shopTimer); this.closeDialog(); };
     const sm = dlg.querySelector("#smgo"); if (sm) sm.onclick = () => this.busy(sm, "…", async () => { await this._hass.callWS({ type: "lego_tracker/shop/sitemap", retailer: rid }); this.toast(t("The sitemap is read in the background; new links appear here and in the logbook."), "ok"); this.openShop(rid); });
     dlg.querySelectorAll("[data-set]").forEach((el) => el.onclick = () => { clearInterval(this._shopTimer); this.openSet(el.dataset.set); });
-    this._shopTimer = setInterval(() => { if (!dlg.open || !dlg.querySelector("#x") || !this.isConnected) { clearInterval(this._shopTimer); return; } this.openShop(rid); }, 5000);
+    this._shopTimer = setInterval(() => { if (!dlg.open || !dlg.querySelector("#x") || !this.isConnected || gen !== this._dlgGen) { clearInterval(this._shopTimer); return; } this.openShop(rid, true); }, 5000);
   }
   // ---------------------------------------------------------------- set dialog
-  closeDialog(instant = false) { clearInterval(this._shopTimer); const d = this.shadowRoot.getElementById("dlg"); if (!d || !d.open) return; if (instant || REDUCED) { d.close(); return; } d.classList.add("closing"); setTimeout(() => { d.classList.remove("closing"); d.close(); }, 170); }
+  closeDialog(instant = false) { this._dlgGen = (this._dlgGen || 0) + 1; clearInterval(this._shopTimer); const d = this.shadowRoot.getElementById("dlg"); if (!d || !d.open) return; if (instant || REDUCED) { d.close(); return; } d.classList.add("closing"); setTimeout(() => { d.classList.remove("closing"); d.close(); }, 170); }
   async openSet(num, focusShop = null) {
+    const gen = (this._dlgGen = (this._dlgGen || 0) + 1);
     clearInterval(this._shopTimer);
     const dlg = this.shadowRoot.getElementById("dlg");
     if (!dlg.open) { dlg.innerHTML = `<div class="dbody"><div class="skel" style="height:110px;margin-bottom:12px"></div><div class="skel" style="height:240px"></div></div>`; dlg.showModal(); }
-    let s; try { s = await this._hass.callWS({ type: "lego_tracker/set", set_number: num }); } catch (e) { dlg.innerHTML = `<div class="dbody"><div class="empty">${esc(tx(e.message))}</div><br><button class="btn" id="x2">${t("Close")}</button></div>`; dlg.querySelector("#x2").onclick = () => this.closeDialog(); return; }
+    let s; try { s = await this._hass.callWS({ type: "lego_tracker/set", set_number: num }); } catch (e) { if (gen !== this._dlgGen) return; dlg.innerHTML = `<div class="dbody"><div class="empty">${esc(tx(e.message))}</div><br><button class="btn" id="x2">${t("Close")}</button></div>`; dlg.querySelector("#x2").onclick = () => this.closeDialog(); return; }
+    if (gen !== this._dlgGen) return;
     const scroll = dlg.scrollTop;
     const days = this.state.range, cut = days ? Date.now() / 1000 - days * 86400 : 0;
     const win = (h) => { if (!cut) return h; const keep = h.filter((p) => p[0] >= cut), prev = lastAt(h, cut); return prev && (!keep.length || keep[0][0] > cut) ? [[cut, prev[1]], ...keep] : keep; };

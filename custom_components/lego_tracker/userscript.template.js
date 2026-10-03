@@ -204,11 +204,16 @@
   const SITE_GAP = 30 * 1000, SEARCH_GAP = 120 * 1000, BLOCK_PAUSE = 3600 * 1000, IDLE = 10 * 60 * 1000;
   const tabId = Math.random().toString(36).slice(2);
   const siteOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch (e) { return ""; } };
-  const cont = { running: false, done: 0, ok: 0, fail: 0, found: 0, shop: null, set_number: null, idle: false, other_tab: false, next: 0 };
+  const cont = { running: false, done: 0, ok: 0, fail: 0, found: 0, shop: null, set_number: null, idle: false, other_tab: false, next: 0, error: null };
   const tellCont = () => tell({ type: "continuous-status", on: GM_getValue("continuous", false), ...cont });
   // one tab per browser does the work; the others wait (a tab that stops answering is taken over after 1 minute)
   const mine = () => { const l = GM_getValue("cont_lock", null); return !l || l.id === tabId || Date.now() - l.ts > 60000; };
   const hold = () => GM_setValue("cont_lock", { id: tabId, ts: Date.now() });
+  const owned = () => { const l = GM_getValue("cont_lock", null); return !!l && l.id === tabId; };
+  // take the lock, then look again a moment later: if two tabs grab it at the same time, only the last writer keeps it
+  const acquire = async () => { if (!mine()) return false; hold(); await sleep(300 + Math.random() * 400); return owned(); };
+  // keep the lock fresh while a slow request is running (never taking it from another tab)
+  const keepLock = async (promise) => { const t = setInterval(() => { if (owned()) hold(); }, 10000); try { return await promise; } finally { clearInterval(t); } };
   const nap = async (ms) => { const end = Date.now() + ms; while (Date.now() < end && GM_getValue("continuous", false)) { if (mine()) hold(); await sleep(Math.min(5000, end - Date.now())); } };
   const dueAt = (it) => {   // when this item's site may be asked again (shared by all tabs of this browser)
     const site = siteOf(it.url), last = GM_getValue("site_last", {}), srch = GM_getValue("site_search", {}), paused = GM_getValue("site_paused", {});
@@ -273,35 +278,52 @@
     const auth = () => ({ Authorization: "Bearer " + TOKEN(), "Content-Type": "application/json" });
     const beat = (on = true) => ({ on, done: cont.done, ok: cont.ok, fail: cont.fail, found: cont.found, version: "{{VERSION}}" });
     const strikes = {};
+    let lastBeat = 0;
+    const post = async (results) => {    // to Home Assistant; false = not accepted (bad token, server down)
+      const r = await keepLock(req({ method: "POST", url: HA() + "/api/lego_tracker/relay", headers: auth(), data: JSON.stringify({ results, heartbeat: beat() }) }));
+      lastBeat = Date.now();
+      cont.error = r.status === 401 ? "no-token" : r.status === 200 ? null : "HTTP " + (r.status || "?");
+      let res = {}; try { res = JSON.parse(r.responseText || "{}"); } catch (e) { /* ignore */ }
+      return r.status === 200 ? res : null;
+    };
     try {
       while (GM_getValue("continuous", false)) {
         if (!TOKEN() || !HA()) { await nap(60000); continue; }
-        if (!mine()) { cont.other_tab = true; tellCont(); await nap(30000); continue; }
-        cont.other_tab = false; hold();
-        const list = await req({ method: "GET", url: HA() + "/api/lego_tracker/relay?mode=continuous&limit=20", headers: auth() });
+        if (!(await acquire())) { cont.other_tab = true; tellCont(); await nap(30000); continue; }
+        cont.other_tab = false;
+        const list = await keepLock(req({ method: "GET", url: HA() + "/api/lego_tracker/relay?mode=continuous&limit=20", headers: auth() }));
         let data = {}; try { data = JSON.parse(list.responseText || "{}"); } catch (e) { /* ignore */ }
+        cont.error = list.status === 401 ? "no-token" : list.status === 200 ? null : "HTTP " + (list.status || "?");
         if (list.status !== 200 || !data.enabled) { cont.idle = true; tellCont(); await nap(list.status === 200 ? IDLE : 5 * 60000); continue; }
         const queue = data.items || [];
         cont.idle = !queue.length; tellCont();
         if (!queue.length) {   // nothing to do: tell Home Assistant we are alive, look again in 10 minutes
-          await req({ method: "POST", url: HA() + "/api/lego_tracker/relay", headers: auth(), data: JSON.stringify({ results: [], heartbeat: beat() }) });
+          await post([]);
           await nap(IDLE); continue;
         }
         while (queue.length && GM_getValue("continuous", false)) {
+          if (!owned()) break;                    // another tab took over: it gets its own queue
           hold();
           const now = Date.now(), times = queue.map(dueAt), wait = Math.min(...times);
-          if (wait > now) { cont.next = wait; tellCont(); await nap(Math.min(wait - now, 60000)); continue; }   // every site still needs its pause
+          if (wait > now) {                       // every site still needs its pause; still say we are alive
+            cont.next = wait; tellCont();
+            if (Date.now() - lastBeat > 5 * 60000 && !(await post([]))) { tellCont(); await nap(5 * 60000); break; }
+            await nap(Math.min(wait - now, 60000)); continue;
+          }
           const it = queue.splice(times.indexOf(wait), 1)[0];
           stamp(it);
           cont.shop = it.shop; cont.set_number = it.set_number; cont.next = 0;
-          const { blocked, result } = it.kind === "search" && it.render && GM_getValue("render_tabs", false) ? await renderItem(it) : await fetchItem(it);
+          const { blocked, result } = await keepLock(it.kind === "search" && it.render && GM_getValue("render_tabs", false) ? renderItem(it) : fetchItem(it));
+          if (!owned()) break;                    // lost the lock meanwhile: leave the result to the other tab
           const site = siteOf(it.url);
           if (blocked) {
             strikes[site] = (strikes[site] || 0) + 1;
             if (strikes[site] >= 2) { const p = GM_getValue("site_paused", {}); p[site] = Date.now() + BLOCK_PAUSE; GM_setValue("site_paused", p); strikes[site] = 0; }
           } else strikes[site] = 0;
-          const post = await req({ method: "POST", url: HA() + "/api/lego_tracker/relay", headers: auth(), data: JSON.stringify({ results: [result], heartbeat: beat() }) });
-          let res = {}; try { res = JSON.parse(post.responseText || "{}"); } catch (e) { /* ignore */ }
+          const res = await post([result]);
+          if (!res) {                             // not saved (token revoked, Home Assistant restarting): stop, retry later
+            tellCont(); await nap(cont.error === "no-token" ? IDLE : 5 * 60000); break;
+          }
           cont.done++;
           if (res.ok) cont.ok++; else if (!(res.follow || []).length) cont.fail++;
           if (it.kind === "search" && (res.follow || []).length) cont.found++;

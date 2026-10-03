@@ -67,7 +67,7 @@ def _card(coord, num: str, with_history: bool = False) -> dict[str, Any]:
                   "available": o.get("available"), "error": o.get("error"), "checked": o.get("last_checked"),
                   "low": min((p for _, p in o.get("history", [])), default=None),
                   "title": o.get("title"), "link_status": o.get("link_status"), "link_reason": o.get("link_reason"),
-                  "via": o.get("last_via") if o.get("available") else None, "found_via": o.get("found_via"),
+                  "via": o.get("last_via") if o.get("available") and not o.get("manual_price") else None, "found_via": o.get("found_via"),
                   "ignored": bool(o.get("error") and o.get("ignored_error") == o.get("error"))}
             for rid, o in offers.items() if rid in RETAILERS
         },

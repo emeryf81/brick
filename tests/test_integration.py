@@ -921,6 +921,7 @@ async def test_comparison_sites_hidden_source(hass: HomeAssistant, entry, no_net
     assert urls[0] == "https://www.kieskeurig.be/search?q=lego+60454" and "52114913" in urls[1]
     offers = c.store["offers"]["60454"]
     assert offers["bol"]["last_price"] == 24.99 and offers["bol"]["error"] is None           # bol.com via Kieskeurig
+    assert offers["bol"]["last_via"] == "kieskeurig"                                         # shown as ⓒ
     assert offers["amazon_nl"]["via"] == "kieskeurig" and offers["amazon_nl"]["last_price"] == 27.49   # new shop via Kieskeurig
     assert c.store["sets"]["60454"]["ean"] == "5702017583723"
     check = [e for e in c.store["activity"] if e["kind"] == "check"][-1]
@@ -1679,3 +1680,25 @@ async def test_rendered_search_page_from_background_tab(hass: HomeAssistant, ent
                           "url": item["url"], "status": 200, "html": html})
     assert res["url"] == "https://www.dreamland.be/e/nl/dl/lego-icons-chrysant-10368-123456"
     assert c.store["offers"]["10368"]["dreamland_be"]["url"] == res["url"]
+
+
+async def test_review_fixes_low_price_relay_search_and_via(hass: HomeAssistant, entry, no_network):
+    from custom_components.lego_tracker.models import is_suspicious_price
+    from custom_components.lego_tracker.websocket_api import _card
+
+    new_set = {"set_number": "75192"}
+    assert not is_suspicious_price(100.0, new_set, {}, [100.0, 1000.0])      # one other shop says the same price
+    assert is_suspicious_price(19.99, new_set, {}, [749.99, 759.0])          # two shops that agree: an accessory
+
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10368"}, blocking=True)
+    # a blocked / failed browser search is not "searched" for a week
+    c.relay_result({"kind": "search", "retailer": "amazon_de", "set_number": "10368", "url": "https://www.amazon.de/s?k=10368", "status": 403, "html": ""})
+    c.relay_result({"kind": "search", "retailer": "amazon_nl", "set_number": "10368", "url": "https://www.amazon.nl/s?k=10368", "status": 0, "html": ""})
+    assert not any(k.startswith("10368|amazon") for k in c.store.get("relay_searched", {}))
+    # no ⓤ next to a manual price
+    o = c.store["offers"]["10368"]["bol"] = {"url": "https://www.bol.com/nl/nl/p/x-10368/1/", "history": [[1, 30.0]], "available": True,
+                                              "last_price": 30.0, "last_via": "relay"}
+    assert _card(c, "10368")["offers"]["bol"]["via"] == "relay"
+    o["manual_price"] = {"price": 25.0}
+    assert _card(c, "10368")["offers"]["bol"]["via"] is None

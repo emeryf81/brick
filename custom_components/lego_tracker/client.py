@@ -335,16 +335,21 @@ class Fetcher:
                 self.discover_error[retailer] = T("no matching product found") if set_number in page else \
                     T("the search page does not contain {number}: this shop probably loads its results with JavaScript. Paste the product page URL instead.", number=set_number)
             return found
-        # LEGO.com search is partly rendered in the browser: try the product URL directly
+        # LEGO.com search is partly rendered in the browser: try the product URL directly (its own trace entry)
+        t0, purl = time.time(), lego_product_url(set_number)
         try:
-            status, page = await self._get(retailer, lego_product_url(set_number))
-        except Exception:  # noqa: BLE001 - also Aborted
+            status, page = await self._get(retailer, purl)
+        except Exception as err:  # noqa: BLE001 - also Aborted
+            self._trace(retailer, "page", purl, t0, None, 0, None, T("network error: {error}", error=str(err)[:120]), set_number)
             return None
         if status < 400:
             parsed = parse_page(retailer, page, set_number)
             if parsed.price or parsed.list_price or (parsed.title and set_number in (parsed.title + page[:200000])):
-                return lego_product_url(set_number)
+                self._trace(retailer, "page", purl, t0, status, len(page or ""), purl, None, set_number)
+                return purl
         self.discover_error[retailer] = T("no matching product found")
+        self._trace(retailer, "page", purl, t0, status, len(page or ""), None,
+                    T("HTTP error {status}", status=status) if status >= 400 else T("no matching product found"), set_number)
         return None
 
 

@@ -284,9 +284,13 @@ def is_suspicious_price(price: float, lego_set: dict[str, Any], offer: dict[str,
     rrp = lego_set.get("rrp")
     if not rrp and others:
         mid = median(others)
-        # far above the others: e.g. cents read without the comma; far below needs two others (an accessory)
-        if price > mid * 4 or (len(others) >= 2 and price < mid * 0.25):
+        # far above the others: e.g. cents read without the comma
+        if price > mid * 4:
             return T("suspicious price €{price} (far from €{usual}) ignored", price=f"{price:.2f}", usual=f"{mid:.2f}")
+        # far below needs two other shops that agree with each other (an accessory, not one odd quote)
+        close = [p for p in others if mid * 0.5 <= p <= mid * 1.5]
+        if len(close) >= 2 and price < median(close) * 0.25:
+            return T("suspicious price €{price} (far from €{usual}) ignored", price=f"{price:.2f}", usual=f"{median(close):.2f}")
     if rrp and price < rrp * 0.2:
         return T("suspicious price €{price} (under 20% of RRP) ignored", price=f"{price:.2f}")
     if rrp and price > rrp * 4:
