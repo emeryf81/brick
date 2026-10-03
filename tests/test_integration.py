@@ -2105,3 +2105,15 @@ async def test_ticker_defaults_api_level_and_market_label(hass: HomeAssistant, e
     c._rename_market_source()
     assert c.store["sets"]["10281"]["exit_date_source"] == "Market value" and c.store["sets"]["10281"]["market"]["source"] == "Market value"
     assert c.store["activity"][-1]["source"] == "Market value" and "BrickEconomy" not in c.store["activity"][-1]["message"]
+
+
+@pytest.mark.parametrize("merge", [False, True])
+async def test_backup_from_before_0919_gets_the_new_market_label(hass: HomeAssistant, entry, no_network, merge):
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
+    data = c.export_backup()
+    data["sets"]["10281"]["exit_date_source"] = "BrickEconomy"
+    if merge:
+        del c.store["sets"]["10281"]
+    c.import_backup(data, merge)
+    assert c.store["sets"]["10281"]["exit_date_source"] == "Market value"

@@ -2389,6 +2389,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.store["collection"].setdefault(num, e)
         else:
             self.store = clean
+        self._rename_market_source()          # a backup from before 0.9.19 still has the old label
         self.push_update()
         return {"sets": len(self.store["sets"]), "collection": len(self.store["collection"])}
 
