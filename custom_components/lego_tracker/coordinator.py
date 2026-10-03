@@ -48,6 +48,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """data = {"statuses": {set: status}, "summary": {...}}"""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        """Initialize storage, fetchers, notification handling, and background-job state."""
         # No polling interval: shop rounds run as background jobs (buttons or the schedule).
         super().__init__(hass, _LOGGER, name=DOMAIN, config_entry=entry, update_interval=None)
         self.entry = entry
@@ -2106,6 +2107,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def add_set(self, set_number: str, *, name: str | None = None, theme: str | None = None,
                       subtheme: str | None = None, rrp: float | None = None, pieces: int | None = None, target_price: float | None = None,
                       owned: dict | None = None, discover: bool = True) -> str:
+        """Add or update a set, enrich its metadata, and return its normalized number."""
         num = normalize_set_number(set_number)
         if owned is None and not (num in self.store["sets"] and self.is_watched(num)) and (limit := self.watch_limit) is not None \
                 and len(self.watched_sets()) >= limit:
@@ -2169,6 +2171,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.entry.async_create_background_task(self.hass, self.refresh_setdb(), f"{DOMAIN}_setdb")
 
     async def _download(self, url: str) -> bytes:
+        """Download bytes with a 120-second timeout; reject non-200 or oversized responses."""
         session = async_get_clientsession(self.hass)
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=120)) as resp:
             if resp.status != 200:

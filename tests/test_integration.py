@@ -2120,6 +2120,7 @@ async def test_backup_from_before_0919_gets_the_new_market_label(hass: HomeAssis
 
 
 def _gz(text: str) -> bytes:
+    """Encode fixture text as UTF-8 and compress it as a gzip download."""
     import gzip as _g
     return _g.compress(text.encode())
 
@@ -2134,6 +2135,7 @@ THEMES_CSV = "id,name,parent_id\n1,Icons,\n2,Botanical Collection,1\n3,Star Wars
 
 
 def test_setdb_parse_search_and_new():
+    """Check set filtering, theme ancestry, search, and detection of added sets."""
     from custom_components.lego_tracker import setdb
 
     db = setdb.parse(_gz(SETS_CSV), _gz(THEMES_CSV))
@@ -2144,6 +2146,7 @@ def test_setdb_parse_search_and_new():
 
 
 async def test_setdb_refresh_new_sets_and_add(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    """Verify refresh, theme filtering, search, enrichment, save failure, and reload."""
     from datetime import date as _date
 
     c = await _setup(hass, entry)
@@ -2187,11 +2190,13 @@ async def test_setdb_refresh_new_sets_and_add(hass: HomeAssistant, entry, no_net
 
 
 async def test_new_set_notification_rule(hass: HomeAssistant, entry, no_network):
+    """Check that new-set notifications respect all-set and theme-specific scopes."""
     c = await _setup(hass, entry)
     c.setdb = {"76300": ["New Batman set", 2026, "Batman", "", 500, ""], "10400": ["Icons thing", 2026, "Icons", "", 900, ""]}
     sent = []
 
     async def fake_send(rule, title, message, **kw):
+        """Capture notification rule IDs, titles, and messages for assertions."""
         sent.append((rule["id"], title, message))
     c.notifier.send = fake_send
     c.notifier.rules[:] = [{"id": "a", "enabled": True, "scope": {"type": "all"}, "triggers": ["new_set"], "params": {}, "shops": []},
@@ -2202,6 +2207,7 @@ async def test_new_set_notification_rule(hass: HomeAssistant, entry, no_network)
 
 
 def test_news_body_without_empty_line_and_other_line_ends():
+    """Check inline news bodies, body aliases, a BOM, and alternate line endings."""
     from custom_components.lego_tracker import news
 
     a = news.parse("id: x\ndate: 2026-10-03\ntitle: Hallo\nlink: /hacs/dashboard\nDe tekst.\nTweede regel.")

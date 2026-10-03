@@ -30,6 +30,7 @@ NAME, YEAR, THEME, SUB, PIECES, IMAGE = range(6)
 
 
 def _text(gz: bytes) -> str:
+    """Decode gzip data as UTF-8, rejecting content larger than MAX_BYTES."""
     with gzip.GzipFile(fileobj=io.BytesIO(gz)) as f:
         data = f.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES:
@@ -38,6 +39,7 @@ def _text(gz: bytes) -> str:
 
 
 def _int(v: str) -> int:
+    """Convert a value to an integer, returning zero for invalid or missing values."""
     try:
         return int(v)
     except (TypeError, ValueError):
@@ -53,6 +55,7 @@ def parse(sets_gz: bytes, themes_gz: bytes) -> dict[str, list[Any]]:
         themes[row.get("id") or ""] = (row.get("name") or "", row.get("parent_id") or "")
 
     def chain(tid: str) -> list[str]:
+        """Return theme names from root to leaf, stopping at missing parents or cycles."""
         names, seen = [], set()
         while tid and tid in themes and tid not in seen:
             seen.add(tid)
@@ -76,6 +79,7 @@ def parse(sets_gz: bytes, themes_gz: bytes) -> dict[str, list[Any]]:
 
 
 def as_set(num: str, row: list[Any]) -> dict[str, Any]:
+    """Expand a compact database row into set fields, using None for empty metadata."""
     return {"set_number": num, "name": row[NAME], "year": row[YEAR] or None, "theme": row[THEME] or None,
             "subtheme": row[SUB] or None, "pieces": row[PIECES] or None, "image": row[IMAGE] or None}
 
@@ -105,6 +109,7 @@ def find_new(old: dict[str, list[Any]], new: dict[str, list[Any]], first: bool) 
 
 
 def prune_new(seen: dict[str, float], now: float | None = None) -> dict[str, float]:
+    """Keep at most NEW_MAX newest sightings younger than NEW_KEEP_DAYS."""
     now = now or time.time()
     keep = {n: ts for n, ts in seen.items() if now - ts < NEW_KEEP_DAYS * 86400}
     return dict(sorted(keep.items(), key=lambda x: -x[1])[:NEW_MAX])
