@@ -98,7 +98,7 @@ def digest(coord: LegoCoordinator) -> dict:
             rows.append({"set_number": num, "name": s.get("name"), "theme": s.get("theme"),
                          "price": st["best_price"], "retailer": st["best_retailer"],
                          "discount": st["discount_rrp"], "all_time_low": st["is_all_time_low"],
-                         "owned": num in coord.store["collection"], "url": st["best_url"]})
+                         "owned": num in coord.store["collection"], "url": coord.notifier.shop_link(num, st)})
     rows.sort(key=lambda r: (not r["all_time_low"], -(r["discount"] or 0)))
     return {"deals": rows, "collection": data["summary"], "threshold": coord.threshold}
 
@@ -155,6 +155,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         coord.start_spread()
     # product links from the shops' sitemaps: first look 15 minutes after start, then every 6 hours (weekly per shop)
     entry.async_on_unload(async_call_later(hass, 900, coord.sitemap_tick))
+    # market values (BrickEconomy): one set at a time, spread over the day
+    entry.async_on_unload(async_track_time_interval(hass, coord.market_tick, timedelta(minutes=1)))
     entry.async_on_unload(async_track_time_interval(hass, coord.sitemap_tick, timedelta(hours=6)))
     if coord.auto_refresh:
         for hour, minute in coord.refresh_times:

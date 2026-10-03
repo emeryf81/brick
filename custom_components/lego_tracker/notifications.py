@@ -221,6 +221,21 @@ class Notifier:
                 del sent[k]
         return True
 
+    def shop_link(self, num: str, status: dict[str, Any]) -> str | None:
+        """The product page at the cheapest shop (never a comparison page or a search page when a real
+        product link exists), so one tap opens the item where it is cheapest."""
+        from .compare import is_compare_url
+        from .parsers import is_search_url
+
+        best = status.get("best_url")
+        if best and not is_compare_url(best) and not is_search_url(best):
+            return best
+        offers = self.store["offers"].get(num, {})
+        priced = sorted((o["last_price"], o["url"]) for o in offers.values()
+                        if o.get("available") and o.get("last_price") and o.get("url")
+                        and not is_compare_url(o["url"]) and not is_search_url(o["url"]))
+        return priced[0][1] if priced else best
+
     # ---------------------------------------------------------------- events
     async def on_set_change(self, num: str, before: dict[str, Any], after: dict[str, Any]) -> None:
         s = self.store["sets"].get(num, {})
@@ -234,7 +249,7 @@ class Notifier:
             shop = RETAILERS.get(after.get("best_retailer"), ("",))[0]
             title = f"🧱 {num} {s.get('name') or ''}".strip()
             message = tr("€{price} at {shop}", price=f"{after['best_price']:.2f}", shop=shop) + ": " + ", ".join(h[1] for h in hits)
-            await self.send(rule, title, message, url=after.get("best_url") if rule.get("link") else None,
+            await self.send(rule, title, message, url=self.shop_link(num, after),
                             image=s.get("image") if rule.get("image") else None,
                             data={"set_number": num, "triggers": [h[0] for h in hits], "price": after["best_price"]})
 
@@ -248,6 +263,7 @@ class Notifier:
                 continue
             lines = [f"• {d['set_number']} {d['name'] or ''}: " + tr("€{price} at {shop}", price=f"{d['price']:.2f}", shop=RETAILERS.get(d["retailer"], ("",))[0])
                      + (f" (−{d['discount']:.0f}%)" if d.get("discount") else "") + (" 🔻" if d.get("all_time_low") else "")
+                     + (f"\n  {u}" if (u := self.shop_link(d["set_number"], {"best_url": d.get("url")})) else "")
                      for d in deals[:15]]
             more = "\n" + tr("… and {n} more", n=len(deals) - 15) if len(deals) > 15 else ""
             await self.send(rule, "🧱 " + tr("LEGO deals today ({n})", n=len(deals)), "\n".join(lines) + more,

@@ -23,7 +23,7 @@ The sidebar panel **LEGO** has four sections:
 
 **🏷️ Deals & watchlist** (sets you keep an eye on)
 - *Today*: deal of the day, all deals, sets retiring soon, big price drops, and recent deals, each with a thumbnail, the price, the discount, the deal score, a link to the shop and the ＋ / W buttons. What counts as a deal is set under *Manage → Settings → Deals*: discount threshold, minimum deal score (default 70), and whether "lowest price ever" and "target price reached" count.
-- *Watchlist*: the sets you keep an eye on (at most 100), sortable by priority (★–★★★), deal score, discount and price per piece; total now vs. RRP.
+- *Watchlist*: the sets you keep an eye on (at most 100), sortable by priority (★–★★★), deal score, discount, price per piece, when a set came on the watchlist and when its latest deal notification came in; total now vs. RRP.
 - *All prices*: everything that is tracked, with theme and subtheme filters.
 - Every view has a **⏳ Retiring within 100 days** filter. The first tile of every grid is a big **＋** to add a set. Every card picture has two buttons: **＋** adds the set to your collection (the add form opens with the number and picture filled in), **W** puts it on the watchlist (also a set you own, e.g. for a second copy) and **−W** takes it off again (also a set you don't own).
 
@@ -76,6 +76,10 @@ The **📜 Logbook** section (top level, next to your collection) keeps the last
 - **Shop checks**: one line per set check with a **green / red result per shop** (green = price fetched, red = failed with the reason, grey = skipped because the shop is paused).
 - **Open errors**: every current problem (suspicious link, blocked, page gone, price not found, no links at all), with a fix box.
 
+**How each price was read** is shown right on the line, without opening it: **⌂** directly from the shop's own site, **ⓤ** by your own browser (userscript), followed by the shop name. The CSV export has the same information in the column *method*, and prices from the userscript are part of the shop checks export.
+
+**Suspicious prices.** A price far from what the other shops ask, far below or above the RRP, is held back instead of counted (e.g. another product on the page). When it is right after all, press **✓ Approve €x**: in the set window (Shops), under *Shops & jobs → Offers without a price*, under *Open errors*, or on the logbook line itself. The price counts from then on, and prices close to it (±25 %) for that link are accepted too. The filter chip **⚠ Suspicious prices** shows only those lines.
+
 **⬇ Export (CSV)** at the top of the logbook: shop checks, price history per set and/or price history in total (per day the sum of the lowest prices of the chosen sets), for a period. Shop checks can be filtered on set, shop and result (succeeded / failed / skipped); price history on set, watchlist or collection, condition, priority, retiring soon, location, theme, subtheme and year.
 
 Filters: ✓ succeeded / ✕ failed, errors & warnings / events, kind, shop, source (server, schedule, panel, userscript, import), set number and free text / link. Identical consecutive messages are merged (×count). Click a line for details and the result per shop; for a problem you can enter the correct link and/or price right there (**Fix**), try again, ignore it or remove the link. The set dialog has a 📜 button that opens the logbook filtered on that set, and the shop cards link to their failed checks.
@@ -109,7 +113,9 @@ For **RRP, image and name** LEGO.com comes first. The integration looks up the o
 1. **For which sets**: all, watchlist, my collection, certain themes, or certain sets (choose a theme first, then the set, or type any set number).
 2. **When**: all-time low, discount ≥ x %, target price reached, price below € x, price drop ≥ x %, deal score ≥ x, retiring soon, back in stock, any price change; general: daily digest, job finished, problems (shop paused, errors). Optionally limited to certain shops.
 3. **To whom and how**: 📱 Home Assistant app (choose a device; with image and link), ✉️ e-mail (SMTP or another notify service, free addresses), 💬 any notify service (Telegram, Signal…), 📣 notify entities, 🔔 Home Assistant notification, 🔊 speech on a speaker (TTS + media player), ⚡ only the event `lego_tracker_notification`.
-4. **Extras**: don't notify again within x hours, quiet hours (notifications are bundled and sent afterwards), include image and link.
+4. **Extras**: don't notify again within x hours, quiet hours (notifications are bundled and sent afterwards), include image.
+
+Every price notification (and the daily digest, per set) contains a direct link to the product page at the shop where the set is cheapest, so one tap opens the item itself.
 
 Every rule has a test button; sent notifications appear in the logbook.
 
@@ -118,6 +124,8 @@ Everything is under *Manage → Settings* (administrators only); the integration
 - language; discount threshold, history, time of the daily digest;
 - automatic price checks (spread / fixed times / off) and the cycle;
 - **collection value**: shop price first, or the imported value first (e.g. BrickEconomy);
+- **market value (BrickEconomy)**: the market value (new and used) and expected retirement date of every set, fetched once a day per set and spread over the whole day; sets you own get it as their value, the set window shows it (on by default);
+- **ticker**: the bar at the bottom of the panel with the latest prices of your watchlist (big drops ⬇⬇ in bold, small drops ↓, rises ↑), deal notifications and news. Switch each part on or off and choose how many items it shows. Click a price or deal to open the set, a news item to read it;
 - **API keys** for Brickset and Rebrickable, with a test button. Keys are never sent back to the browser (only `••••1234`);
 - **shops**: on/off, lift a pause, *pause automatically* per shop, search URL per shop, LEGO.com country, your own shops.
 
@@ -130,8 +138,9 @@ Pauses survive a restart, so a restart doesn't hammer a shop that just blocked u
 Shops block servers far more often than browsers. With the continuous check switched on, the browser in which Home Assistant is open keeps checking by itself, focused on what the server can't do:
 
 1. **Links that never had a price** (at most once an hour each).
-2. **Sets without any price at all**: the shops without a link are searched in your browser. A product found there must pass the same title check (set number, LEGO, no accessory, no knock-off); it is linked and its price page is fetched right away. A search without result is not repeated for a week.
-3. **Links the server can't fetch** (blocked, paused, errors), each at most every 6 hours.
+2. **Open errors** (the list under *Logbook → Open errors* and *Shops & jobs*): the link is fetched in your browser, at most once an hour each. A price solves the error: it disappears from the lists by itself, also when you had ignored it. Suspicious prices wait for your approval.
+3. **Sets without any price at all**: the shops without a link are searched in your browser. A product found there must pass the same title check (set number, LEGO, no accessory, no knock-off); it is linked and its price page is fetched right away. A search without result is not repeated for a week.
+4. **Links the server can't fetch** (blocked, paused), each at most every 6 hours.
 
 It is calm: every site at most twice a minute, a search at most once every 2 minutes per site, 4–9 seconds between pages, and a site that blocks your browser twice is left alone for an hour. Only one tab per browser does the work. Prices that came from your browser get the mark **ⓤ** next to the price (set → Shops, and on the cards); the logbook entries have the source *relay*.
 
@@ -181,7 +190,7 @@ Discount vs. RRP (max 45) + closeness to the lowest price ever (max 25) + discou
 ## bol.com: two ways that work
 bol.com blocks almost every server (HTTP 403), so scraping it from Home Assistant rarely works. There are two better routes:
 
-1. **Official bol.com API (recommended).** bol.com offers a free Marketing Catalog API to members of its affiliate program (Partnerprogramma). Sign up at [partner.bol.com](https://partner.bol.com), create API credentials (client id + secret) and paste them under *Manage → Settings → bol.com API*; the **Test** button looks up set 10281 to check them. From then on bol.com links are found through the API's search (the product title must pass the link check) and prices come from the API's *best offer*, per country (NL or BE, automatic from your LEGO.com country). No scraping, no blocks.
+1. **bol.com API.** bol.com offers a free Marketing Catalog API to members of its affiliate program (Partnerprogramma). Sign up at [partner.bol.com](https://partner.bol.com), create API credentials (client id + secret) and paste them under *Manage → Settings → bol.com API*; the **Test** button looks up set 10281 to check them. From then on bol.com links are found through the API's search (the product title must pass the link check) and prices come from the API's *best offer*, per country (NL or BE, automatic from your LEGO.com country). No scraping, no blocks.
 2. **Browser relay (no account needed).** With the userscript installed, the browser in which you have Home Assistant open fetches the shop pages that fail on the server — bol.com, Amazon or any other shop — in the background, calmly one by one (4–9 s apart), and sends the prices to Home Assistant. Your browser is a normal visitor with your own connection and cookies, so it is rarely blocked. It runs automatically at most every 6 hours (configurable, or off), or right away with *Manage → Userscript → Run now in this browser*, which also shows the progress. If a shop blocks your browser too, the relay stops asking that shop for the rest of the run and logs it.
 
 Both are logged in the logbook (source *bol.com API* or *relay*), and the per-shop **↻ Fetch** buttons use the API too. Not verified against the live bol.com API yet: the response parsing is deliberately tolerant, and the Test button tells you right away whether it works.

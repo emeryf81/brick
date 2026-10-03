@@ -68,6 +68,7 @@ def _card(coord, num: str, with_history: bool = False) -> dict[str, Any]:
                   "low": min((p for _, p in o.get("history", [])), default=None),
                   "title": o.get("title"), "link_status": o.get("link_status"), "link_reason": o.get("link_reason"),
                   "via": o.get("last_via") if o.get("available") and not o.get("manual_price") else None, "found_via": o.get("found_via"),
+                  "suspect": o.get("suspect"), "approved": o.get("approved"),
                   "ignored": bool(o.get("error") and o.get("ignored_error") == o.get("error"))}
             for rid, o in offers.items() if rid in RETAILERS
         },
@@ -110,9 +111,12 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_logs_export)
     websocket_api.async_register_command(hass, ws_report)
     websocket_api.async_register_command(hass, ws_shop_detail)
+    websocket_api.async_register_command(hass, ws_offer_approve)
     websocket_api.async_register_command(hass, ws_shop_sitemap)
     websocket_api.async_register_command(hass, ws_notify_set)
     websocket_api.async_register_command(hass, ws_notify_test)
+    websocket_api.async_register_command(hass, ws_dev_tool)
+    websocket_api.async_register_command(hass, ws_ticker)
     hass.http.register_view(UserscriptView())
     hass.http.register_view(RelayView())
 
@@ -562,6 +566,21 @@ def ws_shop_sitemap(hass, connection, msg):
     connection.send_result(msg["id"], {"started": True})
 
 
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/offer/approve", vol.Required("set_number"): str,
+                                  vol.Required("retailer"): str})
+@callback
+def ws_offer_approve(hass, connection, msg):
+    """Approve a price that was held back as suspicious: it counts, and prices like it count from now on."""
+    coord = _coord(hass)
+    try:
+        price = coord.approve_price(msg["set_number"], msg["retailer"])
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid", str(err))
+        return
+    connection.send_result(msg["id"], {"price": price, "set": _card(coord, normalize_set_number(msg["set_number"]), with_history=True)})
+
+
 _CLIENT_ERRORS: list[float] = []
 
 
@@ -692,3 +711,59 @@ class UserscriptView(HomeAssistantView):
         body = re.sub(r"\{\{t:(.+?)\}\}", lambda m: tr(m.group(1)), body)
         return web.Response(text=body, content_type="text/javascript", charset="utf-8",
                             headers={"Cache-Control": "no-cache"})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/dev/tool",
+                                  vol.Required("action"): vol.In(["stats", "reset", "parse", "fetch", "queue", "outliers",
+                                                                  "debug", "dump"]),
+                                  vol.Optional("what", default=""): str, vol.Optional("retailer"): str,
+                                  vol.Optional("html", default=""): vol.All(str, vol.Length(max=5_000_000)),
+                                  vol.Optional("url", default=""): str, vol.Optional("set_number"): str,
+                                  vol.Optional("apply", default=False): bool, vol.Optional("on", default=False): bool})
+@websocket_api.async_response
+async def ws_dev_tool(hass, connection, msg):
+    """Developer tools (see devtools.py)."""
+    from . import devtools
+
+    coord = _coord(hass)
+    a, num = msg["action"], normalize_set_number(msg["set_number"]) if msg.get("set_number") else None
+    try:
+        if a == "stats":
+            out: Any = devtools.stats(coord)
+        elif a == "reset":
+            if msg["what"] not in devtools.RESETS:
+                raise ValueError(msg["what"])
+            out = {"removed": devtools.reset(coord, msg["what"])}
+            coord.push_update()
+        elif a == "parse":
+            out = await hass.async_add_executor_job(devtools.parse, msg.get("retailer"), msg["html"], msg["url"], num)
+        elif a == "fetch":
+            if not msg["url"].startswith(("https://", "http://")):
+                raise ValueError("URL")
+            out = await devtools.fetch(coord, msg["url"], num)
+        elif a == "queue":
+            out = coord.continuous_items(100)
+        elif a == "outliers":
+            out = {"points": devtools.outliers(coord, msg["apply"])}
+            if msg["apply"]:
+                coord.push_update()
+        elif a == "debug":
+            out = {"debug": devtools.set_debug(msg["on"])}
+        else:
+            out = json.loads(json.dumps(devtools.dump(coord), default=str))
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid", str(err))
+        return
+    connection.send_result(msg["id"], out)
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/ticker", vol.Optional("lang", default="en"): str})
+@websocket_api.async_response
+async def ws_ticker(hass, connection, msg):
+    """The ticker at the bottom of the panel: latest prices, deals and news."""
+    coord = _coord(hass)
+    if coord is None:
+        connection.send_result(msg["id"], {"items": [], "news": []})
+        return
+    connection.send_result(msg["id"], await coord.ticker_data(msg["lang"]))

@@ -644,6 +644,8 @@ async def test_logbook_records_everything(hass: HomeAssistant, entry, no_network
     assert check["level"] == "warning" and check["message"] == "1 of 2 shops OK"
     await ws.send_json({"id": 2, "type": "lego_tracker/log", "source": "userscript"})
     us = (await ws.receive_json())["result"]["entries"]
+    assert any(e["message"] == "open error solved by your browser" for e in us)       # the link had an error before
+    us = [e for e in us if e["message"] != "open error solved by your browser"]
     assert len(us) == 2 and {e["level"] for e in us} == {"ok", "warning"}
     await ws.send_json({"id": 3, "type": "lego_tracker/log", "level": "problems", "retailer": "amazon_nl"})
     assert all(e["level"] in ("error", "warning") and (e.get("retailer") == "amazon_nl" or "amazon_nl" in (e.get("results") or {})) for e in (await ws.receive_json())["result"]["entries"])
@@ -1571,7 +1573,11 @@ async def test_continuous_check_priorities_search_and_via(hass: HomeAssistant, e
     reasons = [(i["reason"], i["set_number"], i["retailer"]) for i in q["items"]]
     assert reasons[0] == ("no_price", "10281", "bol")                         # never a price: first
     first_search = next(k for k, (r, *_x) in enumerate(reasons) if r == "search")
-    assert reasons.index(("server_fails", "10311", "bol")) > first_search      # then searches, then failing links
+    assert reasons.index(("open_error", "10311", "bol")) < first_search        # open errors before searches
+    offers["10311"]["bol"]["ignored_error"] = "blocked (HTTP 403)"               # ignored: only as a failing link, last
+    reasons = [(i["reason"], i["set_number"], i["retailer"]) for i in c.continuous_items(50)["items"]]
+    assert reasons.index(("server_fails", "10311", "bol")) > first_search
+    del offers["10311"]["bol"]["ignored_error"]
     assert not any(n == "42143" and r == "search" for r, n, _ in reasons)      # has a price: no searching for it
     assert q["counts"]["no_price"] == 1 and q["site_gap"] == 30
 
@@ -1589,6 +1595,13 @@ async def test_continuous_check_priorities_search_and_via(hass: HomeAssistant, e
     r = await client.post("/api/lego_tracker/relay", json={"results": [{"set_number": "10281", "retailer": "bol",
                           "url": offers["10281"]["bol"]["url"], "price": 41.5, "title": "LEGO Bonsai 10281"}]})
     assert (await r.json())["ok"] == 1 and offers["10281"]["bol"]["last_via"] == "relay"
+    # an open error is solved by a browser price: it leaves the error list (also when it was ignored)
+    offers["10311"]["bol"]["ignored_error"] = "blocked (HTTP 403)"
+    r = await client.post("/api/lego_tracker/relay", json={"results": [{"set_number": "10311", "retailer": "bol",
+                          "url": offers["10311"]["bol"]["url"], "price": 39.5, "title": "LEGO Orchidee 10311"}]})
+    assert (await r.json())["ok"] == 1 and offers["10311"]["bol"]["error"] is None and "ignored_error" not in offers["10311"]["bol"]
+    assert not any(f["set_number"] == "10311" for f in c.retailer_stats()["bol"]["failing"])
+    assert any("open error solved by your browser" == e["message"] for e in c.store["activity"] if e.get("set_number") == "10311")
     ws_card = __import__("custom_components.lego_tracker.websocket_api", fromlist=["_card"])._card(c, "10281")
     assert ws_card["offers"]["bol"]["via"] == "relay"
     await c.refresh_set("10281", ["bol"])
@@ -1738,3 +1751,134 @@ def test_review_fixes_hosts_sizes_groups_and_lego_urls():
     assert is_suspicious_price(5.0, {"set_number": "1"}, {}, [100, 100, 400, 400])
     assert not is_suspicious_price(100.0, {"set_number": "1"}, {}, [100, 1000])
 
+
+
+async def test_lost_decimal_comma_is_repaired_and_absurd_rrp_ignored(hass: HomeAssistant, entry, no_network):
+    from custom_components.lego_tracker.models import is_suspicious_price
+
+    # the RRP typed on a phone came in as 16499 (164,99): shops that agree are not rejected because of it
+    s = {"set_number": "10327", "rrp": 16499.0}
+    assert not is_suspicious_price(149.99, s, {}, [159.99, 164.99])
+    assert is_suspicious_price(149.99, s, {}, [])                             # nothing to compare with: the RRP still counts
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10327"}, blocking=True)
+    c.store["sets"]["10327"]["rrp"] = 16499.0
+    c.update_set("10327", {"owned": True, "paid": 129.99})
+    c.store["collection"]["10327"]["paid"] = 12999.0
+    c._fix_lost_commas()
+    assert c.store["sets"]["10327"]["rrp"] == 164.99 and c.store["collection"]["10327"]["paid"] == 129.99
+
+
+async def test_suspicious_price_can_be_approved(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    from custom_components.lego_tracker.models import query_activity
+
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10327"}, blocking=True)
+    c.store["sets"]["10327"]["rrp"] = 164.99
+    url = "https://www.bol.com/nl/nl/p/lego-icons-dune-10327/9300000157956163/"
+    c.store["offers"]["10327"]["bol"] = {"url": url, "history": []}
+    with pytest.raises(ValueError):
+        c.report_price(19.99, url=url, set_number="10327", retailer="bol")           # under 20 % of RRP: held back
+    o = c.store["offers"]["10327"]["bol"]
+    assert o["suspect"]["price"] == 19.99 and not o.get("history")
+    assert query_activity(c.store, status="suspect")["entries"]
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/offer/approve", "set_number": "10327", "retailer": "bol"})
+    r = await ws.receive_json()
+    assert r["success"] and r["result"]["price"] == 19.99
+    assert o["approved"] == 19.99 and "suspect" not in o and o["history"][-1][1] == 19.99
+    c.report_price(20.49, url=url, set_number="10327", retailer="bol")                 # prices like it count from now on
+    assert o["last_price"] == 20.49
+    await ws.send_json({"id": 2, "type": "lego_tracker/offer/approve", "set_number": "10327", "retailer": "bol"})
+    assert not (await ws.receive_json())["success"]                                   # nothing left to approve
+
+
+async def test_developer_tools(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
+    c.store["offers"]["10281"]["bol"] = {"url": "https://www.bol.com/nl/nl/p/x-10281/9300000012345678/",
+                                         "history": [[1, 39.99], [2, 41.0], [3, 4100.0], [4, 40.5], [5, 39.0]]}
+    c.store["relay_searched"] = {"10281|bol": 1}
+    ws = await hass_ws_client(hass)
+
+    async def call(i, **kw):
+        await ws.send_json({"id": i, "type": "lego_tracker/dev/tool", **kw})
+        return await ws.receive_json()
+
+    r = await call(1, action="stats")
+    assert r["success"] and r["result"]["sets"] == 1 and r["result"]["history_points"] == 5
+    r = await call(2, action="outliers")
+    assert [p["price"] for p in r["result"]["points"]] == [4100.0] and len(c.store["offers"]["10281"]["bol"]["history"]) == 5
+    r = await call(3, action="outliers", apply=True)
+    assert len(c.store["offers"]["10281"]["bol"]["history"]) == 4
+    r = await call(4, action="reset", what="relay_searched")
+    assert r["result"]["removed"] == 1 and c.store["relay_searched"] == {}
+    assert not (await call(5, action="reset", what="everything"))["success"]
+    page = '<script type="application/ld+json">{"@type":"Product","name":"LEGO 10281","offers":{"price":"39.99","priceCurrency":"EUR"}}</script>'
+    r = await call(6, action="parse", html=page, url="https://www.bol.com/nl/nl/p/x/1/")
+    assert r["result"]["price"] == 39.99 and r["result"]["retailer"] == "bol"
+    r = await call(7, action="dump")
+    assert r["success"] and "stats" in r["result"]
+
+
+async def test_watch_since_is_kept_for_sorting(hass: HomeAssistant, entry, no_network):
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
+    since = c.store["sets"]["10281"]["watch_since"]
+    assert since <= time.time()
+    c.update_set("10281", {"watch": False})
+    assert "watch_since" not in c.store["sets"]["10281"]
+    c.update_set("10281", {"watch": True})
+    assert c.store["sets"]["10281"]["watch_since"] >= since
+
+
+def test_news_file_parsing():
+    from custom_components.lego_tracker import news
+
+    text = open("news/nieuws.txt", encoding="utf-8").read()
+    items = news.parse(text)
+    assert len(items) >= 3 and all(i["title"] and i["body"] for i in items)
+    nl = news.for_language(items, "nl")
+    assert any("BETA" in i["title"] for i in nl) and all(i.get("lang") in ("", None, "nl") for i in nl)
+    assert any(i["link"] == "/hacs/dashboard" for i in nl)
+    en = news.for_language(items, "de")                       # no German news: English
+    assert en and all(i.get("lang") == "en" for i in en)
+    bad = news.parse("title: x\nlink: javascript:alert(1)\n\nbody\n---\ntitle: y\nlink: //evil.example/x\n\nb")
+    assert [i["link"] for i in bad] == ["", ""]
+
+
+async def test_ticker_market_tick_and_shop_link(hass: HomeAssistant, entry, no_network):
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
+    c.log("ok", "price", "€49.99 → €39.99", set_number="10281", retailer="bol", url="https://www.bol.com/nl/nl/p/x/1/",
+          price=39.99, old_price=49.99, source="server")
+    c.store["events"] = [{"ts": time.time(), "kind": "deal", "set_number": "10281", "name": "Bonsai", "price": 39.99,
+                          "retailer": "bol", "url": "https://www.bol.com/nl/nl/p/x/1/", "discount": 20, "score": 80}]
+    from custom_components.lego_tracker.news import NewsFeed
+    c.news = NewsFeed(lambda: None)
+    c.news.ts, c.news.items = time.time(), [{"id": "a", "title": "Hi", "body": "x", "link": "", "lang": ""}]
+    tk = await c.ticker_data("nl")
+    assert [i["kind"] for i in tk["items"]] == ["price", "deal"] and tk["items"][0]["pct"] == -20.0 and tk["news"][0]["id"] == "a"
+    c.hass.config_entries.async_update_entry(c.entry, options={**c.entry.options, "ticker": {"watch": False, "deals": True, "news": False, "max_deals": 1}})
+    tk = await c.ticker_data("nl")
+    assert [i["kind"] for i in tk["items"]] == ["deal"] and tk["news"] == []
+
+    # market value: one set per tick, never more often than the spread allows
+    calls = []
+
+    async def fake_one(src, num, *a):
+        calls.append((src, num))
+        c._cstore(src)[num] = {"status": "ok", "ts": time.time(), "shops": [], "data": {"market_new": 80.0}}
+    c._compare_one = fake_one
+    c.market_tick()
+    await hass.async_block_till_done()
+    assert calls == [("brickeconomy", "10281")]
+    c.market_tick()
+    await hass.async_block_till_done()
+    assert len(calls) == 1                                       # next one waits (spread over the day)
+
+    # notifications link to the product page of the cheapest shop, not a comparison page
+    c.store["offers"]["10281"] = {
+        "bol": {"url": "https://www.bol.com/nl/nl/p/x/1/", "available": True, "last_price": 39.99, "history": []},
+        "amazon_nl": {"url": "https://www.kieskeurig.be/lego/product/123", "available": True, "last_price": 35.0, "history": []}}
+    assert c.notifier.shop_link("10281", {"best_url": "https://www.kieskeurig.be/lego/product/123"}) == "https://www.bol.com/nl/nl/p/x/1/"

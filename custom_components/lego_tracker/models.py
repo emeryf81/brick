@@ -291,7 +291,13 @@ def is_suspicious_price(price: float, lego_set: dict[str, Any], offer: dict[str,
     """Catch parse errors (accessory/marketplace/multi-pack prices, cents read without the comma) before
     they pollute history. Without an RRP the other shops' prices for the same set are the yardstick, so a
     new set (no RRP, no history yet) is checked too."""
+    ap = offer.get("approved")
+    if ap and abs(price - ap) <= ap * 0.25:
+        return None              # you approved a price like this for this link: the shop really asks it
     rrp = lego_set.get("rrp")
+    group = agreeing_group(others or [])
+    if rrp and group and not 0.25 <= rrp / median(group) <= 4:
+        rrp = None               # shops that agree contradict the RRP (e.g. 16499 for 164,99): don't trust the RRP
     if not rrp and others:
         mid = median(others)
         # far above the others: e.g. cents read without the comma
@@ -520,6 +526,10 @@ def query_activity(store: dict[str, Any], *, level: str = "", kind: str = "", re
         res = e.get("results") or {}
         if retailer and e.get("retailer") != retailer and retailer not in res:
             return False
+        if status == "suspect":         # a price that was held back as suspicious (can be approved)
+            txt = " ".join(str((r or {}).get("error") or "") for r in res.values()) + " " + e["message"]
+            if "suspicious price" not in txt:
+                return False
         if status in ("ok", "fail"):
             if retailer and retailer in res:
                 good = res[retailer].get("ok")
