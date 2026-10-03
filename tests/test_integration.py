@@ -2223,6 +2223,10 @@ async def test_setdb_refresh_new_sets_and_add(hass: HomeAssistant, entry, no_net
         assert await c.refresh_setdb() == []
     assert not c.setdb_info["busy"]
     assert c.setdb == before and c.store["new_sets"] == seen and "disk full" in c.setdb_info["error"]
+    # Home Assistant's Store logs a write error and returns normally: the read-back notices it
+    with patch.object(c._setdb_store, "async_save", AsyncMock(return_value=None)):
+        assert await c.refresh_setdb() == []
+    assert c.setdb == before and c.store["new_sets"] == seen and "could not be written" in c.setdb_info["error"]
     # stored in its own file and read back on start
     await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()

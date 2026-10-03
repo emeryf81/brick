@@ -2202,6 +2202,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             now = time.time()
             try:                                    # saved first: nothing changes in memory when that fails
                 await self._setdb_store.async_save({"ts": now, "sets": new})
+                # Store logs and swallows write errors itself: read the file back to be sure it was written
+                saved = await self._setdb_store.async_load()
+                if not saved or saved.get("ts") != now:
+                    raise OSError("the set database file could not be written")
             except Exception as err:  # noqa: BLE001
                 self.setdb_info.update(error=str(err)[:150], ts=now - setdb.REFRESH_HOURS * 3600 + 3 * 3600)
                 self.log("warning", "meta", T("set database could not be updated: {error}", error=str(err)[:150]), source=setdb.SOURCE)
