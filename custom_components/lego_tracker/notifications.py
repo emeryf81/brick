@@ -239,8 +239,11 @@ class Notifier:
     # ---------------------------------------------------------------- events
     async def on_set_change(self, num: str, before: dict[str, Any], after: dict[str, Any]) -> None:
         s = self.store["sets"].get(num, {})
+        blocked = self.coord.deal_blocked(num, after)        # left out under Deals → Settings
         for rule in self.rules:
             if not rule.get("enabled") or not self.in_scope(rule, num):
+                continue
+            if blocked and rule["scope"]["type"] != "sets":  # sets you picked by hand in a rule still notify
                 continue
             hits = [h for h in set_triggers(rule, before, after)
                     if self._cooled(f"{rule['id']}|{num}|{h[0]}", rule.get("cooldown_hours", 24))]
@@ -258,7 +261,8 @@ class Notifier:
             if not rule.get("enabled") or "digest" not in rule["triggers"]:
                 continue
             deals = [d for d in digest["deals"] if self.in_scope(rule, d["set_number"])
-                     and (not rule["shops"] or d["retailer"] in rule["shops"])]
+                     and (not rule["shops"] or d["retailer"] in rule["shops"])
+                     and (rule["scope"]["type"] == "sets" or not self.coord.deal_blocked(d["set_number"]))]
             if not deals:
                 continue
             lines = [f"• {d['set_number']} {d['name'] or ''}: " + tr("€{price} at {shop}", price=f"{d['price']:.2f}", shop=RETAILERS.get(d["retailer"], ("",))[0])

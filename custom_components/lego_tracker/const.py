@@ -26,6 +26,9 @@ CONF_RELAY_HOURS = "relay_hours"
 DEFAULT_RELAY_HOURS = 6
 CONF_COMPARE = "compare"                    # hidden option: price-comparison sites as extra price sources
 CONF_MARKET = "market_value"               # BrickEconomy market value + retirement date, once a day per set
+CONF_DEAL_FILTER = "deal_filter"           # Deals → Settings: themes switched off, price / discount / pieces limits
+DEAL_FILTER_DEFAULT = {"themes_off": [], "min_price": None, "max_price": None, "min_discount": None,
+                       "min_pieces": None, "max_pieces": None, "skip_owned": False, "skip_retired": False}
 CONF_TICKER = "ticker"                      # bottom ticker: {"watch": bool, "deals": bool, "news": bool, "max_*": int}
 TICKER_DEFAULT = {"watch": True, "deals": True, "news": True, "max_watch": 15, "max_deals": 10, "max_news": 5}
 CONF_COMPARE_OLD = "brickwatch"             # name of that option before 0.9.10 (still read once)

@@ -14,6 +14,7 @@ from homeassistant.core import HomeAssistant, callback
 
 from .const import CONF_DEV_FULL_REFRESH, DOMAIN, PANEL_URL, RETAILERS
 from .csv_import import analyze_csv
+from .themes import THEMES as LEGO_THEMES
 from .i18n import tr
 from .models import combined_history, normalize_set_number, offer_price
 
@@ -148,7 +149,10 @@ def ws_overview(hass, connection, msg):
                   "continuous": coord.continuous_items(1)["counts"] if coord.relay_enabled else {},
                   "heartbeat": coord.store.get("relay_heartbeat")},
         "bol_api": bool(coord.bol_api),
-        "compare": _compare_status(coord), "deal_rules": coord.deal_rules,
+        "compare": _compare_status(coord), "deal_rules": coord.deal_rules | {"filter": coord.deal_filter},
+        "deal_blocked": {n: why for n in coord.store["sets"]
+                         if (why := coord.deal_blocked(n, (coord.data or coord.compute())["statuses"].get(n, {})))},
+        "lego_themes": list(LEGO_THEMES),
         "watch_limit": coord.watch_limit, "full_refresh": coord.dev(CONF_DEV_FULL_REFRESH), "manual": coord.manual_status(),
         "value_source": coord.store.get("value_source", "shop_first"),
         "health": {

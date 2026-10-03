@@ -386,7 +386,7 @@ fieldset{border:1px solid var(--lt-line);border-radius:14px;padding:12px 14px 4p
 // ------------------------------------------------------------------ component
 // labels are English source strings, translated with t() when rendered
 const SECTIONS = {
-  deals: { label: "🏷️ Deals & watchlist", hint: "sets you keep an eye on", subs: [["today", "Today"], ["watch", "Watchlist"], ["all", "All prices"]] },
+  deals: { label: "🏷️ Deals & watchlist", hint: "sets you keep an eye on", subs: [["today", "Today"], ["watch", "Watchlist"], ["all", "All prices"], ["dset", "Settings"]] },
   collection: { label: "📦 My collection", hint: "what you own", subs: [["overview", "Overview"], ["sets", "Sets"]] },
   log: { label: "📜 Logbook", hint: "checks, prices, errors", subs: [["all", "Everything"], ["checks", "Shop checks"], ["errors", "Open errors"]] },
   manage: { label: "⚙️ Manage", hint: "add, import, shops, settings", subs: [["add", "Add"], ["import", "Import"], ["links", "Link check"], ["notify", "Notifications"], ["shops", "Shops & jobs"], ["settings", "Settings"], ["userscript", "Userscript"], ["backup", "Backup"]] },
@@ -609,9 +609,11 @@ class LegoTrackerPanel extends HTMLElement {
     if (d && !d.full_refresh) return `disabled title="${esc(t("Switched off to protect the traffic to and the load on the shops: prices are checked set by set in the background; use ↻ in a set to fetch one set now (once every 2 minutes)."))}"`;
     return title ? `title="${esc(title)}"` : "";
   }
+  /** Left out under Deals → Settings (theme switched off, price / discount / pieces limits): why, or "". */
+  dealBlocked(s) { return ((this.state.data && this.state.data.deal_blocked) || {})[s.set_number] || ""; }
   isDeal(s) {
     const r = (this.state.data && this.state.data.deal_rules) || { min_score: 70, atl: true, target: true };
-    return s.best_price != null && ((r.atl && s.is_all_time_low) || (r.target && s.target_hit) || s.deal_score >= r.min_score
+    return !this.dealBlocked(s) && s.best_price != null && ((r.atl && s.is_all_time_low) || (r.target && s.target_hit) || s.deal_score >= r.min_score
       || (s.discount_rrp != null && s.discount_rrp >= this.state.threshold));
   }
   /** Retiring within 100 days (exit date known). */
@@ -758,7 +760,7 @@ class LegoTrackerPanel extends HTMLElement {
     const s = this.state, el = this.shadowRoot.getElementById("content"); if (!el) return;
     if (s.err) { el.innerHTML = `<div class="empty"><span class="big">⚠️</span>${t("Could not load data: {error}", { error: esc(s.err) })}<br><br><button class="btn" id="retry">${t("Try again")}</button></div>`; el.querySelector("#retry").onclick = () => this.load(true); return; }
     if (!s.data) { el.innerHTML = `<div class="kpis">${"<div class='skel' style='height:86px'></div>".repeat(4)}</div><div class="grid">${"<div class='skel' style='height:260px'></div>".repeat(8)}</div>`; return; }
-    const view = { deals: { today: this.vToday, watch: this.vWatch, all: this.vAll }, collection: { overview: this.vCollOverview, sets: this.vCollSets }, log: { all: this.vLog, checks: this.vLog, errors: this.vErrors }, manage: { notify: this.vNotify, add: this.vAdd, import: this.vImport, links: this.vLinks, shops: this.vShops, settings: this.vSettings, userscript: this.vUserscript, backup: this.vBackup, secret: this.vSecret } }[s.section][s.sub[s.section]];
+    const view = { deals: { today: this.vToday, watch: this.vWatch, all: this.vAll, dset: this.vDealSettings }, collection: { overview: this.vCollOverview, sets: this.vCollSets }, log: { all: this.vLog, checks: this.vLog, errors: this.vErrors }, manage: { notify: this.vNotify, add: this.vAdd, import: this.vImport, links: this.vLinks, shops: this.vShops, settings: this.vSettings, userscript: this.vUserscript, backup: this.vBackup, secret: this.vSecret } }[s.section][s.sub[s.section]];
     el.className = animate && !REDUCED ? "enter" : "";
     el.innerHTML = view.call(this);
     this.bindContent(el);
@@ -870,7 +872,7 @@ class LegoTrackerPanel extends HTMLElement {
 
   // ---------------------------------------------------------------- DEALS
   vToday() {
-    const allWatched = this.sets.filter((s) => s.watched), watched = this.state.f.ret100 ? allWatched.filter((s) => this.ret100(s)) : allWatched;
+    const allWatched = this.sets.filter((s) => s.watched && !this.dealBlocked(s)), watched = this.state.f.ret100 ? allWatched.filter((s) => this.ret100(s)) : allWatched;
     if (!this.sets.length) return this.emptyState("🧱", t("No sets yet. Add sets to track their prices, or import your collection."), `<button class="btn" data-goto="manage/add">＋ ${t("Add a set")}</button> <button class="btn ghost" data-goto="manage/import">⇪ ${t("Import collection")}</button>`);
     const deals = this.sorted(watched.filter((s) => this.isDeal(s)), "score");
     const top = deals[0];
@@ -921,7 +923,65 @@ class LegoTrackerPanel extends HTMLElement {
   vAll() {
     return `${this.banner()}${this.filterBar({ list: this.sets, threshold: true, retire: true, sorts: [["score", "Deal score"], ["discount", "Highest discount"], ["price", "Lowest price"], ["ppp", "Price per piece"], ["drop", "Biggest drop"], ["deal_new", "Latest deal notification"], ["name", "Name"], ["number", "Set number"]] })}<div id="results" data-fn="rAll">${this.rAll()}</div>`;
   }
-  rAll() { const l = this.sorted(this.filtered(this.sets), this.state.f.sort); return l.length ? this.gridOf(l, undefined, "watch") : `<div class="grid">${this.addTile("watch")}</div>` + this.emptyState("🔍", t("Nothing found with these filters.")); }
+  /** Deals → Settings: what counts as a deal, and which themes / prices / sets are left out (also of notifications). */
+  vDealSettings() {
+    const st = this.state.settings;
+    if (this.state.settingsErr) return this.emptyState("🔒", t("Only administrators can change settings."));
+    if (!st) { this.loadSettings(); return `<div class="skel" style="height:300px"></div>`; }
+    const f = this.state.dfDraft || (this.state.dfDraft = JSON.parse(JSON.stringify(st.deal_filter || {})));
+    f.themes_off = f.themes_off || [];
+    const kk = (x) => String(x || "").toLowerCase().replace(/^lego /, "").replace(/[^a-z0-9]/g, "");
+    const mine = {}; for (const x of this.sets) if (x.theme) mine[x.theme] = (mine[x.theme] || 0) + 1;
+    const seen = new Set(Object.keys(mine).map(kk));
+    const all = [...Object.keys(mine).sort((a, b) => mine[b] - mine[a] || a.localeCompare(b)), ...(this.state.data.lego_themes || []).filter((x) => !seen.has(kk(x)))];
+    const off = new Set(f.themes_off.map(kk)), q = (this.state.dfq || "").toLowerCase();
+    const chips = all.filter((x) => !q || x.toLowerCase().includes(q)).map((x) => `<label class="chip sm ${off.has(kk(x)) ? "" : "on"}" style="cursor:pointer;display:inline-flex;gap:6px;align-items:center"><input type="checkbox" class="df_th" data-th="${esc(x)}" ${off.has(kk(x)) ? "" : "checked"} style="margin:0"> ${esc(x)}${mine[x] ? ` <span class="muted">${mine[x]}</span>` : ""}</label>`).join("");
+    const num = (id, v, ph) => `<input id="${id}" type="text" inputmode="decimal" autocomplete="off" value="${v == null ? "" : esc(v)}" placeholder="${esc(ph)}">`;
+    const blocked = Object.keys(this.state.data.deal_blocked || {}).length;
+    return `<div class="panel" style="border-left:4px solid var(--lt-accent)"><b>🔕 ${t("Left out = also no notifications")}</b>
+        <p style="margin:6px 0 0;font-size:13px">${t("Sets that fall outside these settings don't appear under Today and All prices, don't count as a deal, and you get no deal or price notifications for them (also not in the daily digest or the ticker). Notification rules for sets you picked one by one keep working. Your watchlist still shows them.")}</p>
+        <p class="muted" style="margin:6px 0 0;font-size:12px">${t("Left out now: {n} sets", { n: blocked })}</p></div>
+      <div class="panel"><h3>🏷️ ${t("What counts as a deal")}</h3><p class="muted" style="font-size:13px">${t("A set is a deal when one of these is true. The deal score (0–100) weighs the discount on the RRP, the distance to the lowest price ever, the discount on the 90-day median and a reached target price.")}</p>
+        <div class="form"><label title="${t("Discount on the RRP (or, without RRP, on the 90-day median) from which a set counts as a deal")}">${t("Discount threshold (%)")} ⓘ<input id="o_thr" type="number" min="1" max="90" value="${st.discount_threshold}"></label>
+        <label title="${t("A set with at least this deal score counts as a deal (70 = top deal)")}">${t("Deal score at least")} ⓘ<input id="o_dscore" type="number" min="1" max="100" value="${st.deal_min_score ?? 70}"></label>
+        <label title="${t("How long prices must be followed before “lowest ever” means something")}">${t("Min. days of history for “lowest ever”")} ⓘ<input id="o_hist" type="number" min="0" max="90" value="${st.min_history_days}"></label>
+        <label class="chk" style="align-self:end" title="${t("The lowest price since you follow the set counts as a deal")}"><input type="checkbox" id="o_datl" ${st.deal_atl !== false ? "checked" : ""}> ${t("Lowest ever = deal")}</label>
+        <label class="chk" style="align-self:end" title="${t("A price at or below your target price counts as a deal")}"><input type="checkbox" id="o_dtgt" ${st.deal_target !== false ? "checked" : ""}> ${t("Target price reached = deal")}</label></div></div>
+      <div class="panel"><h3>🎯 ${t("Which sets")}</h3><p class="muted" style="font-size:13px">${t("Leave a field empty for no limit.")}</p>
+        <div class="form"><label>${t("Lowest price at least (€)")}${num("df_minp", f.min_price, "–")}</label><label>${t("Lowest price at most (€)")}${num("df_maxp", f.max_price, "–")}</label>
+        <label>${t("Discount on the RRP at least (%)")}${num("df_mind", f.min_discount, "–")}</label>
+        <label>${t("Pieces at least")}${num("df_minpc", f.min_pieces, "–")}</label><label>${t("Pieces at most")}${num("df_maxpc", f.max_pieces, "–")}</label>
+        <label class="chk" style="align-self:end"><input type="checkbox" id="df_owned" ${f.skip_owned ? "checked" : ""}> ${t("Leave out sets I own")}</label>
+        <label class="chk" style="align-self:end"><input type="checkbox" id="df_ret" ${f.skip_retired ? "checked" : ""}> ${t("Leave out retired sets")}</label></div></div>
+      <div class="panel"><h3>🧱 ${t("Themes")} <span class="muted" style="font-weight:400;font-size:13px">${t("{n} switched off", { n: f.themes_off.length })}</span></h3>
+        <p class="muted" style="font-size:13px">${t("Untick a theme to leave it out of Deals and notifications. Your own themes come first (with the number of sets).")}</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px"><input id="df_q" placeholder="${t("Search a theme")}" value="${esc(this.state.dfq || "")}" style="max-width:240px">
+          <button class="btn ghost sm" id="df_on" type="button">✓ ${t("All on")}</button><button class="btn ghost sm" id="df_off" type="button">✕ ${t("All off")}</button></div>
+        <div class="chips" id="df_chips">${chips}</div></div>
+      <div class="panel" style="position:sticky;bottom:40px;z-index:2;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button class="btn" id="df_save">💾 ${t("Save deal settings")}</button><span class="muted" style="font-size:13px">${t("After saving the integration restarts briefly (a running job stops).")}</span></div>`;
+  }
+  bindDealSettings(root, $) {
+    const f = this.state.dfDraft, kk = (x) => String(x || "").toLowerCase().replace(/^lego /, "").replace(/[^a-z0-9]/g, "");
+    const keep = () => { for (const [id, k] of [["df_minp", "min_price"], ["df_maxp", "max_price"], ["df_mind", "min_discount"], ["df_minpc", "min_pieces"], ["df_maxpc", "max_pieces"]]) f[k] = $(id).value.trim() === "" ? null : money($(id).value);
+      f.skip_owned = $("df_owned").checked; f.skip_retired = $("df_ret").checked; };
+    const redraw = () => { keep(); const y = window.scrollY; this.renderContent(); window.scrollTo(0, y); };
+    root.querySelectorAll(".df_th").forEach((c) => c.onchange = () => {
+      const th = c.dataset.th; f.themes_off = f.themes_off.filter((x) => kk(x) !== kk(th)); if (!c.checked) f.themes_off.push(th); redraw();
+    });
+    const qi = $("df_q"); if (qi) qi.oninput = () => { this.state.dfq = qi.value; keep(); clearTimeout(this._dfT); this._dfT = setTimeout(() => { this.renderContent(); const n = this.shadowRoot.getElementById("df_q"); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }, 250); };
+    $("df_on").onclick = () => { f.themes_off = []; redraw(); };
+    $("df_off").onclick = () => { const vis = [...root.querySelectorAll(".df_th")].map((c) => c.dataset.th); f.themes_off = [...new Set([...f.themes_off, ...vis])]; redraw(); };
+    $("df_save").onclick = () => this.busy($("df_save"), t("Saving…"), async () => {
+      keep();
+      await this._hass.callWS({ type: "lego_tracker/settings/set", fields: { discount_threshold: +$("o_thr").value, min_history_days: +$("o_hist").value,
+        deal_min_score: +$("o_dscore").value, deal_atl: $("o_datl").checked, deal_target: $("o_dtgt").checked, deal_filter: f } });
+      this._tickerAt = 0;
+      await new Promise((r) => setTimeout(r, 1500));
+      this.state.settings = null; this.state.dfDraft = null; await this.load();
+      this.toast(t("Settings saved"), "ok");
+    });
+  }
+  rAll() { const l = this.sorted(this.filtered(this.sets.filter((x) => !this.dealBlocked(x))), this.state.f.sort); return l.length ? this.gridOf(l, undefined, "watch") : `<div class="grid">${this.addTile("watch")}</div>` + this.emptyState("🔍", t("Nothing found with these filters.")); }
 
   // ---------------------------------------------------------------- COLLECTION
   vCollOverview() {
@@ -1495,7 +1555,8 @@ class LegoTrackerPanel extends HTMLElement {
     try { this.state.settings = await this._hass.callWS({ type: "lego_tracker/settings/get" }); this.state.settingsErr = null; }
     catch (e) { this.state.settingsErr = e.message || String(e); }
     this.state.draft = null;
-    if (this.state.section === "manage" && ["settings", "secret"].includes(this.state.sub.manage)) this.renderContent();
+    this.state.dfDraft = null;
+    if ((this.state.section === "manage" && ["settings", "secret"].includes(this.state.sub.manage)) || (this.state.section === "deals" && this.state.sub.deals === "dset")) this.renderContent();
   }
   vSettings() {
     const st = this.state.settings;
@@ -1512,13 +1573,8 @@ class LegoTrackerPanel extends HTMLElement {
     const langs = st.languages || {}, mode = d.mode, dev = st.dev || {};
     const perHour = (h) => { const n = (this.state.data.schedule || {}).total || this.sets.length; return n ? Math.round((n / h) * 10) / 10 : 0; };
     return `<div class="panel"><h3>🌐 ${t("Language")}</h3><div class="form" style="max-width:520px"><label>${t("Language of the panel, notifications and userscript")}<select id="o_lang"><option value="auto" ${st.language === "auto" ? "selected" : ""}>${t("Automatic (Home Assistant language)")}</option>${Object.entries(langs).map(([k, l]) => `<option value="${k}" ${st.language === k ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label></div></div>
-      <div class="panel"><h3>🏷️ ${t("Deals")}</h3><p class="muted" style="font-size:13px">${t("A set is a deal when one of these is true. The deal score (0–100) weighs the discount on the RRP, the distance to the lowest price ever, the discount on the 90-day median and a reached target price.")}</p>
-        <div class="form"><label title="${t("Discount on the RRP (or, without RRP, on the 90-day median) from which a set counts as a deal")}">${t("Discount threshold (%)")} ⓘ<input id="o_thr" type="number" min="1" max="90" value="${st.discount_threshold}"></label>
-        <label title="${t("A set with at least this deal score counts as a deal (70 = top deal)")}">${t("Deal score at least")} ⓘ<input id="o_dscore" type="number" min="1" max="100" value="${st.deal_min_score ?? 70}"></label>
-        <label title="${t("How long prices must be followed before “lowest ever” means something")}">${t("Min. days of history for “lowest ever”")} ⓘ<input id="o_hist" type="number" min="0" max="90" value="${st.min_history_days}"></label>
-        <label class="chk" style="align-self:end" title="${t("The lowest price since you follow the set counts as a deal")}"><input type="checkbox" id="o_datl" ${st.deal_atl !== false ? "checked" : ""}> ${t("Lowest ever = deal")}</label>
-        <label class="chk" style="align-self:end" title="${t("A price at or below your target price counts as a deal")}"><input type="checkbox" id="o_dtgt" ${st.deal_target !== false ? "checked" : ""}> ${t("Target price reached = deal")}</label>
-        <label>${t("Notifications")}<a class="btn ghost sm" data-goto="manage/notify" style="cursor:pointer;margin-top:4px;align-self:flex-start">🔔 ${t("Go to Notifications")}</a><input id="o_notify" type="hidden" value="${esc(st.notify_service)}"></label>
+      <div class="panel"><h3>🔔 ${t("Notifications")}</h3><p class="muted" style="font-size:13px">${t("What counts as a deal, and which themes, prices and sets are left out, is set under Deals → Settings.")} <a data-goto="deals/dset" style="cursor:pointer">🏷️ ${t("Deal settings")} →</a></p>
+        <div class="form"><label>${t("Notifications")}<a class="btn ghost sm" data-goto="manage/notify" style="cursor:pointer;margin-top:4px;align-self:flex-start">🔔 ${t("Go to Notifications")}</a><input id="o_notify" type="hidden" value="${esc(st.notify_service)}"></label>
         <label>${t("Daily digest at")}<input id="o_digest" type="time" value="${esc(st.digest_time)}"></label></div></div>
       <div class="panel"><h3>⏰ ${t("Automatic price checks")}</h3><div class="radio">
         <label class="${mode === "spread" ? "on" : ""}"><input type="radio" name="rmode" value="spread" ${mode === "spread" ? "checked" : ""}><b>🔄 ${t("Spread over the day")}</b><span>${t("Every set is checked once per cycle at every shop, evenly spread (e.g. 240 sets in 24 h = 10 sets per hour). Gentle on the shops, fewer blocks.")}</span></label>
@@ -1735,6 +1791,7 @@ class LegoTrackerPanel extends HTMLElement {
     if ($("contbox")) this.bindCont($("contbox"));
     if ($("x_cmp")) this.bindSecret(root, $);
     if ($("o_save")) this.bindSettings(root, $);
+    if ($("df_save")) this.bindDealSettings(root, $);
     if ($("e_scope")) this.bindErrors(root, $);
     if ($("lg_reload")) this.bindLog(root, $);
     if (root.querySelector("[data-nf]")) this.bindNotify(root, $);
@@ -1857,9 +1914,8 @@ class LegoTrackerPanel extends HTMLElement {
     $("o_save").addEventListener("click", () => {
       syncShops();
       const f = {
-        discount_threshold: +$("o_thr").value, min_history_days: +$("o_hist").value, notify_service: $("o_notify").value.trim(),
+        notify_service: $("o_notify").value.trim(),
         digest_time: $("o_digest").value, refresh_mode: d.mode, spread_hours: +$("o_spread").value, watch_cycle_min: +$("o_wcycle").value,
-        deal_min_score: +$("o_dscore").value, deal_atl: $("o_datl").checked, deal_target: $("o_dtgt").checked,
         ...(d.mode === "times" ? { refresh_times: $("o_times").value } : {}),
         value_source: (root.querySelector("input[name=vsrc]:checked") || {}).value || "shop_first", use_impersonation: $("o_imp").checked,
         retailers: d.shops.filter((x) => x.enabled).map((x) => x.id), no_autopause: d.shops.filter((x) => !x.autopause).map((x) => x.id),

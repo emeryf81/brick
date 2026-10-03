@@ -1765,8 +1765,16 @@ async def test_lost_decimal_comma_is_repaired_and_absurd_rrp_ignored(hass: HomeA
     c.store["sets"]["10327"]["rrp"] = 16499.0
     c.update_set("10327", {"owned": True, "paid": 129.99})
     c.store["collection"]["10327"]["paid"] = 12999.0
-    c._fix_lost_commas()
+    c._fix_lost_commas()                                                       # no evidence (no shop prices): left alone
+    assert c.store["sets"]["10327"]["rrp"] == 16499.0 and c.store["collection"]["10327"]["paid"] == 12999.0
+    c.store["offers"]["10327"] = {"bol": {"url": "https://www.bol.com/nl/nl/p/x/1/", "available": True, "last_price": 159.99, "history": []}}
+    c._fix_lost_commas()                                                       # the shops ask ~160: 16499 lost its comma
     assert c.store["sets"]["10327"]["rrp"] == 164.99 and c.store["collection"]["10327"]["paid"] == 129.99
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "75192"}, blocking=True)
+    c.store["sets"]["75192"]["rrp"] = 2500.0                                   # a real, high amount stays as it is
+    c.store["offers"]["75192"] = {"bol": {"url": "https://www.bol.com/nl/nl/p/y/2/", "available": True, "last_price": 2399.0, "history": []}}
+    c._fix_lost_commas()
+    assert c.store["sets"]["75192"]["rrp"] == 2500.0
 
 
 async def test_suspicious_price_can_be_approved(hass: HomeAssistant, entry, no_network, hass_ws_client):
@@ -1896,3 +1904,50 @@ async def test_market_value_via_userscript_when_server_fails(hass: HomeAssistant
     r = await client.post("/api/lego_tracker/relay", json={"results": [{**item, "status": 0, "html": "", "error": "timeout"}]})
     assert r.status == 200
     assert not any(i.get("reason") == "market" for i in c.continuous_items(100)["items"])      # tried: not again today
+
+
+async def test_deal_filter_themes_prices_and_notifications(hass: HomeAssistant, entry, no_network):
+    c = await _setup(hass, entry)
+    for n in ("75192", "10281"):
+        await hass.services.async_call(DOMAIN, "add_set", {"set_number": n}, blocking=True)
+    c.store["sets"]["75192"].update(theme="Star Wars", pieces=7541)
+    c.store["sets"]["10281"].update(theme="Botanicals", pieces=878)
+    with pytest.raises(Exception):
+        c.settings_validate({"deal_filter": {"min_price": 100, "max_price": 50}})
+    opts = c.settings_validate({"deal_filter": {"themes_off": ["star-wars"], "max_price": "450,50"}})
+    assert opts["deal_filter"]["max_price"] == 450.5
+    hass.config_entries.async_update_entry(c.entry, options={**c.entry.options, "deal_filter": opts["deal_filter"]})
+    assert c.deal_blocked("75192", {}) == "theme" and c.deal_blocked("10281", {"best_price": 40}) is None
+    assert c.deal_blocked("10281", {"best_price": 500}) == "max_price"
+
+    sent = []
+
+    async def fake_send(rule, title, message, **kw):
+        sent.append(title)
+    c.notifier.send = fake_send
+    c.notifier.rules[:] = [{"id": "r1", "enabled": True, "scope": {"type": "all"}, "triggers": ["any_change", "digest"],
+                            "params": {}, "shops": [], "cooldown_hours": 0},
+                           {"id": "r2", "enabled": True, "scope": {"type": "sets", "sets": ["75192"]}, "triggers": ["any_change"],
+                            "params": {}, "shops": [], "cooldown_hours": 0}]
+    before, after = {"best_price": 600.0}, {"best_price": 550.0, "best_retailer": "bol", "best_url": None}
+    await c.notifier.on_set_change("75192", before, after)
+    assert len(sent) == 1                                   # only the rule that picked this set by hand
+    await c.notifier.on_set_change("10281", {"best_price": 45.0}, {"best_price": 40.0, "best_retailer": "bol", "best_url": None})
+    assert len(sent) == 2
+    sent.clear()
+    await c.notifier.on_digest({"deals": [{"set_number": "75192", "name": "", "price": 550, "retailer": "bol", "discount": 30},
+                                          {"set_number": "10281", "name": "", "price": 40, "retailer": "bol", "discount": 20}]})
+    assert len(sent) == 1
+
+
+async def test_brickeconomy_skipped_when_market_value_off(hass: HomeAssistant, entry, no_network):
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
+    hass.config_entries.async_update_entry(c.entry, options={**c.entry.options, "market_value": False})
+    asked = []
+
+    async def fake_one(src, num, *a, **kw):
+        asked.append(src)
+    c._compare_one = fake_one
+    await c.compare_refresh("10281", sources=["brickeconomy", "kieskeurig"])
+    assert asked == ["kieskeurig"]

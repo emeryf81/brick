@@ -21,7 +21,7 @@ from .client import DOMAIN_GAP, SEARCH_GAP, Fetcher, lookup_metadata
 from .const import (
     CONF_COMPARE, CONF_COMPARE_OLD, CONF_BLOCK_WORDS, CYCLE_CHOICES, CONF_WATCH_CYCLE, WATCH_CYCLE_CHOICES, WATCH_LIMIT,
     FULL_REFRESH_GAP, MANUAL_GAP, CONF_DEAL_MIN_SCORE, CONF_DEAL_ATL, CONF_DEAL_TARGET, DEFAULT_DEAL_MIN_SCORE, CONF_DEV_FIXED_TIMES, CONF_DEV_FULL_REFRESH, CONF_DEV_FREE_CYCLE, CONF_DEV_WATCH_UNLIMITED, CONF_ALLOW_WORDS, CONF_COMPARE_SOURCES, COMPARE_FRESH_HOURS, COMPARE_MISSING_HOURS, COMPARE_NET_ERRORS, COMPARE_PAUSE_HOURS,
-    CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET, CONF_BOL_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS, CONF_MARKET, CONF_TICKER, TICKER_DEFAULT,
+    CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET, CONF_BOL_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS, CONF_MARKET, CONF_TICKER, TICKER_DEFAULT, CONF_DEAL_FILTER, DEAL_FILTER_DEFAULT,
     CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_LANGUAGE, CONF_REFRESH_MODE, CONF_SPREAD_HOURS, DEFAULT_REFRESH_MODE, DEFAULT_SPREAD_HOURS, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, CONF_CUSTOM_SHOPS, CONF_DIGEST_TIME, CONF_NO_AUTOPAUSE, CONF_SHOP_SEARCH, CONF_VALUE_SOURCE, DEFAULT_DIGEST_TIME, GENERIC_SHOPS, CONF_DISCOUNT_THRESHOLD, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
     DEFAULT_REFRESH_TIMES, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS, DEFAULT_RETAILERS,
     DOMAIN, EVENT_JOB_DONE, EVENT_HIGH_DISCOUNT, EVENT_NEW_LOW, EVENT_TARGET_HIT, RETAILERS, STORAGE_KEY,
@@ -224,6 +224,38 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return {"threshold": self.threshold, "min_score": score, "atl": bool(self.opt(self.entry, CONF_DEAL_ATL, True)),
                 "target": bool(self.opt(self.entry, CONF_DEAL_TARGET, True))}
 
+    @property
+    def deal_filter(self) -> dict[str, Any]:
+        return {**DEAL_FILTER_DEFAULT, **(self.opt(self.entry, CONF_DEAL_FILTER, None) or {})}
+
+    def deal_blocked(self, num: str, status: dict[str, Any] | None = None) -> str | None:
+        """Why a set is left out of Deals and price notifications (Deals → Settings), or None."""
+        from .themes import key as theme_key
+
+        f, s = self.deal_filter, self.store["sets"].get(num, {})
+        if status is None:
+            status = ((self.data or {}).get("statuses") or {}).get(num) or self.compute()["statuses"].get(num, {})
+        st = status
+        off = {theme_key(x) for x in f["themes_off"]}
+        if s.get("theme") and theme_key(s["theme"]) in off:
+            return "theme"
+        price, pieces = st.get("best_price"), s.get("pieces")
+        if price is not None and f["min_price"] is not None and price < f["min_price"]:
+            return "min_price"
+        if price is not None and f["max_price"] is not None and price > f["max_price"]:
+            return "max_price"
+        if f["min_discount"] is not None and (st.get("discount_rrp") is None or st["discount_rrp"] < f["min_discount"]):
+            return "min_discount"
+        if pieces and f["min_pieces"] is not None and pieces < f["min_pieces"]:
+            return "min_pieces"
+        if pieces and f["max_pieces"] is not None and pieces > f["max_pieces"]:
+            return "max_pieces"
+        if f["skip_owned"] and num in self.store["collection"]:
+            return "owned"
+        if f["skip_retired"] and st.get("retired"):
+            return "retired"
+        return None
+
     def is_watched(self, num: str) -> bool:
         """On the watchlist: every set you don't own, plus owned sets you also watch (e.g. for a second copy)."""
         return is_watched(self.store, num)
@@ -387,7 +419,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         before = self.compute()["statuses"].get(num, {})
         offer["approved"] = price
         record_price(offer, price)
-        offer["last_ok"], offer["error"] = offer["last_checked"], None
+        offer["last_ok"], offer["error"] = offer.get("last_checked") or time.time(), None
         offer.pop("ignored_error", None)
         self.log("ok", "price", T("suspicious price €{price} approved by hand", price=f"{price:.2f}"),
                  set_number=num, retailer=rid, url=offer.get("url"), price=price, source="panel")
@@ -643,21 +675,33 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _fix_lost_commas(self) -> None:
         """Older panels used number fields in which some phone keyboards dropped the decimal comma
-        (an RRP of 164,99 became 16499). No LEGO set costs over €2000: such amounts are divided by 100."""
+        (an RRP of 164,99 became 16499). Only amounts with evidence are repaired: the amount is far above
+        what the shops ask (or, for a purchase price, the RRP) and the amount / 100 matches it. Anything
+        else, e.g. a real €2500, stays as it is."""
+        def fits(v: float, ref: float | None) -> bool:
+            return bool(ref) and not 0.3 <= v / ref <= 3 and 0.4 <= (v / 100) / ref <= 2.5
+
+        def shop_median(num: str) -> float | None:
+            prices = sorted(o["last_price"] for o in (self.store["offers"].get(num) or {}).values()
+                            if o.get("available") and o.get("last_price") and not o.get("manual_price"))
+            return prices[len(prices) // 2] if prices else None
+
+        def fix(num: str, rec: dict[str, Any], key: str, ref: float | None) -> None:
+            v = rec.get(key)
+            if isinstance(v, (int, float)) and v > 1000 and fits(v, ref):
+                rec[key] = round(v / 100, 2)
+                self.log("info", "meta", T("{field} {old} corrected to {new} (decimal comma lost)", field=key, old=f"{v:g}", new=f"{v / 100:.2f}"),
+                         set_number=num, source="server")
+
         for num, st in self.store["sets"].items():
+            ref = shop_median(num)
             for key in ("rrp", "target_price"):
-                v = st.get(key)
-                if isinstance(v, (int, float)) and v > 2000 and 1 <= v / 100 <= 2000:
-                    st[key] = round(v / 100, 2)
-                    self.log("info", "meta", T("{field} {old} corrected to {new} (decimal comma lost)", field=key, old=f"{v:g}", new=f"{v / 100:.2f}"),
-                             set_number=num, source="server")
+                fix(num, st, key, ref)
         for num, e in self.store["collection"].items():
+            st = self.store["sets"].get(num, {})
+            ref = st.get("rrp") if st.get("rrp") and st.get("rrp") < 1000 else shop_median(num)
             for key in ("paid", "current_value"):
-                v = e.get(key)
-                if isinstance(v, (int, float)) and v > 2000 and 1 <= v / 100 <= 2000 and (self.store["sets"].get(num, {}).get("rrp") or 0) < 1000:
-                    e[key] = round(v / 100, 2)
-                    self.log("info", "meta", T("{field} {old} corrected to {new} (decimal comma lost)", field=key, old=f"{v:g}", new=f"{v / 100:.2f}"),
-                             set_number=num, source="server")
+                fix(num, e, key, ref * max(1, int(e.get("qty") or 1)) if ref and key == "paid" else ref)
 
     def _drop_old_source_links(self) -> None:
         """Brickwatch was removed in 0.9.10: its prices and history stay, but no link to it remains
@@ -706,6 +750,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         have the set is not asked again within a day, a paused site is skipped (unless forced from the panel)."""
         out: dict[str, dict[str, Any]] = {}
         for src in sources or self.compare_sources:
+            if src == "brickeconomy" and not self.market_enabled:      # the market value is switched off
+                continue
             try:
                 if (entry := await self._compare_one(src, num, refresh or force, force, retry_missing)):
                     out[src] = entry
@@ -1617,7 +1663,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "language": o.get(CONF_LANGUAGE, DEFAULT_LANGUAGE), "languages": LANGUAGES,
             "bol_country": o.get(CONF_BOL_COUNTRY, "auto"), "bol_api": bool(self.bol_api),
             "browser_relay": bool(o.get(CONF_RELAY, True)), "compare": self.compare_enabled,
-            "market_value": self.market_enabled, "ticker": self.ticker,
+            "market_value": self.market_enabled, "ticker": self.ticker, "deal_filter": self.deal_filter,
             "compare_sources": self.compare_sources,
             "block_words": list(o.get(CONF_BLOCK_WORDS, [])), "allow_words": list(o.get(CONF_ALLOW_WORDS, [])),
             "builtin_words": list(BUILTIN_WORDS), "relay_hours": int(o.get(CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS)),
@@ -1646,6 +1692,26 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for key in (CONF_DEAL_ATL, CONF_DEAL_TARGET):
             if key in fields:
                 opts[key] = bool(fields[key])
+        if CONF_DEAL_FILTER in fields:
+            raw = fields[CONF_DEAL_FILTER] if isinstance(fields[CONF_DEAL_FILTER], dict) else {}
+            df: dict[str, Any] = {"themes_off": sorted({str(x)[:80] for x in (raw.get("themes_off") or []) if str(x).strip()})[:300],
+                                  "skip_owned": bool(raw.get("skip_owned")), "skip_retired": bool(raw.get("skip_retired"))}
+            for k, hi in (("min_price", 10000), ("max_price", 10000), ("min_discount", 95), ("min_pieces", 20000), ("max_pieces", 20000)):
+                v = raw.get(k)
+                if v in (None, ""):
+                    df[k] = None
+                    continue
+                try:
+                    v = float(str(v).replace(",", "."))
+                except ValueError as err:
+                    raise LocalizedError("{field}: not a number", field=k) from err
+                if not 0 <= v <= hi:
+                    raise LocalizedError("{field}: must be between {lo} and {hi}", field=k, lo=0, hi=hi)
+                df[k] = v
+            for lo, hi in (("min_price", "max_price"), ("min_pieces", "max_pieces")):
+                if df[lo] is not None and df[hi] is not None and df[lo] > df[hi]:
+                    raise LocalizedError("{field}: must be between {lo} and {hi}", field=lo, lo=0, hi=df[hi])
+            opts[CONF_DEAL_FILTER] = df
         if CONF_TICKER in fields:
             raw, tk = fields[CONF_TICKER] if isinstance(fields[CONF_TICKER], dict) else {}, {}
             for k, v in TICKER_DEFAULT.items():
@@ -1960,6 +2026,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                    "url": self.notifier.shop_link(num, after), "discount": after.get("discount_rrp"),
                    "target_price": s.get("target_price")}
         day = today_iso()
+        if self.deal_blocked(num, after):            # left out under Deals → Settings: no deal events or notifications
+            if before.get("best_price") != after.get("best_price"):
+                self.hass.async_create_task(self.notifier.on_set_change(num, dict(before), dict(after)))
+            return
         for flag, event in (("is_all_time_low", EVENT_NEW_LOW), ("high_discount", EVENT_HIGH_DISCOUNT),
                             ("target_hit", EVENT_TARGET_HIT)):
             key = (num, flag + day)
