@@ -1337,6 +1337,20 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         and now - searched.get(f"{num}|{rid}", 0) > self.RELAY_SEARCH_DAYS * 86400:
                     items.append((2, searched.get(f"{num}|{rid}", 0), {**base, "kind": "search", "url": url, "reason": "search",
                                                                        "render": rid in self.store.get("shop_js", {})}))
+        if self.market_enabled:
+            # market values (BrickEconomy) the server can't fetch (paused / errors): last, at most once a day per set
+            src, locale = "brickeconomy", self.opt(self.entry, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE)
+            paused, tried = self.fetcher.cooldown_left(src) > 0, self.store.setdefault("relay_market", {})
+            for num, s in self.store["sets"].items():
+                e = self._cstore(src).get(num) or {}
+                fresh = e.get("status") == "ok" and now - e["ts"] < 24 * 3600 and not e.get("last_error")
+                missing = e.get("status") in ("missing", "unreadable") and now - e["ts"] < COMPARE_MISSING_HOURS * 3600
+                failing = paused or e.get("status") == "error" or bool(e.get("last_error"))
+                if fresh or missing or not failing or now - tried.get(num, 0) < 24 * 3600:
+                    continue
+                if (url := compare.first_url(src, num, locale, s.get("ean"))):
+                    items.append((4, tried.get(num, 0), {"kind": "page", "source": src, "set_number": num, "retailer": src,
+                                                         "shop": compare.SOURCES[src][0], "url": url, "step": 0, "reason": "market"}))
         items.sort(key=lambda x: (x[0], x[1]))
         counts: dict[str, int] = {}
         for _, _, it in items:
@@ -1418,15 +1432,19 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             status, step = int(item.get("status") or 0), max(0, min(compare.MAX_STEPS - 1, int(item.get("step") or 0)))
         except (TypeError, ValueError):
             status, step = 0, 0
+        if src == "brickeconomy":
+            self.store.setdefault("relay_market", {})[num] = time.time()     # not asked again within a day
         if status == 0:        # the browser couldn't reach it either: log, but don't count it towards a server pause
             self.log("warning", "userscript", T("your browser could not fetch the price either: {error}", error=str(item.get("error") or "")[:120] or "?"),
                      set_number=num, url=url, source="relay")
             kind, nxt = "error", None
         else:
             kind, nxt = self.compare_page(src, num, url, status, html, None, step, via="relay")
-        if kind == "ok":
+        if kind == "ok" and src != "brickeconomy":           # BrickEconomy has no shop prices, only the market value
             self._compare_links(num)
             self._compare_apply_prices(num)
+        elif kind == "ok":
+            self.push_update()
         rl = self.store.setdefault("relay_last", {"ts": 0, "ok": 0, "fail": 0})
         if time.time() - rl.get("ts", 0) > 900:
             rl.update(ok=0, fail=0)

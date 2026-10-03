@@ -1882,3 +1882,17 @@ async def test_ticker_market_tick_and_shop_link(hass: HomeAssistant, entry, no_n
         "bol": {"url": "https://www.bol.com/nl/nl/p/x/1/", "available": True, "last_price": 39.99, "history": []},
         "amazon_nl": {"url": "https://www.kieskeurig.be/lego/product/123", "available": True, "last_price": 35.0, "history": []}}
     assert c.notifier.shop_link("10281", {"best_url": "https://www.kieskeurig.be/lego/product/123"}) == "https://www.bol.com/nl/nl/p/x/1/"
+
+
+async def test_market_value_via_userscript_when_server_fails(hass: HomeAssistant, entry, no_network, hass_client):
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
+    assert not any(i.get("reason") == "market" for i in c.continuous_items(100)["items"])      # never failed: server does it
+    c._cstore("brickeconomy")["10281"] = {"status": "error", "ts": time.time(), "error": "blocked (HTTP 403)"}
+    q = c.continuous_items(100)
+    item = next(i for i in q["items"] if i.get("reason") == "market")
+    assert item["kind"] == "page" and item["source"] == "brickeconomy" and q["items"][-1] is item    # last in the queue
+    client = await hass_client()
+    r = await client.post("/api/lego_tracker/relay", json={"results": [{**item, "status": 0, "html": "", "error": "timeout"}]})
+    assert r.status == 200
+    assert not any(i.get("reason") == "market" for i in c.continuous_items(100)["items"])      # tried: not again today

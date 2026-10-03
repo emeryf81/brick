@@ -141,6 +141,7 @@ Shops block servers far more often than browsers. With the continuous check swit
 2. **Open errors** (the list under *Logbook → Open errors* and *Shops & jobs*): the link is fetched in your browser, at most once an hour each. A price solves the error: it disappears from the lists by itself, also when you had ignored it. Suspicious prices wait for your approval.
 3. **Sets without any price at all**: the shops without a link are searched in your browser. A product found there must pass the same title check (set number, LEGO, no accessory, no knock-off); it is linked and its price page is fetched right away. A search without result is not repeated for a week.
 4. **Links the server can't fetch** (blocked, paused), each at most every 6 hours.
+5. **Market values** (BrickEconomy) the server can't fetch (blocked, paused, errors), at most once a day per set and only after everything above.
 
 It is calm: every site at most twice a minute, a search at most once every 2 minutes per site, 4–9 seconds between pages, and a site that blocks your browser twice is left alone for an hour. Only one tab per browser does the work. Prices that came from your browser get the mark **ⓤ** next to the price (set → Shops, and on the cards); the logbook entries have the source *relay*.
 
