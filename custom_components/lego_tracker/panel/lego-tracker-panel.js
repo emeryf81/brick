@@ -522,7 +522,7 @@ class LegoTrackerPanel extends HTMLElement {
     return this.state.data && this.state.data.value_source === "import_first" ? (c.current_value ?? s.best_price ?? s.rrp) : (s.best_price ?? c.current_value ?? s.rrp);
   }
   // ---------------------------------------------------------------- derived
-  get sets() { return this.state.data ? this.state.data.sets : []; }
+  get sets() { return (this.state.data && this.state.data.sets) || []; }
   /** "Refresh all prices" is off unless allowed; then at most once a minute (the server checks it too). */
   fullRefreshAttr(title) {
     const d = this.state.data;
@@ -822,11 +822,10 @@ class LegoTrackerPanel extends HTMLElement {
       const score = e.score != null ? e.score : s.deal_score;
       const tags = `${disc != null && disc > 0 ? `<span class="badge red">−${Math.round(disc)}%</span>` : ""}${score != null ? `<span class="badge grey" title="${esc(t("Deal score"))}">⭐ ${Math.round(score)}</span>` : ""}`;
       return `<li class="tlr" data-set="${esc(e.set_number)}"><div class="tthumb img">${this.img(s)}${bySet[e.set_number] ? this.cornerBtns(s) : ""}</div><div class="tbody"><b><span class="ic">${i}</span> ${esc(s.name || e.name || e.set_number)}</b>
-        <div style="display:flex;gap:4px;flex-wrap:wrap;margin:2px 0">${tags}</div><div>${t(lbl)} · <b>${EUR(price)}</b>${now}${shopName ? ` · ${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" data-stop>${shopName} ↗</a>` : shopName}` : ""}</div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap;margin:2px 0">${tags}</div><div>${esc(t(lbl))} · <b>${EUR(price)}</b>${now}${shopName ? ` · ${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" data-stop>${shopName} ↗</a>` : shopName}` : ""}</div>
         <div class="t">${esc(e.set_number)} · ${DATE(e.ts, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div></div></li>`;
     };
     return `<div class="panel"><h3>🕒 ${t("Recent deals")}</h3>${ev.length ? `<ul class="tl tlx">${ev.slice(0, 12).map(row).join("")}</ul>` : `<p>${t("Nothing reported yet. New lowest prices, high discounts and reached target prices appear here.")}</p>`}</div>`;
-    return `<div class="panel"><h3>🕒 ${t("Recent deals")}</h3>${ev.length ? `<ul class="tl">${ev.slice(0, 12).map((e) => { const [i, lbl] = ic[e.kind] || ["•", e.kind]; return `<li data-set="${esc(e.set_number)}"><span class="ic">${i}</span><div><b>${esc(e.name || e.set_number)}</b><div>${esc(t(lbl))} · ${EUR(e.price)}${e.retailer ? ` · ${esc(this.state.data.retailers[e.retailer] || e.retailer)}` : ""}</div><div class="t">${DATE(e.ts, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div></div></li>`; }).join("")}</ul>` : `<p>${t("Nothing reported yet. New lowest prices, high discounts and reached target prices appear here.")}</p>`}</div>`;
   }
   vWatch() {
     const list = this.sets.filter((s) => s.watched);

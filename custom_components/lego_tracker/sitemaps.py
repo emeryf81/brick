@@ -7,7 +7,7 @@ requests per week, and the same title check as everywhere else keeps LED kits an
 """
 from __future__ import annotations
 
-import gzip
+import zlib
 import html as htmllib
 import re
 from urllib.parse import urlparse
@@ -25,13 +25,34 @@ SKIP_HINT = re.compile(r"categor|cms|content|image|video|blog|store|winkel|brand
                        r"recipe|press|career|vacature|landing", re.I)
 
 
+MAX_TEXT = 60_000_000          # bytes of XML after unpacking a .gz file (a bomb stops here)
+
+
 def body_text(body: bytes) -> str:
+    """The XML of a sitemap file; .gz files are unpacked with a size limit. Runs in an executor (not the event loop)."""
     if body[:2] == b"\x1f\x8b":
         try:
-            body = gzip.decompress(body)
-        except (OSError, EOFError):
+            d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+            out = d.decompress(body, MAX_TEXT)
+            if d.unconsumed_tail:
+                return ""                        # larger than allowed: skip this file
+            body = out
+        except zlib.error:
             return ""
-    return body.decode("utf-8", errors="replace")
+    return body[:MAX_TEXT].decode("utf-8", errors="replace")
+
+
+def on_site(url: str, domain: str) -> bool:
+    """The exact shop host or one of its subdomains (never 'shop.be.evil.example')."""
+    p = urlparse(url)
+    host = (p.hostname or "").lower().rstrip(".")
+    return p.scheme in ("http", "https") and (host == domain or host.endswith("." + domain))
+
+
+def read_file(body: bytes, domain: str, room: int) -> tuple[list[str], list[str]]:
+    """(child sitemaps on the shop's own site, LEGO product URLs, at most `room`) of one downloaded file."""
+    children, pages = parse(body_text(body))
+    return [c for c in children if on_site(c, domain)], lego_urls(pages, domain)[:max(0, room)]
 
 
 def robots_sitemaps(text: str) -> list[str]:
@@ -58,7 +79,7 @@ def lego_urls(urls: list[str], domain: str) -> list[str]:
     out = []
     for u in urls:
         p = urlparse(u)
-        if domain in p.netloc and "lego" in u.lower() and not is_search_url(u) and re.search(r"\d{3,7}", p.path):
+        if on_site(u, domain) and "lego" in u.lower() and not is_search_url(u) and re.search(r"\d{3,7}", p.path):
             out.append(u.split("#")[0])
     return out
 

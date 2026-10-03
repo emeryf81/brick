@@ -6,6 +6,7 @@ shared by the whole integration; apply_shop_options() syncs them with the config
 from __future__ import annotations
 
 import re
+from urllib.parse import urlparse
 from typing import Any
 
 from .i18n import LocalizedError
@@ -31,7 +32,8 @@ def validate_custom_shop(shop: dict[str, Any]) -> dict[str, str]:
         raise LocalizedError("Give the shop a name.")
     if not re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+", domain):
         raise LocalizedError("Invalid domain {domain} (e.g. dreamland.be).", domain=domain)
-    if search and (not valid_search(search) or domain not in search):
+    host = (urlparse(search.replace("{query}", "x").replace("{number}", "1").replace("{locale}", "nl-be")).hostname or "").lower()
+    if search and (not valid_search(search) or not (host == domain or host.endswith("." + domain))):   # the shop's own host
         raise LocalizedError("The search URL must start with https://, be on the shop's domain and contain {query} or {number}.")
     return {"id": str(shop.get("id") or shop_id(name)), "name": name, "domain": domain, "search": search}
 

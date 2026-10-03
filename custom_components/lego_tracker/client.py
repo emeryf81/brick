@@ -7,7 +7,7 @@ import logging
 import random
 import time
 from collections import deque
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from typing import Any
 
 import aiohttp
@@ -50,6 +50,29 @@ class Aborted(Exception):
 
 def site_of(url: str) -> str:
     return urlparse(url).netloc.lower().removeprefix("www.")
+
+
+REDIRECTS = (301, 302, 303, 307, 308)
+MAX_REDIRECTS = 5
+MAX_BODY = 25_000_000            # bytes: a sitemap file or page larger than this is refused
+
+
+def registrable(host: str) -> str:
+    """'www.smythstoys.com' → 'smythstoys.com', 'www.amazon.com.be' → 'amazon.com.be' (an IP stays itself)."""
+    host = host.lower().rstrip(".")
+    labels = host.split(".")
+    if not labels or host.replace(".", "").isdigit() or ":" in host:
+        return host
+    keep = 3 if len(labels) >= 3 and labels[-2] in ("com", "co", "org", "net", "gov", "ac", "edu") else 2
+    return ".".join(labels[-keep:])
+
+
+def check_url(url: str, home: str) -> None:
+    """Only http(s), and only the site the request started on (its own subdomains included)."""
+    p = urlparse(url)
+    host = (p.hostname or "").lower().rstrip(".")
+    if p.scheme not in ("http", "https") or not host or not (host == home or host.endswith("." + home)):
+        raise ValueError(f"redirect to another site blocked ({host or url[:60]})")
 
 
 # After a block we stop asking that retailer for a while: hammering makes bot protection stricter.
@@ -137,17 +160,40 @@ class Fetcher:
         return self._sessions[retailer]
 
     async def _request(self, retailer: str, url: str, referer: str | None = None, binary: bool = False) -> tuple[int, Any]:
+        """One page. Redirects are followed by hand and only within the same site (e.g. www.shop.be → shop.be/nl/…):
+        a page can never send the server to another host or into the local network."""
         headers = dict(BROWSER_HEADERS)
         if referer:
             headers.update({"Referer": referer, "Sec-Fetch-Site": "same-origin"})
         sess = self._session(retailer)
-        if self._curl_ok:
-            resp = await sess.get(url, headers=headers, allow_redirects=True)
-            self.final_url[retailer] = str(getattr(resp, "url", "") or url)
-            return resp.status_code, (resp.content if binary else resp.text)
-        async with sess.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=60 if binary else 30), allow_redirects=True) as resp:
-            self.final_url[retailer] = str(resp.url)
-            return resp.status, (await resp.read() if binary else await resp.text(errors="replace"))
+        home = registrable(urlparse(url).hostname or "")
+        for _hop in range(MAX_REDIRECTS + 1):
+            check_url(url, home)
+            if self._curl_ok:
+                resp = await sess.get(url, headers=headers, allow_redirects=False)
+                status, loc = resp.status_code, resp.headers.get("location")
+                if status in REDIRECTS and loc:
+                    url = urljoin(url, loc)
+                    continue
+                body = resp.content if binary else resp.text
+            else:
+                async with sess.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=60 if binary else 30),
+                                    allow_redirects=False) as resp:
+                    status, loc = resp.status, resp.headers.get("Location")
+                    if status in REDIRECTS and loc:
+                        url = urljoin(url, loc)
+                        continue
+                    if binary:
+                        body = await resp.content.read(MAX_BODY + 1)
+                        if len(body) > MAX_BODY:
+                            raise ValueError(f"response over {MAX_BODY // 1_000_000} MB")
+                    else:
+                        body = await resp.text(errors="replace")
+            if binary and len(body) > MAX_BODY:
+                raise ValueError(f"response over {MAX_BODY // 1_000_000} MB")
+            self.final_url[retailer] = url
+            return status, body
+        raise ValueError("too many redirects")
 
     def next_free(self, url_or_site: str, search: bool = False) -> float:
         """Seconds until this site may be asked again (searches: also the search gap)."""
@@ -221,6 +267,9 @@ class Fetcher:
         return parsed, error
 
     async def _fetch_offer(self, retailer: str, url: str, force: bool) -> tuple[Parsed | None, int | None, int, str | None]:
+        if retailer == "lego_com" and not lego_number(url):
+            # without the set number the page's own product can't be told from recommendations
+            return None, None, 0, T("not a LEGO.com product page with a set number in the address")
         if not force and (left := self.cooldown_left(retailer)) > 0:
             return None, None, 0, T("paused {hours} h after being blocked", hours=f"{left / 3600:.1f}")
         try:

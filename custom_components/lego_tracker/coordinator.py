@@ -365,7 +365,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if save:
             report.save(self.store, rep)
             what = ", ".join(rep["problems"]) or "?"
-            self.log("warning", "report", T("problem reported ({what})", what=what) + (f": {rep['comment'][:300]}" if rep["comment"] else ""),
+            # the remark itself stays in the report (export is for administrators); the shared logbook only says that there is one
+            self.log("warning", "report", T("problem reported ({what})", what=what) + (" · " + T("with a remark") if rep["comment"] else ""),
                      set_number=num, report=rep["id"], retailer=rep["shops"][0] if len(rep["shops"]) == 1 else None,
                      source="panel")
             self._save()
@@ -1114,10 +1115,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         domain = (domain_of(rid) or "").removeprefix("www.")
         base = f"https://www.{domain}"
         status, body, err = await self.fetcher.get_raw(rid, base + "/robots.txt")
-        queue = sitemaps.robots_sitemaps(sitemaps.body_text(body)) if status and status < 400 else []
-        queue = queue or [base + "/sitemap.xml"]
+        queue = sitemaps.robots_sitemaps(body[:200_000].decode("utf-8", errors="replace")) if status and status < 400 else []
+        queue = [u for u in queue if sitemaps.on_site(u, domain)] or [base + "/sitemap.xml"]   # only the shop's own site
         seen, urls, files, errors = set(), [], 0, []
-        while queue and files < sitemaps.MAX_FILES:
+        while queue and files < sitemaps.MAX_FILES and len(urls) < sitemaps.MAX_URLS:
             url = queue.pop(0)
             if url in seen:
                 continue
@@ -1129,9 +1130,11 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if err and err.startswith("paused"):
                     break
                 continue
-            children, pages = sitemaps.parse(sitemaps.body_text(body))
+            # unpacking and reading a large file happens outside the event loop
+            children, found_urls = await self.hass.async_add_executor_job(
+                sitemaps.read_file, body, domain, sitemaps.MAX_URLS - len(urls))
             queue = sitemaps.order_children(children) + queue
-            urls += sitemaps.lego_urls(pages, domain)
+            urls += found_urls
         urls = list(dict.fromkeys(urls))[:sitemaps.MAX_URLS]
         self.store.setdefault("sitemaps", {})[rid] = {"ts": time.time(), "files": files, "urls": urls,
                                                       "error": errors[-1] if errors and not urls else None}

@@ -1702,3 +1702,39 @@ async def test_review_fixes_low_price_relay_search_and_via(hass: HomeAssistant, 
     assert _card(c, "10368")["offers"]["bol"]["via"] == "relay"
     o["manual_price"] = {"price": 25.0}
     assert _card(c, "10368")["offers"]["bol"]["via"] is None
+
+
+def test_review_fixes_hosts_sizes_groups_and_lego_urls():
+    import gzip as _gz
+    import zlib as _zlib
+
+    from custom_components.lego_tracker import sitemaps
+    from custom_components.lego_tracker.client import check_url, registrable
+    from custom_components.lego_tracker.models import agreeing_group, is_suspicious_price
+    from custom_components.lego_tracker.parsers import normalize_url
+
+    # a host that merely contains the shop's domain is not the shop
+    evil = ["https://smythstoys.com.evil.example/lego-icons-10368/p/1", "https://www.smythstoys.com/be/lego-icons-10368/p/2"]
+    assert sitemaps.lego_urls(evil, "smythstoys.com") == evil[1:]
+    files, urls = sitemaps.read_file(b"<sitemapindex><sitemap><loc>http://127.0.0.1/admin.xml</loc></sitemap>"
+                                     b"<sitemap><loc>https://www.smythstoys.com/p1.xml</loc></sitemap></sitemapindex>", "smythstoys.com", 10)
+    assert files == ["https://www.smythstoys.com/p1.xml"]                       # never a sitemap on another host
+    with pytest.raises(ValueError):
+        normalize_url("bol", "https://bol.com.evil.example/nl/p/x/1/")
+    assert normalize_url("bol", "https://www.bol.com/nl/nl/p/x/1/").startswith("https://www.bol.com/")
+    # redirects: only within the same site
+    assert registrable("www.amazon.com.be") == "amazon.com.be" and registrable("ocean.kieskeurig.be") == "kieskeurig.be"
+    check_url("https://www.smythstoys.com/be/x", "smythstoys.com")
+    for bad in ("http://169.254.169.254/latest", "http://localhost:8123/api", "file:///etc/passwd", "https://smythstoys.com.evil.example/"):
+        with pytest.raises(ValueError):
+            check_url(bad, "smythstoys.com")
+    # a .gz file that unpacks to more than allowed is skipped, a normal one is read
+    assert sitemaps.body_text(_gz.compress(b"<urlset></urlset>")) == "<urlset></urlset>"
+    bomb = _zlib.compressobj(9, _zlib.DEFLATED, 16 + _zlib.MAX_WBITS)
+    big = bomb.compress(b"0" * (sitemaps.MAX_TEXT + 10)) + bomb.flush()
+    assert sitemaps.body_text(big) == ""
+    # agreement in groups: two shops at 100 and two at 400 still make 5 an outlier
+    assert agreeing_group([100, 100, 400, 400]) == [100, 100]
+    assert is_suspicious_price(5.0, {"set_number": "1"}, {}, [100, 100, 400, 400])
+    assert not is_suspicious_price(100.0, {"set_number": "1"}, {}, [100, 1000])
+

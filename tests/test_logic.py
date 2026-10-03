@@ -556,3 +556,12 @@ def test_suspicious_price_without_rrp_uses_the_other_shops():
     assert is_suspicious_price(19.99, new_set, {}, [749.99, 759.0])       # an accessory, two shops agree
     assert not is_suspicious_price(729.0, new_set, {}, [749.99, 759.0])
     assert not is_suspicious_price(75000.0, new_set, {}, [])              # nothing to compare with
+
+
+def test_custom_shop_search_must_be_on_the_shop_host():
+    from lego_pkg import shops
+    with pytest.raises(ValueError):            # the domain text in the query string is not the host
+        shops.validate_custom_shop({"name": "x", "domain": "shop.be", "search": "https://evil.example/?u=shop.be&q={query}"})
+    with pytest.raises(ValueError):
+        shops.validate_custom_shop({"name": "x", "domain": "shop.be", "search": "https://shop.be.evil.example/?q={query}"})
+    assert shops.validate_custom_shop({"name": "x", "domain": "shop.be", "search": "https://www.shop.be/zoek?q={query}"})["domain"] == "shop.be"
