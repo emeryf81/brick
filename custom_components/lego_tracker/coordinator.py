@@ -1785,11 +1785,12 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             opts[CONF_DEAL_FILTER] = df
         if CONF_SCAN in fields:
             try:
-                v = int(float(fields[CONF_SCAN]))
-            except (TypeError, ValueError) as err:
+                f = float(fields[CONF_SCAN])
+                v = int(f)
+            except (TypeError, ValueError, OverflowError) as err:       # also nan / inf
                 raise LocalizedError("{field}: not a number", field=CONF_SCAN) from err
-            if v not in scan.PER_DAY_CHOICES:
-                raise LocalizedError("{field}: must be between {lo} and {hi}", field=CONF_SCAN, lo=0, hi=max(scan.PER_DAY_CHOICES))
+            if f != v or v not in scan.PER_DAY_CHOICES:                  # only the listed choices, no rounding
+                raise LocalizedError("{field}: not a valid choice", field=CONF_SCAN)
             opts[CONF_SCAN] = v
         if CONF_TICKER in fields:
             raw, tk = fields[CONF_TICKER] if isinstance(fields[CONF_TICKER], dict) else {}, {}

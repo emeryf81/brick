@@ -2441,8 +2441,11 @@ async def test_scan_sets_deals_retirement_and_catalog(hass: HomeAssistant, entry
         assert one.await_count == 1
 
     # comparison sites switched off: no price lookups; the setting is validated
-    with pytest.raises(Exception):
-        c.settings_validate({"catalog_scan": 7})
+    from custom_components.lego_tracker.i18n import LocalizedError
+    for bad in (7, 100.7, "nan", "inf", "x", None):
+        with pytest.raises(LocalizedError):
+            c.settings_validate({"catalog_scan": bad})
+    assert c.settings_validate({"catalog_scan": "600"})["catalog_scan"] == 600
     assert c.settings_validate({"catalog_scan": 0})["catalog_scan"] == 0
     hass.config_entries.async_update_entry(entry, options={**entry.options, "compare_sites": False, "catalog_scan": 600})
     await hass.async_block_till_done()
