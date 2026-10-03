@@ -107,6 +107,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.store = {**new_store(), **data}
         self._drop_old_source_links()
         self._fix_lost_commas()
+        self._rename_market_source()
         self._watch_dates(first=True)
         for num, st in self.store["sets"].items():            # fill gaps from the built-in catalogue (no network)
             catalog.apply(num, st, self.store["offers"].setdefault(num, {}))
@@ -598,12 +599,13 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # ------------------------------------------------------------ price-comparison sites (hidden option)
     @property
     def compare_enabled(self) -> bool:
-        """The hidden option: price-comparison sites as extra price sources."""
-        return bool(self.opt(self.entry, CONF_COMPARE, self.opt(self.entry, CONF_COMPARE_OLD, False)))
+        """Price-comparison sites as extra price sources: on for everyone unless switched off in Settings
+        (the option has a new name since 0.9.19, so earlier choices start from 'on')."""
+        return bool(self.opt(self.entry, CONF_COMPARE, True))
 
     @property
     def market_enabled(self) -> bool:
-        """BrickEconomy market value (and expected retirement), on by default."""
+        """Market value (and expected retirement), on by default."""
         return bool(self.opt(self.entry, CONF_MARKET, True))
 
     @property
@@ -631,6 +633,16 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 out.append({"kind": "price", "ts": e["ts"], "set_number": num, "name": self.store["sets"][num].get("name") or "",
                             "price": price, "old": old, "pct": round((price - old) / old * 100, 1) if old else None,
                             "shop": RETAILERS.get(e.get("retailer"), ("",))[0], "url": e.get("url")})
+            # no recent changes: the current lowest price of the watched sets that were checked last
+            statuses = (self.data or self.compute())["statuses"]
+            rest = sorted((n for n in self.store["sets"] if n not in seen and self.is_watched(n)
+                           and statuses.get(n, {}).get("best_price") is not None),
+                          key=lambda n: -max([o.get("last_checked") or 0 for o in self.store["offers"].get(n, {}).values()] or [0]))
+            for num in rest[: max(0, cfg["max_watch"] - len(seen))]:
+                st = statuses[num]
+                out.append({"kind": "price", "ts": now, "set_number": num, "name": self.store["sets"][num].get("name") or "",
+                            "price": st["best_price"], "old": None, "pct": None,
+                            "shop": RETAILERS.get(st.get("best_retailer"), ("",))[0], "url": st.get("best_url")})
         if cfg["deals"] and cfg["max_deals"]:
             for ev in list(reversed(self.store.get("events", [])))[: cfg["max_deals"]]:
                 num = ev.get("set_number")
@@ -678,6 +690,26 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.entry.async_create_background_task(self.hass, run(), f"{DOMAIN}_market_{num}")
 
     OLD_SOURCE_HOSTS = ("brickwatch.net",)       # sources that were removed: keep their data, drop every link
+
+    OLD_MARKET_LABEL, MARKET_LABEL = "BrickEconomy", "Market value"
+
+    def _rename_market_source(self) -> None:
+        """Data stored before 0.9.19 names the market value source; it is shown as 'Market value' now."""
+        old, new = self.OLD_MARKET_LABEL, self.MARKET_LABEL
+        for rec in [*self.store["sets"].values(), *self.store["collection"].values()]:
+            for k, v in list(rec.items()):
+                if v == old and k.endswith("source"):
+                    rec[k] = new
+            if isinstance(rec.get("market"), dict) and rec["market"].get("source") == old:
+                rec["market"]["source"] = new
+        for e in self.store.get("activity", []):
+            if e.get("source") == old:
+                e["source"] = new
+            if old in (e.get("message") or ""):
+                e["message"] = e["message"].replace(old, new)
+        for e in (self.store.get("compare", {}).get("brickeconomy") or {}).values():
+            if e.get("name") == old:
+                e["name"] = new
 
     def _fix_lost_commas(self) -> None:
         """Older panels used number fields in which some phone keyboards dropped the decimal comma
@@ -870,7 +902,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return "ok", None
 
     def _apply_market(self, num: str, s: dict[str, Any], d: dict[str, Any], name: str, now: float) -> None:
-        """BrickEconomy: set data where empty, the retirement (forecast) date unless you set one yourself,
+        """Market value: set data where empty, the retirement (forecast) date unless you set one yourself,
         and the market value of owned sets (new, or used for opened / built sets) as their value."""
         for key in ("theme", "subtheme", "year", "pieces"):
             if d.get(key) and not s.get(key):
@@ -1394,7 +1426,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     items.append((2, searched.get(f"{num}|{rid}", 0), {**base, "kind": "search", "url": url, "reason": "search",
                                                                        "render": rid in self.store.get("shop_js", {})}))
         if self.market_enabled:
-            # market values (BrickEconomy) the server can't fetch (paused / errors): last, at most once a day per set
+            # market values the server can't fetch (paused / errors): last, at most once a day per set
             src, locale = "brickeconomy", self.opt(self.entry, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE)
             paused, tried = self.fetcher.cooldown_left(src) > 0, self.store.setdefault("relay_market", {})
             for num, s in self.store["sets"].items():
@@ -1497,7 +1529,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             kind, nxt = "error", None
         else:
             kind, nxt = self.compare_page(src, num, url, status, html, None, step, via="relay")
-        if kind == "ok" and src != "brickeconomy":           # BrickEconomy has no shop prices, only the market value
+        if kind == "ok" and src != "brickeconomy":           # the market value has no shop prices
             self._compare_links(num)
             self._compare_apply_prices(num)
         elif kind == "ok":
@@ -1742,6 +1774,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 opts[key] = bool(fields[key])
         if CONF_COMPARE in fields:
             opts.pop(CONF_COMPARE_OLD, None)
+            opts.pop("compare", None)                       # the option's name before 0.9.19
         for key in (CONF_BLOCK_WORDS, CONF_ALLOW_WORDS):
             if key in fields:
                 raw = fields[key]
@@ -2356,6 +2389,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.store["collection"].setdefault(num, e)
         else:
             self.store = clean
+        self._rename_market_source()          # a backup from before 0.9.19 still has the old label
         self.push_update()
         return {"sets": len(self.store["sets"]), "collection": len(self.store["collection"])}
 

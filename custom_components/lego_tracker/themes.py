@@ -1,4 +1,4 @@
-"""LEGO themes (the list BrickEconomy uses), for switching themes off under Deals → Settings.
+"""LEGO themes (all LEGO product lines), for switching themes off under Deals → Settings.
 Sets keep the theme name their source gave; matching ignores case, spaces and punctuation."""
 from __future__ import annotations
 

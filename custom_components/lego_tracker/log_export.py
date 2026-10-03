@@ -58,7 +58,7 @@ def select_sets(store: dict[str, Any], f: dict[str, Any], is_watched: Callable[[
 
 
 COMPARE_NAMES = {"kieskeurig": "Kieskeurig", "shoparize": "Shoparize", "channable": "Channable Shopping",
-                 "producthero": "Producthero", "brickeconomy": "BrickEconomy"}
+                 "producthero": "Producthero", "brickeconomy": "Market value"}
 
 
 def method(via: str | None, source: str | None) -> str:

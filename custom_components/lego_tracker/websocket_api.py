@@ -12,7 +12,7 @@ from homeassistant.components.http import KEY_HASS, HomeAssistantView
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
-from .const import CONF_DEV_FULL_REFRESH, DOMAIN, PANEL_URL, RETAILERS
+from .const import API_LEVEL, CONF_DEV_FULL_REFRESH, DOMAIN, PANEL_URL, RETAILERS
 from .csv_import import analyze_csv
 from .themes import THEMES as LEGO_THEMES
 from .i18n import tr
@@ -135,7 +135,7 @@ def ws_overview(hass, connection, msg):
     from . import VERSION
 
     connection.send_result(msg["id"], {
-        "version": VERSION, "transport": coord.fetcher.transport,
+        "version": VERSION, "api": API_LEVEL, "transport": coord.fetcher.transport,
         "threshold": coord.threshold,
         "themes": coord.all_themes(),
         "retailers": {k: v[0] for k, v in RETAILERS.items()},

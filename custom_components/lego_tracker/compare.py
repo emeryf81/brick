@@ -30,7 +30,7 @@ SOURCES: dict[str, tuple[str, str]] = {
     "shoparize": ("Shoparize", "www.shoparize.com"),
     "channable": ("Channable Shopping", "shopping.channable.com"),
     "producthero": ("Producthero", "shopping.producthero.com"),
-    "brickeconomy": ("BrickEconomy", "www.brickeconomy.com"),     # market value + retirement, not shop prices
+    "brickeconomy": ("Market value", "www.brickeconomy.com"),     # market value + retirement, not shop prices
 }
 FRESH_HOURS = {"brickeconomy": 24}          # market values move slowly: once a day is enough
 HOSTS = {"www.brickeconomy.com", "www.kieskeurig.be", "www.kieskeurig.nl", "www.shoparize.com",
@@ -449,7 +449,7 @@ class Result:
     ean: str | None = None
     shops: list[dict[str, Any]] = field(default_factory=list)
     note: str | None = None
-    data: dict[str, Any] | None = None       # set data without shop prices (BrickEconomy)
+    data: dict[str, Any] | None = None       # set data without shop prices (market value)
 
 
 def _page_title(page: str) -> str:
@@ -610,7 +610,7 @@ def parse(source: str, page: str, num: str, page_url: str, domains: dict[str, st
     return res
 
 
-# ------------------------------------------------------------------ BrickEconomy (value, not shop prices)
+# ------------------------------------------------------------------ market value (value, not shop prices)
 SEASONS = (("early to mid", 5, 31), ("mid to late", 9, 30), ("early", 3, 31), ("mid", 6, 30), ("late", 12, 31))
 MONTHS = {m: i + 1 for i, m in enumerate(("january", "february", "march", "april", "may", "june", "july", "august",
                                           "september", "october", "november", "december"))}

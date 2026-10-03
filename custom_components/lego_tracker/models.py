@@ -325,7 +325,7 @@ def collection_value(entry: dict[str, Any], status: dict[str, Any], lego_set: di
                      prefer_import: bool = False) -> tuple[float, str]:
     """Value of one unit and where it came from.
 
-    shop_first (default): cheapest current shop price, else the imported value (e.g. BrickEconomy), else RRP.
+    shop_first (default): cheapest current shop price, else the imported value, else RRP.
     import_first: imported value first (better for retired sets that shops no longer sell new)."""
     shop = status.get("best_price")
     imported = entry.get("current_value")

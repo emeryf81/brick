@@ -157,7 +157,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         coord.start_spread()
     # product links from the shops' sitemaps: first look 15 minutes after start, then every 6 hours (weekly per shop)
     entry.async_on_unload(async_call_later(hass, 900, coord.sitemap_tick))
-    # market values (BrickEconomy): one set at a time, spread over the day
+    # market values: one set at a time, spread over the day
     entry.async_on_unload(async_track_time_interval(hass, coord.market_tick, timedelta(minutes=1)))
     entry.async_on_unload(async_track_time_interval(hass, coord.sitemap_tick, timedelta(hours=6)))
     if coord.auto_refresh:
@@ -169,7 +169,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def _register_frontend(hass: HomeAssistant) -> None:
     panel_dir = Path(__file__).parent / "panel"
     await hass.http.async_register_static_paths([StaticPathConfig(STATIC_URL, str(panel_dir), False)])
-    version = VERSION
+    # the file's own fingerprint in the URL: after an update the browser always loads the new panel
+    import hashlib
+
+    digest = await hass.async_add_executor_job(
+        lambda: hashlib.sha1((panel_dir / "lego-tracker-panel.js").read_bytes()).hexdigest()[:10])
+    version = f"{VERSION}-{digest}"
     await panel_custom.async_register_panel(
         hass, webcomponent_name=PANEL_ELEMENT, frontend_url_path=PANEL_URL,
         sidebar_title="LEGO", sidebar_icon="mdi:toy-brick",
