@@ -88,3 +88,33 @@ async def test_lego_offer_without_set_number_is_refused(hass):
     f = Fetcher(hass, False)
     parsed, err = await f.fetch_offer("lego_com", "https://www.lego.com/nl-be/product/flower-bouquet")
     assert parsed is None and "set number" in err
+
+
+@pytest.mark.parametrize("impersonate", [True, False])
+async def test_oversized_pages_are_refused(hass, aiohttp_server, impersonate, monkeypatch):
+    from custom_components.lego_tracker import client
+
+    monkeypatch.setattr(client, "MAX_BODY", 5000)
+
+    async def handler(request):
+        if request.path == "/big":                      # no Content-Length: only the streamed count can stop it
+            resp = web.StreamResponse()
+            await resp.prepare(request)
+            for _ in range(20):
+                await resp.write(b"x" * 1000)
+            await resp.write_eof()
+            return resp
+        return web.Response(text=PAGE_OK, content_type="text/html", charset="utf-8")
+
+    app = web.Application()
+    app.router.add_get("/{tail:.*}", handler)
+    srv = await aiohttp_server(app)
+    f = Fetcher(hass, impersonate)
+    f.min_delay = 0
+    f.domain_gap = f.search_gap = 0
+    await f.async_setup()
+    parsed, err = await f.fetch_offer("bol", str(srv.make_url("/big")))
+    assert parsed is None and "over" in err
+    parsed, err = await f.fetch_offer("bol", str(srv.make_url("/p")))
+    assert err is None and parsed.price == 12.34
+    await f.async_close()

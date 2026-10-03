@@ -57,6 +57,16 @@ MAX_REDIRECTS = 5
 MAX_BODY = 25_000_000            # bytes: a sitemap file or page larger than this is refused
 
 
+def _too_big(size: Any) -> None:
+    """Refuse a response (header value or bytes read so far) over MAX_BODY: pages, search results and sitemaps alike."""
+    try:
+        n = int(size) if size is not None else 0
+    except (TypeError, ValueError):
+        return
+    if n > MAX_BODY:
+        raise ValueError(f"response over {MAX_BODY // 1_000_000} MB")
+
+
 def registrable(host: str) -> str:
     """'www.smythstoys.com' → 'smythstoys.com', 'www.amazon.com.be' → 'amazon.com.be' (an IP stays itself)."""
     host = host.lower().rstrip(".")
@@ -170,12 +180,22 @@ class Fetcher:
         for _hop in range(MAX_REDIRECTS + 1):
             check_url(url, home)
             if self._curl_ok:
-                resp = await sess.get(url, headers=headers, allow_redirects=False)
-                status, loc = resp.status_code, resp.headers.get("location")
-                if status in REDIRECTS and loc:
-                    url = urljoin(url, loc)
-                    continue
-                body = resp.content if binary else resp.text
+                # streamed: a body over MAX_BODY is never held in memory as a whole
+                resp = await sess.get(url, headers=headers, allow_redirects=False, stream=True)
+                try:
+                    status, loc = resp.status_code, resp.headers.get("location")
+                    if status in REDIRECTS and loc:
+                        url = urljoin(url, loc)
+                        continue
+                    _too_big(resp.headers.get("content-length"))
+                    chunks, size = [], 0
+                    async for chunk in resp.aiter_content():
+                        size += len(chunk)
+                        _too_big(size)
+                        chunks.append(chunk)
+                    raw, charset = b"".join(chunks), resp.encoding
+                finally:
+                    await resp.aclose()
             else:
                 async with sess.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=60 if binary else 30),
                                     allow_redirects=False) as resp:
@@ -183,16 +203,20 @@ class Fetcher:
                     if status in REDIRECTS and loc:
                         url = urljoin(url, loc)
                         continue
-                    if binary:
-                        body = await resp.content.read(MAX_BODY + 1)
-                        if len(body) > MAX_BODY:
-                            raise ValueError(f"response over {MAX_BODY // 1_000_000} MB")
-                    else:
-                        body = await resp.text(errors="replace")
-            if binary and len(body) > MAX_BODY:
-                raise ValueError(f"response over {MAX_BODY // 1_000_000} MB")
+                    _too_big(resp.headers.get("Content-Length"))
+                    raw = await resp.content.read(MAX_BODY + 1)
+                    _too_big(len(raw))
+                    try:
+                        charset = resp.get_encoding()
+                    except Exception:  # noqa: BLE001 - unknown / undetectable charset
+                        charset = resp.charset
             self.final_url[retailer] = url
-            return status, body
+            if binary:
+                return status, raw
+            try:
+                return status, raw.decode(charset or "utf-8", errors="replace")
+            except LookupError:                       # a charset name Python doesn't know
+                return status, raw.decode("utf-8", errors="replace")
         raise ValueError("too many redirects")
 
     def next_free(self, url_or_site: str, search: bool = False) -> float:
