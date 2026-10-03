@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from statistics import median
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .const import RETAILERS
 from .i18n import T
@@ -115,11 +117,35 @@ def set_debug(on: bool) -> bool:
     return on
 
 
+SECRET_PARAM = re.compile(r"(key|token|secret|password|passwd|pwd|auth|sig|session|code)", re.I)
+
+
+def redact(value: Any) -> Any:
+    """URLs without credentials: user:password@ and secret-looking query values are replaced by ***
+    (only in the dump; the stored links stay as they are)."""
+    if isinstance(value, dict):
+        return {k: redact(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [redact(v) for v in value]
+    if not isinstance(value, str) or "://" not in value:
+        return value
+
+    def one(m: re.Match) -> str:
+        p = urlsplit(m.group(0))
+        if not p.scheme or not p.netloc:
+            return m.group(0)
+        host = p.hostname or ""
+        netloc = ("***@" if (p.username or p.password) else "") + host + (f":{p.port}" if p.port else "")
+        query = urlencode([(k, "***" if SECRET_PARAM.search(k) else v) for k, v in parse_qsl(p.query, keep_blank_values=True)], safe="*")
+        return urlunsplit((p.scheme, netloc, p.path, query, p.fragment))
+    return re.sub(r"https?://[^\s\"'<>]+", one, value)
+
+
 def dump(coord: Any) -> dict[str, Any]:
     """Everything useful for a bug report, without credentials (download as JSON)."""
     opts = {k: ("***" if any(w in k for w in ("key", "secret", "token", "password")) and v else v)
             for k, v in dict(coord.entry.options).items()}
-    return {"ts": time.time(), "version": coord.version if hasattr(coord, "version") else None, "options": opts,
-            "stats": stats(coord), "retailer_stats": coord.retailer_stats(),
-            "trace": {k: list(v) for k, v in coord.fetcher.trace.items()},
-            "queue": coord.continuous_items(50), "activity": coord.store.get("activity", [])[-300:]}
+    return redact({"ts": time.time(), "version": coord.version if hasattr(coord, "version") else None, "options": opts,
+                   "stats": stats(coord), "retailer_stats": coord.retailer_stats(),
+                   "trace": {k: list(v) for k, v in coord.fetcher.trace.items()},
+                   "queue": coord.continuous_items(50), "activity": coord.store.get("activity", [])[-300:]})

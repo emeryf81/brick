@@ -2072,3 +2072,10 @@ async def test_notification_fallback_respects_rule_shops(
         assert f"€{expected_price:.2f} at {RETAILERS[expected_retailer][0]}" in send.call_args.args[2]
         assert send.call_args.kwargs["url"] == c.store["offers"]["10281"][expected_retailer]["url"]
         assert send.call_args.kwargs["data"]["price"] == expected_price
+
+
+def test_debug_dump_redacts_url_credentials():
+    from custom_components.lego_tracker.devtools import redact
+
+    out = redact({"a": ["https://user:pw@shop.be/p/1?id=5&token=abc", "see https://x.be/?apikey=1 now", 3]})
+    assert out == {"a": ["https://***@shop.be/p/1?id=5&token=***", "see https://x.be/?apikey=*** now", 3]}

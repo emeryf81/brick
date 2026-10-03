@@ -2034,9 +2034,13 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _fire_events(self, num: str, before: dict, after: dict) -> None:
         """Emit eligible deal events once per day and schedule notifications for changed status."""
         s = self.store["sets"][num]
+        # the link opens the product page itself; price, shop and discount describe that same offer
+        price, retailer, url = self.notifier.shop_offer(num, after)
+        discount = after.get("discount_rrp")
+        if retailer != after.get("best_retailer") and price and s.get("rrp"):
+            discount = round((s["rrp"] - price) / s["rrp"] * 100, 1)
         payload = {"set_number": num, "name": s.get("name"), "theme": s.get("theme"),
-                   "price": after.get("best_price"), "retailer": after.get("best_retailer"),
-                   "url": self.notifier.shop_link(num, after), "discount": after.get("discount_rrp"),
+                   "price": price, "retailer": retailer, "url": url, "discount": discount,
                    "target_price": s.get("target_price")}
         day = today_iso()
         if self.deal_blocked(num, after):            # left out under Deals → Settings: no deal events or notifications
