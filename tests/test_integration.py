@@ -2343,3 +2343,151 @@ async def test_new_set_gets_prices_and_market_value_right_away(hass: HomeAssista
     c._first_busy = True
     await c._run_first_checks()
     assert not c._first_busy and not c._first_checks
+
+
+def test_scan_helpers():
+    """Which sets of the database are looked up, in which order, and what counts as a deal."""
+    from custom_components.lego_tracker import scan
+
+    db = {"76300": ["Batman", 2026, "Batman", "", 500, ""], "10281": ["Bonsai", 2021, "Icons", "", 878, ""],
+          "42200": ["Technic car", 2025, "Technic", "", 900, ""], "30650": ["Polybag", 2026, "City", "", 40, ""],
+          "71000": ["Old set", 2018, "City", "", 300, ""], "75192": ["Falcon", 2024, "Star Wars", "", 7541, ""]}
+    sc = {"75192": {"retired": "2024", "rts": 1}}
+    cands = scan.candidates(db, sc, {"42200": {}}, {"technic"}, 50, None, year=2026)
+    assert sorted(cands) == ["76300"]                                      # tracked, retired, old, too small, Technic: out
+    assert sorted(scan.candidates(db, sc, {}, set(), year=2026)) == ["30650", "42200", "76300"]
+    now = 1_000_000.0
+    sc = {"76300": {"ts": now - 100}, "42200": {"ts": now - 50_000, "miss": 3}}
+    assert scan.pick(["76300", "42200", "30650"], sc, db, now) == "30650"   # never looked up first
+    assert scan.pick(["76300", "42200"], sc, db, now) == "76300"            # no offers 3 times: only after 14 days
+    assert scan.pick(["42200"], sc, db, now) is None
+    assert scan.needs_retired_check(None) and not scan.needs_retired_check({"rts": now}, now + 86400)
+    shops = [{"retailer": None, "price": 10.0, "url": "x"}, {"retailer": "bol", "price": 12.0, "url": "y"},
+             {"retailer": "amazon_nl", "price": 70.0, "url": "a"}, {"retailer": "bol", "price": 75.0, "url": "b"}]
+    assert scan.best_offer(shops, {"bol": 1, "amazon_nl": 1}, 100.0) == {"price": 70.0, "shop": "amazon_nl", "url": "a"}
+    e = {"price": 70.0, "rrp": 100.0}
+    flt = {"min_price": None, "max_price": None, "min_discount": None}
+    assert scan.discount(e) == 30.0 and scan.deal(e, 25, flt) == 30.0 and scan.deal(e, 35, flt) is None
+    assert scan.deal(e, 25, {**flt, "max_price": 50}) is None and scan.deal(e, 25, {**flt, "min_discount": 40}) is None
+    assert scan.deal({"price": 10.0, "rrp": 100.0}, 25, flt) is None       # 90 % off: not the set
+    assert scan.deal({**e, "retired": "2025"}, 25, flt) is None
+    assert [scan.status(x) for x in (None, {"ts": 1}, {"ts": 1, "price": 9}, {"deal": 30}, {"retired": "2024"})] == \
+        ["unknown", "none", "sale", "deal", "retired"]
+
+
+async def test_scan_sets_deals_retirement_and_catalog(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    """Sets of the database are looked up on a comparison site, retired sets on the market value page are
+    left out from then on, a deal is notified once (again only when cheaper), and Deals → All LEGO sets shows it all."""
+    from custom_components.lego_tracker import compare
+
+    c = await _setup(hass, entry)
+    year = time.localtime().tm_year
+    c.setdb = {"76300": ["New Batman set", year, "Batman", "", 500, ""], "10305": ["Lion Knights", year - 1, "Icons", "", 4514, ""],
+               "60400": ["Police car", year, "City", "", 100, ""], "10281": ["Bonsai Tree", year - 5, "Icons", "", 878, ""]}
+    pages = {"76300": (compare.Result("data", data={"retired": None, "retail": 100.0}),
+                       compare.Result("offers", shops=[{"retailer": "bol", "price": 70.0, "url": "https://www.bol.com/p/1"}])),
+             "10305": (compare.Result("data", data={"retired": "2025", "retail": 349.99}), None),
+             "60400": (compare.Result("missing"), compare.Result("missing"))}
+    asked = []
+
+    async def page(src, num):
+        asked.append((src, num))
+        return pages[num][0 if src == "brickeconomy" else 1]
+    notified = []
+    c.notifier.on_catalog_deal = AsyncMock(side_effect=lambda num, e: notified.append((num, e["price"])))
+    with patch.object(c, "_scan_page", side_effect=page):
+        e = await c.scan_set("76300")
+        assert e["price"] == 70.0 and e["rrp"] == 100.0 and e["deal"] == 30.0 and e["shop"] == "bol"
+        r = await c.scan_set("10305")
+        assert r["retired"] == "2025" and "price" not in r and ("kieskeurig", "10305") not in asked
+        n = await c.scan_set("60400")
+        assert n["miss"] == 1 and "price" not in n and "deal" not in n
+        await hass.async_block_till_done()
+        assert notified == [("76300", 70.0)]
+        await c.scan_set("76300")                                          # same price: not notified again
+        pages["76300"] = (pages["76300"][0], compare.Result("offers", shops=[{"retailer": "bol", "price": 65.0, "url": "u"}]))
+        await c.scan_set("76300")                                          # 7 % cheaper: notified
+        await hass.async_block_till_done()
+        assert notified == [("76300", 70.0), ("76300", 65.0)]
+        assert [x for x in asked if x == ("brickeconomy", "76300")] == [("brickeconomy", "76300")]   # retirement: once a month
+        pages["76300"] = (pages["76300"][0], compare.Result("offers", shops=[{"retailer": "bol", "price": 95.0, "url": "u"}]))
+        await c.scan_set("76300")
+        assert "deal" not in c.scan["76300"] and "notified" not in c.scan["76300"]
+        pages["76300"] = (pages["76300"][0], compare.Result("offers", shops=[{"retailer": "bol", "price": 70.0, "url": "u"}]))
+        await c.scan_set("76300")
+    assert sorted(c.scan_candidates()) == ["60400", "76300"]              # retired and old: out
+
+    cat = c.catalog(status="deal")
+    assert [x["set_number"] for x in cat["items"]] == ["76300"] and cat["items"][0]["discount"] == 30.0
+    assert cat["items"][0]["shop"] == "bol.com" and cat["scan"]["counts"]["deal"] == 1 and cat["scan"]["counts"]["retired"] == 1
+    assert [x["set_number"] for x in c.catalog(status="retired")["items"]] == ["10305"]
+    assert [x["set_number"] for x in c.catalog(q="bonsai")["items"]] == ["10281"]
+    assert c.catalog(sort="new")["items"][0]["year"] == year and c.catalog()["total"] == 4
+    await c.add_set("76300", discover=False)                                # followed now: shown with its own prices
+    assert c.catalog(q="batman")["items"][0]["status"] == "followed"
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/catalog", "status": "retired"})
+    res = (await ws.receive_json())["result"]
+    assert [x["set_number"] for x in res["items"]] == ["10305"] and res["count"] == 4
+
+    # the tick looks up one due set in the background, then waits 86400 / sets-per-day seconds
+    c.scan_info["next"] = 0
+    with patch.object(c, "scan_set", AsyncMock()) as one:
+        c.scan_tick()
+        await hass.async_block_till_done(wait_background_tasks=True)
+        one.assert_awaited_once_with("60400")
+        assert not c.scan_info["busy"] and c.scan_info["next"] > time.time() + 200
+        c.scan_tick()
+        assert one.await_count == 1
+
+    # comparison sites switched off: no price lookups; the setting is validated
+    with pytest.raises(Exception):
+        c.settings_validate({"catalog_scan": 7})
+    assert c.settings_validate({"catalog_scan": 0})["catalog_scan"] == 0
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare_sites": False, "catalog_scan": 600})
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][entry.entry_id]
+    assert c.scan_per_day == 600 and c._scan_source("76300") is None
+
+
+async def test_scan_page_follows_and_handles_errors(hass: HomeAssistant, entry, no_network):
+    """A comparison site's search page is followed to the product page; a refused page gives None (and the
+    search page's prices when it had any), a missing page 'missing'."""
+    from custom_components.lego_tracker import compare
+
+    c = await _setup(hass, entry)
+    answers = [(200, "<search>", None), (200, "<product>", None)]
+    results = [compare.Result("follow", url="https://www.kieskeurig.be/lego/123", shops=[{"retailer": "bol", "price": 80.0}]),
+               compare.Result("offers", shops=[{"retailer": "bol", "price": 79.0}])]
+    with patch.object(c.fetcher, "get_page", AsyncMock(side_effect=lambda *a, **k: answers.pop(0))), \
+         patch.object(compare, "parse", side_effect=lambda *a, **k: results.pop(0)), \
+         patch.object(compare, "is_compare_url", return_value=True):
+        res = await c._scan_page("kieskeurig", "76300")
+        assert res.kind == "offers" and res.shops[0]["price"] == 79.0
+        answers[:] = [(200, "<search>", None), (403, "", "blocked (HTTP 403)")]
+        results[:] = [compare.Result("follow", url="https://www.kieskeurig.be/lego/123", shops=[{"retailer": "bol", "price": 80.0}])]
+        res = await c._scan_page("kieskeurig", "76300")
+        assert res.kind == "offers" and res.shops[0]["price"] == 80.0
+        answers[:] = [(503, "", "busy")]
+        assert await c._scan_page("kieskeurig", "76300") is None and "busy" in c.scan_info["error"]
+        answers[:] = [(404, "", None)]
+        assert (await c._scan_page("kieskeurig", "76300")).kind == "missing"
+    assert c.scan_info["today"] == 6
+
+
+async def test_catalog_deal_notification_rule(hass: HomeAssistant, entry, no_network):
+    """A deal on a set you don't follow is sent to rules with that trigger, a theme rule only for its themes."""
+    c = await _setup(hass, entry)
+    c.setdb = {"76300": ["New Batman set", 2026, "Batman", "", 500, "https://img/1.jpg"]}
+    sent = []
+
+    async def fake_send(rule, title, message, **kw):
+        sent.append((rule["id"], title, message, kw.get("url")))
+    c.notifier.send = fake_send
+    c.notifier.rules[:] = [{"id": "a", "enabled": True, "scope": {"type": "all"}, "triggers": ["catalog_deal"], "params": {}, "shops": []},
+                           {"id": "t", "enabled": True, "scope": {"type": "themes", "themes": ["Icons"]}, "triggers": ["catalog_deal"],
+                            "params": {}, "shops": []},
+                           {"id": "n", "enabled": True, "scope": {"type": "all"}, "triggers": ["new_set"], "params": {}, "shops": []}]
+    await c.notifier.on_catalog_deal("76300", {"price": 70.0, "shop": "bol", "url": "https://www.bol.com/p/1", "rrp": 100.0, "deal": 30.0})
+    assert len(sent) == 1 and sent[0][0] == "a" and "76300" in sent[0][1] and "70.00" in sent[0][2] and "30%" in sent[0][2]
+    assert sent[0][3] == "https://www.bol.com/p/1"

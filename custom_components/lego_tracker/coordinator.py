@@ -22,7 +22,7 @@ from .client import DOMAIN_GAP, SEARCH_GAP, Fetcher, lookup_metadata
 from .const import (
     CONF_COMPARE, CONF_COMPARE_OLD, CONF_BLOCK_WORDS, CYCLE_CHOICES, CONF_WATCH_CYCLE, WATCH_CYCLE_CHOICES, WATCH_LIMIT,
     FULL_REFRESH_GAP, MANUAL_GAP, CONF_DEAL_MIN_SCORE, CONF_DEAL_ATL, CONF_DEAL_TARGET, DEFAULT_DEAL_MIN_SCORE, CONF_DEV_FIXED_TIMES, CONF_DEV_FULL_REFRESH, CONF_DEV_FREE_CYCLE, CONF_DEV_WATCH_UNLIMITED, CONF_ALLOW_WORDS, CONF_COMPARE_SOURCES, COMPARE_FRESH_HOURS, COMPARE_MISSING_HOURS, COMPARE_NET_ERRORS, COMPARE_PAUSE_HOURS,
-    CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET, CONF_BOL_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS, CONF_MARKET, CONF_TICKER, TICKER_DEFAULT, CONF_DEAL_FILTER, DEAL_FILTER_DEFAULT,
+    CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET, CONF_BOL_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS, CONF_MARKET, CONF_TICKER, TICKER_DEFAULT, CONF_DEAL_FILTER, DEAL_FILTER_DEFAULT, CONF_SCAN,
     CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_LANGUAGE, CONF_REFRESH_MODE, CONF_SPREAD_HOURS, DEFAULT_REFRESH_MODE, DEFAULT_SPREAD_HOURS, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, CONF_CUSTOM_SHOPS, CONF_DIGEST_TIME, CONF_NO_AUTOPAUSE, CONF_SHOP_SEARCH, CONF_VALUE_SOURCE, DEFAULT_DIGEST_TIME, GENERIC_SHOPS, CONF_DISCOUNT_THRESHOLD, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
     DEFAULT_REFRESH_TIMES, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS, DEFAULT_RETAILERS,
     DOMAIN, EVENT_JOB_DONE, EVENT_HIGH_DISCOUNT, EVENT_NEW_LOW, EVENT_TARGET_HIT, RETAILERS, STORAGE_KEY,
@@ -35,7 +35,7 @@ from .models import (
 from .i18n import DEFAULT_LANGUAGE, LANGUAGES, LocalizedError, T, resolve, set_language
 from .notifications import Notifier, default_rules
 from .bol_api import BolApi, BolApiError
-from . import catalog, sitemaps, compare, setdb
+from . import catalog, sitemaps, compare, setdb, scan
 from .shops import all_domains, domain_of
 from .parsers import Parsed, title_check
 from .shops import SEARCH, valid_search
@@ -57,6 +57,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._setdb_store = Store[dict[str, Any]](hass, 1, f"{STORAGE_KEY}.setdb")
         self.setdb: dict[str, list[Any]] = {}
         self.setdb_info: dict[str, Any] = {"ts": 0, "count": 0, "error": None, "busy": False}
+        # deals on every LEGO set (scan.py): one compact entry per looked-up set, also in its own file
+        self._scan_store = Store[dict[str, Any]](hass, 1, f"{STORAGE_KEY}.scan")
+        self.scan: dict[str, dict[str, Any]] = {}
+        self.scan_info: dict[str, Any] = {"busy": False, "next": 0.0, "error": None, "day": "", "today": 0, "src": 0}
         self.store: dict[str, Any] = new_store()
         self.fetcher = Fetcher(hass, bool(self.opt(entry, CONF_IMPERSONATE, True)))
         self.fetcher.no_autopause = set(self.opt(entry, CONF_NO_AUTOPAUSE, []) or [])
@@ -117,6 +121,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if (db := await self._setdb_store.async_load()):
             self.setdb = db.get("sets") or {}
             self.setdb_info.update(ts=db.get("ts", 0), count=len(self.setdb))
+        if (sc := await self._scan_store.async_load()):
+            self.scan = sc.get("sets") or {}
         self._drop_old_source_links()
         self._fix_lost_commas()
         self._rename_market_source()
@@ -1728,6 +1734,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "bol_country": o.get(CONF_BOL_COUNTRY, "auto"), "bol_api": bool(self.bol_api),
             "browser_relay": bool(o.get(CONF_RELAY, True)), "compare": self.compare_enabled,
             "market_value": self.market_enabled, "ticker": self.ticker, "deal_filter": self.deal_filter,
+            "catalog_scan": self.scan_per_day, "scan_choices": list(scan.PER_DAY_CHOICES),
             "compare_sources": self.compare_sources,
             "block_words": list(o.get(CONF_BLOCK_WORDS, [])), "allow_words": list(o.get(CONF_ALLOW_WORDS, [])),
             "builtin_words": list(BUILTIN_WORDS), "relay_hours": int(o.get(CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS)),
@@ -1776,6 +1783,14 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if df[lo] is not None and df[hi] is not None and df[lo] > df[hi]:
                     raise LocalizedError("{field}: must be between {lo} and {hi}", field=lo, lo=0, hi=df[hi])
             opts[CONF_DEAL_FILTER] = df
+        if CONF_SCAN in fields:
+            try:
+                v = int(float(fields[CONF_SCAN]))
+            except (TypeError, ValueError) as err:
+                raise LocalizedError("{field}: not a number", field=CONF_SCAN) from err
+            if v not in scan.PER_DAY_CHOICES:
+                raise LocalizedError("{field}: must be between {lo} and {hi}", field=CONF_SCAN, lo=0, hi=max(scan.PER_DAY_CHOICES))
+            opts[CONF_SCAN] = v
         if CONF_TICKER in fields:
             raw, tk = fields[CONF_TICKER] if isinstance(fields[CONF_TICKER], dict) else {}, {}
             for k, v in TICKER_DEFAULT.items():
@@ -2258,6 +2273,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.store["new_sets"] = setdb.prune_new(seen, now)
             self.setdb = new
             self.setdb_info.update(ts=now, count=len(new), error=None)
+            if (gone := [n for n in self.scan if n not in new]):     # sets that left the database
+                for n in gone:
+                    self.scan.pop(n)
+                self._scan_save()
             self.log("ok", "meta", T("set database updated: {n} sets, {new} new", n=len(new), new=len(fresh)), source=setdb.SOURCE)
             if fresh and not first:                  # the first download only fills the list, it doesn't notify
                 await self.notifier.on_new_sets([n for n in fresh if not self.deal_blocked_theme(n)])
@@ -2293,6 +2312,192 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 break
         return {"items": items, "updated": self.setdb_info["ts"], "count": self.setdb_info["count"],
                 "error": self.setdb_info["error"], "busy": self.setdb_info["busy"]}
+
+    # ------------------------------------------------------------ deals on every LEGO set (scan.py)
+    @property
+    def scan_per_day(self) -> int:
+        """How many sets of the database are looked up per day (0 = off)."""
+        try:
+            return max(0, int(self.opt(self.entry, CONF_SCAN, scan.PER_DAY_DEFAULT)))
+        except (TypeError, ValueError):
+            return scan.PER_DAY_DEFAULT
+
+    def _scan_save(self) -> None:
+        self._scan_store.async_delay_save(lambda: {"sets": self.scan}, 60)
+
+    def scan_candidates(self) -> list[str]:
+        """Sets of the database worth looking up (recent, not followed, not retired, not filtered out)."""
+        from .themes import key as theme_key
+
+        f = self.deal_filter
+        return scan.candidates(self.setdb, self.scan, self.store["sets"], {theme_key(x) for x in f["themes_off"]},
+                               f["min_pieces"], f["max_pieces"])
+
+    @callback
+    def scan_tick(self, _now: Any = None) -> None:
+        """Every minute: when it is time, look up the set of the database that waited longest. The sets
+        per day are spread evenly over the day (at least a minute apart)."""
+        now = time.time()
+        if not self.scan_per_day or self.scan_info["busy"] or now < self.scan_info["next"] or not self.setdb:
+            return
+        num = scan.pick(self.scan_candidates(), self.scan, self.setdb, now)
+        if num is None:
+            self.scan_info["next"] = now + 600                  # nothing due: look again in 10 minutes
+            return
+        self.scan_info.update(next=now + max(60.0, 86400 / self.scan_per_day), busy=True)
+        self.entry.async_create_background_task(self.hass, self._scan_run(num), f"{DOMAIN}_scan")
+
+    async def _scan_run(self, num: str) -> None:
+        """Look up one set and always release the busy flag."""
+        try:
+            await self.scan_set(num)
+        except Exception:  # noqa: BLE001 - the next tick simply goes on
+            _LOGGER.exception("deal scan failed for %s", num)
+        finally:
+            self.scan_info["busy"] = False
+
+    def _scan_source(self, num: str) -> str | None:
+        """The next comparison site to ask (in turn), skipping paused sites and sites that don't cover the country."""
+        if not self.compare_enabled:
+            return None
+        locale = self.opt(self.entry, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE)
+        srcs = [x for x in scan.PRICE_SOURCES if x in self.compare_sources and self.fetcher.cooldown_left(x) <= 0
+                and compare.first_url(x, num, locale, None)]
+        if not srcs:
+            return None
+        self.scan_info["src"] += 1
+        return srcs[self.scan_info["src"] % len(srcs)]
+
+    async def _scan_page(self, src: str, num: str) -> Any:
+        """Read a set on one source, following the site's own links (search → product page). Returns the
+        compare.Result, or None when the site could not be read (blocked, network error)."""
+        url = compare.first_url(src, num, self.opt(self.entry, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE), None)
+        fallback = None
+        for step in range(compare.MAX_STEPS):
+            if not url:
+                break
+            status, page, error = await self.fetcher.get_page(src, url, note_block=step == 0)
+            self._scan_count()
+            if status in (404, 410):
+                return compare.Result("missing")
+            if status == 0 or status >= 400:
+                if fallback is not None:
+                    return fallback
+                self.scan_info["error"] = f"{compare.SOURCES[src][0]}: {error or status}"[:150]
+                return None
+            res = compare.parse(src, page, num, url, all_domains(), step)
+            if res.kind == "follow" and res.url and compare.is_compare_url(res.url) and step < compare.MAX_STEPS - 1:
+                if res.shops:
+                    fallback = compare.Result("offers", shops=res.shops)
+                url = res.url
+                continue
+            if res.kind not in ("offers", "data") and fallback is not None:
+                return fallback
+            self.scan_info["error"] = None
+            return res
+        return fallback or compare.Result("missing")
+
+    def _scan_count(self) -> None:
+        day = dt_util.now().date().isoformat()
+        if self.scan_info["day"] != day:
+            self.scan_info.update(day=day, today=0)
+        self.scan_info["today"] += 1
+
+    async def scan_set(self, num: str) -> dict[str, Any]:
+        """Look up one set of the database: its retirement now and then (market value page), and its lowest
+        shop price on a comparison site. A deal is remembered and, the first time or when cheaper, notified."""
+        now = time.time()
+        e = self.scan.setdefault(num, {})
+        if self.market_enabled and scan.needs_retired_check(e, now) and self.fetcher.cooldown_left("brickeconomy") <= 0:
+            res = await self._scan_page("brickeconomy", num)
+            if res is not None:
+                e["rts"] = now
+                d = res.data if res.kind == "data" and res.data else {}
+                e["retired"] = (str(d["retired"])[:40] if d.get("retired") else None)
+                if d.get("retail"):
+                    e["rrp"] = d["retail"]
+        if not e.get("rrp") and (cat := catalog.get(num)) and cat.get("rrp"):
+            e["rrp"] = cat["rrp"]
+        if not e.get("retired") and (src := self._scan_source(num)):
+            res = await self._scan_page(src, num)
+            e["ts"], e["src"] = now, src
+            if res is not None:
+                if res.rrp and not e.get("rrp") and 1 < res.rrp < 2000:
+                    e["rrp"] = res.rrp
+                best = scan.best_offer(res.shops if res.kind == "offers" else [], RETAILERS, e.get("rrp"))
+                if best:
+                    e.update(best, miss=0)
+                else:
+                    for k in ("price", "shop", "url"):
+                        e.pop(k, None)
+                    e["miss"] = e.get("miss", 0) + 1
+        elif e.get("retired"):
+            e["ts"] = now
+        self._scan_deal(num, e, now)
+        self._scan_save()
+        return e
+
+    def _scan_deal(self, num: str, e: dict[str, Any], now: float) -> None:
+        """Remember whether the set is a deal now; notify a new deal, or the same deal when 2 % cheaper."""
+        d = scan.deal(e, self.threshold, self.deal_filter)
+        if d is None or num in self.store["sets"]:
+            for k in ("deal", "deal_ts", "notified"):
+                e.pop(k, None)
+            return
+        e["deal"] = d
+        e.setdefault("deal_ts", now)
+        if e.get("notified") is None or e["price"] < e["notified"] * 0.98:
+            e["notified"] = e["price"]
+            self.log("ok", "price", T("deal on a set you don't follow: €{price} at {shop} ({discount}% below RRP)",
+                                      price=f"{e['price']:.2f}", shop=RETAILERS.get(e.get("shop"), ("?",))[0], discount=f"{d:.0f}"),
+                     set_number=num, retailer=e.get("shop"), url=e.get("url"), source="scan")
+            self.hass.async_create_task(self.notifier.on_catalog_deal(num, dict(e)))
+
+    def catalog(self, q: str = "", theme: str = "", status: str = "", sort: str = "deal", offset: int = 0,
+                limit: int = 120) -> dict[str, Any]:
+        """Deals → All LEGO sets: the whole set database with what is known about each set: followed by you,
+        a deal, for sale, retired or not looked up yet."""
+        statuses = (self.data or self.compute())["statuses"]
+        words = q.strip().lower().split()
+        rows = []
+        for num, row in self.setdb.items():
+            if theme and row[setdb.THEME] != theme:
+                continue
+            if words and not all(w in f"{num} {row[setdb.NAME]} {row[setdb.THEME]} {row[setdb.SUB]}".lower() for w in words):
+                continue
+            tracked = num in self.store["sets"]
+            e = self.scan.get(num) or {}
+            if tracked:
+                st = statuses.get(num, {})
+                mk = (self.store["sets"][num].get("market") or {})
+                stt = "retired" if (st.get("retired") or mk.get("retired")) else "followed"
+                price, shop, url, rrp = st.get("best_price"), st.get("best_retailer"), st.get("best_url"), self.store["sets"][num].get("rrp")
+                disc = st.get("discount_rrp")
+            else:
+                stt = scan.status(e)
+                price, shop, url, rrp, disc = e.get("price"), e.get("shop"), e.get("url"), e.get("rrp"), scan.discount(e)
+            if status and status != stt and not (status == "deal" and tracked and disc is not None and disc >= self.threshold):
+                continue
+            rows.append((num, row, stt, price, shop, url, rrp, disc, e, tracked))
+        key = {"deal": lambda r: (-(r[7] if r[7] is not None else -999), -(r[1][setdb.YEAR] or 0)),
+               "new": lambda r: (-(r[1][setdb.YEAR] or 0), r[0]),
+               "price": lambda r: (r[3] is None, r[3] or 0),
+               "name": lambda r: r[1][setdb.NAME].lower()}.get(sort) or (lambda r: r[0])
+        rows.sort(key=key)
+        items = [{**setdb.as_set(num, row), "status": stt, "price": price, "shop": RETAILERS.get(shop, (shop,))[0] if shop else None,
+                  "url": url, "rrp": rrp, "discount": disc, "retired": e.get("retired"), "checked": e.get("ts"),
+                  "deal_since": e.get("deal_ts"), "tracked": tracked, "owned": num in self.store["collection"],
+                  "watched": tracked and self.is_watched(num)}
+                 for num, row, stt, price, shop, url, rrp, disc, e, tracked in rows[offset: offset + limit]]
+        counts: dict[str, int] = {}
+        for e in self.scan.values():
+            k = scan.status(e)
+            counts[k] = counts.get(k, 0) + 1
+        return {"items": items, "total": len(rows), "count": len(self.setdb), "themes": sorted({r[setdb.THEME] for r in self.setdb.values() if r[setdb.THEME]}),
+                "scan": {"per_day": self.scan_per_day, "candidates": len(self.scan_candidates()), "looked_up": sum(1 for e in self.scan.values() if e.get("ts")),
+                         "counts": counts, "today": self.scan_info["today"] if self.scan_info["day"] == dt_util.now().date().isoformat() else 0,
+                         "error": self.scan_info["error"], "compare": self.compare_enabled, "market": self.market_enabled,
+                         "threshold": self.threshold}}
 
     def remove_set(self, set_number: str) -> None:
         num = normalize_set_number(set_number)

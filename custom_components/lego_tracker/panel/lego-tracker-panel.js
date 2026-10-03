@@ -73,7 +73,7 @@ const signPct = (v) => (v == null ? "–" : `${v > 0 ? "+" : ""}${v.toLocaleStri
 const DATE = (ts, o = { day: "2-digit", month: "short" }) => new Date(ts * 1000).toLocaleDateString(LOC, o);
 const TIME = (ts) => new Date(ts * 1000).toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" });
 /** What this panel needs from the server (API_LEVEL in const.py). Different = Home Assistant still runs older code. */
-const API_LEVEL = 4;
+const API_LEVEL = 5;
 const SRC = { kieskeurig: "Kieskeurig", shoparize: "Shoparize", channable: "Channable Shopping", producthero: "Producthero", brickeconomy: "Market value" };
 /** How a price was read, as one letter: ⓤ your own browser (userscript), ⓢ ⓚ ⓒ ⓟ ⓑ a comparison site, ⌂ the shop's own site. */
 const VIA_MARK = { relay: "ⓤ", userscript: "ⓤ", shoparize: "ⓢ", kieskeurig: "ⓚ", channable: "ⓒ", producthero: "ⓟ", brickeconomy: "ⓜ" };
@@ -388,7 +388,7 @@ fieldset{border:1px solid var(--lt-line);border-radius:14px;padding:12px 14px 4p
 // ------------------------------------------------------------------ component
 // labels are English source strings, translated with t() when rendered
 const SECTIONS = {
-  deals: { label: "🏷️ Deals & watchlist", hint: "sets you keep an eye on", subs: [["today", "Today"], ["watch", "Watchlist"], ["all", "All prices"], ["new", "New sets"], ["dset", "Settings"]] },
+  deals: { label: "🏷️ Deals & watchlist", hint: "sets you keep an eye on", subs: [["today", "Today"], ["watch", "Watchlist"], ["all", "All prices"], ["new", "New sets"], ["lego", "All LEGO sets"], ["dset", "Settings"]] },
   collection: { label: "📦 My collection", hint: "what you own", subs: [["overview", "Overview"], ["sets", "Sets"]] },
   log: { label: "📜 Logbook", hint: "checks, prices, errors", subs: [["all", "Everything"], ["checks", "Shop checks"], ["errors", "Open errors"]] },
   manage: { label: "⚙️ Manage", hint: "add, import, shops, settings", subs: [["add", "Add"], ["import", "Import"], ["links", "Link check"], ["notify", "Notifications"], ["shops", "Shops & jobs"], ["settings", "Settings"], ["userscript", "Userscript"], ["backup", "Backup"]] },
@@ -788,7 +788,7 @@ class LegoTrackerPanel extends HTMLElement {
     const s = this.state, el = this.shadowRoot.getElementById("content"); if (!el) return;
     if (s.err) { el.innerHTML = `<div class="empty"><span class="big">⚠️</span>${t("Could not load data: {error}", { error: esc(s.err) })}<br><br><button class="btn" id="retry">${t("Try again")}</button></div>`; el.querySelector("#retry").onclick = () => this.load(true); return; }
     if (!s.data) { el.innerHTML = `<div class="kpis">${"<div class='skel' style='height:86px'></div>".repeat(4)}</div><div class="grid">${"<div class='skel' style='height:260px'></div>".repeat(8)}</div>`; return; }
-    const view = { deals: { today: this.vToday, watch: this.vWatch, all: this.vAll, new: this.vNewSets, dset: this.vDealSettings }, collection: { overview: this.vCollOverview, sets: this.vCollSets }, log: { all: this.vLog, checks: this.vLog, errors: this.vErrors }, manage: { notify: this.vNotify, add: this.vAdd, import: this.vImport, links: this.vLinks, shops: this.vShops, settings: this.vSettings, userscript: this.vUserscript, backup: this.vBackup, secret: this.vSecret } }[s.section][s.sub[s.section]];
+    const view = { deals: { today: this.vToday, watch: this.vWatch, all: this.vAll, new: this.vNewSets, lego: this.vCatalog, dset: this.vDealSettings }, collection: { overview: this.vCollOverview, sets: this.vCollSets }, log: { all: this.vLog, checks: this.vLog, errors: this.vErrors }, manage: { notify: this.vNotify, add: this.vAdd, import: this.vImport, links: this.vLinks, shops: this.vShops, settings: this.vSettings, userscript: this.vUserscript, backup: this.vBackup, secret: this.vSecret } }[s.section][s.sub[s.section]];
     el.className = animate && !REDUCED ? "enter" : "";
     el.innerHTML = view.call(this);
     this.bindContent(el);
@@ -990,6 +990,61 @@ class LegoTrackerPanel extends HTMLElement {
     }); });
     root.querySelectorAll("[data-nsown]").forEach((b) => b.onclick = (e) => { e.stopPropagation(); this.goAdd("own", find(b.dataset.nsown)); });
   }
+  /** Deals → All LEGO sets: the whole set database (searched on the server), with prices, deals and retirement. */
+  vCatalog() {
+    const C = this.state.cat || (this.state.cat = { q: "", theme: "", status: "", sort: "deal", limit: 120 });
+    const key = JSON.stringify([C.q, C.theme, C.status, C.sort, C.limit]);
+    if (!C.r || C.key !== key || Date.now() - C.at > 120000) {
+      if (C.loading !== key) {
+        C.loading = key;
+        const here = () => this.state.section === "deals" && this.state.sub.deals === "lego";
+        this._hass.callWS({ type: "lego_tracker/catalog", q: C.q, theme: C.theme, status: C.status, sort: C.sort, limit: C.limit })
+          .then((r) => { if (C.loading !== key) return; C.r = r; C.key = key; C.at = Date.now(); C.err = null; C.loading = null; if (here()) this.renderContent(); })
+          .catch((e) => { if (C.loading !== key) return; C.err = e.message; C.r = C.r || { items: [], total: 0, count: 0, themes: [], scan: {} }; C.key = key; C.at = Date.now(); C.loading = null; if (here()) this.renderContent(); });
+      }
+      if (!C.r) return `<div class="skel" style="height:300px"></div>`;
+    }
+    const r = C.r, S = r.scan || {}, n = S.counts || {};
+    const stLabel = { deal: "🏷️ " + t("Deal"), sale: "🛒 " + t("In the shops"), none: "∅ " + t("No shop found"), unknown: "… " + t("Not looked up yet"), retired: "🏁 " + t("Retired"), followed: "👁 " + t("You follow this set") };
+    const card = (x) => {
+      const btns = `<div class="cbtns">${x.watched ? "" : `<button class="cbtn" data-stop data-cwatch2="${esc(x.set_number)}" title="${esc(t("Add to watchlist"))}" aria-label="${esc(t("Add to watchlist"))}">W</button>`}${x.owned ? "" : `<button class="cbtn" data-stop data-cown2="${esc(x.set_number)}" title="${esc(t("Add to my collection"))}" aria-label="${esc(t("Add to my collection"))}">＋</button>`}</div>`;
+      const link = x.url && /^https:\/\//.test(x.url) ? `<a href="${esc(x.url)}" target="_blank" rel="noopener" data-stop>${esc(x.shop || t("shop"))} ↗</a>` : esc(x.shop || "");
+      const price = x.price != null ? `<div class="m"><b>${EUR(x.price)}</b>${x.shop ? " · " + link : ""}${x.discount != null && x.discount > 0 ? ` <span class="badge ${x.status === "deal" || x.discount >= (S.threshold || 25) ? "red" : "grey"}" style="display:inline-block">−${Math.round(x.discount)}%</span>` : ""}</div>` : "";
+      const rrp = x.rrp ? ` · ${t("RRP {price}", { price: EUR(x.rrp) })}` : "";
+      const st = x.status === "retired" && x.retired ? `${stLabel.retired} (${esc(x.retired)})` : stLabel[x.status] || "";
+      return `<div class="card${x.tracked ? " click" : ""}" ${x.tracked ? `data-set="${esc(x.set_number)}"` : ""}><div class="img">${this.img(x)}${btns}</div>
+        <div class="n">${esc(x.name || x.set_number)}</div><div class="m">${esc(x.set_number)}${x.theme ? " · " + esc(x.theme) : ""}${x.year ? " · " + esc(x.year) : ""}</div>
+        ${price}<div class="m muted">${st}${rrp}${x.checked && !x.tracked ? " · " + esc(ago(x.checked)) : ""}</div></div>`;
+    };
+    const opt = (v, label, cur) => `<option value="${v}" ${v === cur ? "selected" : ""}>${esc(label)}</option>`;
+    const scanTxt = !S.per_day ? t("Looking up deals on every set is switched off (Deals → Settings).")
+      : !S.compare ? t("Looking up deals on every set needs the price-comparison sites (Manage → Settings).")
+      : t("Every day {n} sets of the database are looked up on a comparison site, spread over the day. {done} of {total} sets that may still be in the shops have been looked up; {today} pages today.", { n: S.per_day, done: (S.looked_up || 0).toLocaleString(LOC), total: (S.candidates || 0).toLocaleString(LOC), today: S.today || 0 });
+    return `<div class="panel"><p style="margin:0">${t("Every LEGO set there is. Sets of the last few years that are not retired are looked up now and then for deals, also when you don't follow them; retired sets are left out (checked again every month). Add a set to your watchlist (W) or collection (＋) to follow all its shops.")}</p>
+        <p class="muted" style="font-size:12px;margin:6px 0 0">${esc(t("LEGO set database: {n} sets", { n: (r.count || 0).toLocaleString(LOC) }))} · ${esc(scanTxt)}${S.error ? ` · <span class="warn">${esc(tx(S.error))}</span>` : ""}${C.err ? ` · <span class="warn">${esc(tx(C.err))}</span>` : ""}</p>
+        <p class="muted" style="font-size:12px;margin:4px 0 0">🏷️ ${t("{n} deals", { n: n.deal || 0 })} · 🛒 ${t("{n} in the shops", { n: n.sale || 0 })} · 🏁 ${t("{n} retired", { n: n.retired || 0 })} · ∅ ${t("{n} without shop", { n: n.none || 0 })}</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><input id="cg_q" placeholder="${t("Search a set")}" value="${esc(C.q)}" style="max-width:240px">
+          <select id="cg_th" aria-label="${t("Theme")}"><option value="">${t("All themes")}</option>${(r.themes || []).map((x) => `<option ${x === C.theme ? "selected" : ""}>${esc(x)}</option>`).join("")}</select>
+          <select id="cg_st" aria-label="${t("Status")}">${opt("", t("Every status"), C.status)}${["deal", "sale", "none", "unknown", "retired", "followed"].map((k) => opt(k, stLabel[k], C.status)).join("")}</select>
+          <select id="cg_so" aria-label="${t("Sort")}">${opt("deal", t("Biggest discount"), C.sort)}${opt("new", t("Newest"), C.sort)}${opt("price", t("Lowest price"), C.sort)}${opt("name", t("Name"), C.sort)}</select></div>
+        <p class="muted" style="font-size:12px;margin:6px 0 0">${t("{n} sets found", { n: (r.total || 0).toLocaleString(LOC) })}</p></div>
+      ${r.items.length ? `<div class="grid">${r.items.map(card).join("")}</div>${r.total > r.items.length ? `<div style="text-align:center;margin:14px"><button class="btn ghost" id="cg_more">${t("Show more")}</button></div>` : ""}`
+        : this.emptyState("🧱", r.count ? t("Nothing found with these filters.") : t("The LEGO set database is downloaded within 10 minutes after Home Assistant starts, then once a day."))}`;
+  }
+  bindCatalog(root, $) {
+    const C = this.state.cat;
+    const qi = $("cg_q"); if (qi) qi.oninput = () => { clearTimeout(this._cgT); this._cgT = setTimeout(() => { C.q = qi.value.trim(); C.limit = 120; this.renderContent(); const n = this.shadowRoot.getElementById("cg_q"); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }, 350); };
+    for (const [id, k] of [["cg_th", "theme"], ["cg_st", "status"], ["cg_so", "sort"]]) { const el = $(id); if (el) el.onchange = () => { C[k] = el.value; C.limit = 120; this.renderContent(); }; }
+    const more = $("cg_more"); if (more) more.onclick = () => { C.limit += 120; this.renderContent(); };
+    const find = (n) => ((C.r && C.r.items) || []).find((x) => x.set_number === n);
+    root.querySelectorAll("[data-cwatch2]").forEach((b) => b.onclick = (e) => { e.stopPropagation(); this.busy(b, "", async () => {
+      const n = b.dataset.cwatch2;
+      if (this.sets.find((x) => x.set_number === n)) await this._hass.callWS({ type: "lego_tracker/update_set", set_number: n, fields: { watch: true } });
+      else await this.svc("add_set", { set_number: n });
+      C.at = 0; await this.load(); this.toast(t("{set} is on your watchlist", { set: n }), "ok");
+    }); });
+    root.querySelectorAll("[data-cown2]").forEach((b) => b.onclick = (e) => { e.stopPropagation(); this.goAdd("own", find(b.dataset.cown2)); });
+  }
   /** Deals → Settings: what counts as a deal, and which themes / prices / sets are left out (also of notifications). */
   vDealSettings() {
     const st = this.state.settings;
@@ -1020,6 +1075,8 @@ class LegoTrackerPanel extends HTMLElement {
         <label>${t("Pieces at least")}${num("df_minpc", f.min_pieces, "–")}</label><label>${t("Pieces at most")}${num("df_maxpc", f.max_pieces, "–")}</label>
         <label class="chk" style="align-self:end"><input type="checkbox" id="df_owned" ${f.skip_owned ? "checked" : ""}> ${t("Leave out sets I own")}</label>
         <label class="chk" style="align-self:end"><input type="checkbox" id="df_ret" ${f.skip_retired ? "checked" : ""}> ${t("Leave out retired sets")}</label></div></div>
+      <div class="panel"><h3>🔎 ${t("Deals on every LEGO set")}</h3><p class="muted" style="font-size:13px">${t("Also sets you don't follow are looked up for deals on a comparison site, spread over the day (Deals → All LEGO sets). Retired sets are left out; whether a set is retired is checked every month. The themes, prices and pieces above and below apply too. A notification rule with “Deal on a set you don't follow” tells you about them.")}</p>
+        <div class="form"><label>${t("Sets looked up per day")}<select id="df_scan">${(st.scan_choices || [0, 100, 300, 600, 1000]).map((v) => `<option value="${v}" ${v === (this.state.dfScan ?? st.catalog_scan) ? "selected" : ""}>${v ? t("{n} sets a day", { n: v }) : t("Off")}</option>`).join("")}</select></label></div></div>
       <div class="panel"><h3>🧱 ${t("Themes")} <span class="muted" style="font-weight:400;font-size:13px">${t("{n} switched off", { n: f.themes_off.length })}</span></h3>
         <p class="muted" style="font-size:13px">${t("Untick a theme to leave it out of Deals and notifications. Your own themes come first (with the number of sets).")}</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px"><input id="df_q" placeholder="${t("Search a theme")}" value="${esc(this.state.dfq || "")}" style="max-width:240px">
@@ -1030,7 +1087,7 @@ class LegoTrackerPanel extends HTMLElement {
   bindDealSettings(root, $) {
     const f = this.state.dfDraft, kk = (x) => String(x || "").toLowerCase().replace(/^lego /, "").replace(/[^a-z0-9]/g, "");
     const keep = () => { for (const [id, k] of [["df_minp", "min_price"], ["df_maxp", "max_price"], ["df_mind", "min_discount"], ["df_minpc", "min_pieces"], ["df_maxpc", "max_pieces"]]) f[k] = $(id).value.trim() === "" ? null : money($(id).value);
-      f.skip_owned = $("df_owned").checked; f.skip_retired = $("df_ret").checked; };
+      f.skip_owned = $("df_owned").checked; f.skip_retired = $("df_ret").checked; if ($("df_scan")) this.state.dfScan = +$("df_scan").value; };
     const redraw = () => { keep(); const y = window.scrollY; this.renderContent(); window.scrollTo(0, y); };
     root.querySelectorAll(".df_th").forEach((c) => c.onchange = () => {
       const th = c.dataset.th; f.themes_off = f.themes_off.filter((x) => kk(x) !== kk(th)); if (!c.checked) f.themes_off.push(th); redraw();
@@ -1041,10 +1098,10 @@ class LegoTrackerPanel extends HTMLElement {
     $("df_save").onclick = () => this.busy($("df_save"), t("Saving…"), async () => {
       keep();
       await this._hass.callWS({ type: "lego_tracker/settings/set", fields: { discount_threshold: +$("o_thr").value, min_history_days: +$("o_hist").value,
-        deal_min_score: +$("o_dscore").value, deal_atl: $("o_datl").checked, deal_target: $("o_dtgt").checked, deal_filter: f } });
+        deal_min_score: +$("o_dscore").value, deal_atl: $("o_datl").checked, deal_target: $("o_dtgt").checked, deal_filter: f, catalog_scan: +$("df_scan").value } });
       this._tickerAt = 0;
       await new Promise((r) => setTimeout(r, 1500));
-      this.state.settings = null; this.state.dfDraft = null; await this.load();
+      this.state.settings = null; this.state.dfDraft = null; this.state.dfScan = null; this.state.cat = null; await this.load();
       this.toast(t("Settings saved"), "ok");
     });
   }
@@ -1283,7 +1340,7 @@ class LegoTrackerPanel extends HTMLElement {
     const L = this.state.logv, checks = this.state.sub.log === "checks", sc = this.state.data.schedule || {};
     if (!L.data && !L.err) this.loadLog();
     const d = L.data, f = d ? d.facets : { kind: {}, retailer: {}, source: {} }, kinds = d ? d.kinds : {};
-    const srcLabel = { server: "Server", schedule: "Schedule (automatic)", panel: "Panel (you)", userscript: "Tampermonkey userscript", import: "Import", added: "Just added (first check)" };
+    const srcLabel = { server: "Server", schedule: "Schedule (automatic)", panel: "Panel (you)", userscript: "Tampermonkey userscript", import: "Import", added: "Just added (first check)", scan: "Deals on every LEGO set" };
     const opt = (list, cur, all) => `<option value="">${all}</option>` + list.map(([v, l, n]) => `<option value="${esc(v)}" ${cur === v ? "selected" : ""}>${esc(l)}${n != null ? ` (${n})` : ""}</option>`).join("");
     const st = (v, l, cls) => `<span class="chip ${L.status === v ? "on" : ""} ${cls}" data-lstat="${v}">${l}</span>`;
     const errs = this.errorRows().length;
@@ -1881,6 +1938,7 @@ class LegoTrackerPanel extends HTMLElement {
     if ($("o_save")) this.bindSettings(root, $);
     if ($("df_save")) this.bindDealSettings(root, $);
     if ($("ns_q")) this.bindNewSets(root, $);
+    if ($("cg_q")) this.bindCatalog(root, $);
     if ($("e_scope")) this.bindErrors(root, $);
     if ($("lg_reload")) this.bindLog(root, $);
     if (root.querySelector("[data-nf]")) this.bindNotify(root, $);

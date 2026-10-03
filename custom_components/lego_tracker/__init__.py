@@ -162,6 +162,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(async_track_time_interval(hass, coord.setdb_tick, timedelta(hours=6)))
     # market values: one set at a time, spread over the day
     entry.async_on_unload(async_track_time_interval(hass, coord.market_tick, timedelta(minutes=1)))
+    # deals on every LEGO set: one set of the database at a time, spread over the day
+    entry.async_on_unload(async_track_time_interval(hass, coord.scan_tick, timedelta(minutes=1)))
     entry.async_on_unload(async_track_time_interval(hass, coord.sitemap_tick, timedelta(hours=6)))
     if coord.auto_refresh:
         for hour, minute in coord.refresh_times:

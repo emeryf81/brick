@@ -32,6 +32,7 @@ The sidebar panel **LEGO** has four sections and a ticker at the bottom.
 - *Today*: deal of the day, all deals, sets retiring soon, big price drops, and recent deals, each with a thumbnail, the price, the discount, the deal score, a link to the shop and the ＋ / W buttons.
 - *Watchlist*: the sets you keep an eye on (at most 100), sortable by priority (★–★★★), deal score, discount, lowest price, price per piece, biggest drop, newest or longest on the watchlist, and latest deal notification; total now vs. RRP.
 - *New sets*: every new LEGO set, newest first, with picture, theme, year and pieces (see *LEGO set database and new sets*).
+- *All LEGO sets*: the whole LEGO set database, with the lowest price, discount and status of every set: a deal, in the shops, no shop found, retired, or followed by you (see *Deals on every LEGO set*).
 - *All prices*: everything that is tracked, with theme and subtheme filters; sortable by deal score, discount, lowest price, price per piece, biggest drop, latest deal notification, name or set number.
 - *Settings*: what counts as a deal, and which sets are left out (see *Deal settings*).
 - Every view has a **⏳ Retiring within 100 days** filter. The first tile of every grid is a big **＋** to add a set. Every card picture has two buttons: **＋** adds the set to your collection (the add form opens with the number and picture filled in), **W** puts it on the watchlist (also a set you own, e.g. for a second copy) and **−W** takes it off again (also a set you don't own).
@@ -56,10 +57,19 @@ The integration keeps a database of **every LEGO set there is** (number, name, y
 - **New sets**: a set that was not in yesterday's list is new. *Deals → New sets* lists them, newest first, with a search field and a theme filter; the tab shows how many came in the last 7 days. **W** puts a set on your watchlist (it is added and its prices are followed), **＋** opens the add form for your collection. Themes and piece limits switched off under *Deals → Settings* are left out. On the very first download the sets of this year count as new.
 - **Notification**: the trigger *New LEGO set announced* (Manage → Notifications) sends one message per download with the new sets; a rule for certain themes only hears about those themes, and themes switched off under *Deals → Settings* never notify.
 
+## Deals on every LEGO set
+Also sets you don't follow are looked up for deals. *Deals → All LEGO sets* shows the whole database: search by name or number, filter on theme and status, and sort by biggest discount, newest, lowest price or name. **W** puts a set on your watchlist and **＋** opens the add form for your collection; from then on all its shops are followed.
+- **Which sets**: sets released this year and in the three years before that are not retired and that you don't follow yet. Themes, prices and piece limits from *Deals → Settings* apply.
+- **How**: one set at a time, spread over the day, on one of the price-comparison sites (one page lists the prices of many shops). Only shops LOT knows count, and a price below a quarter of the RRP is ignored (a part or a sticker, not the set). How many sets are looked up per day is set under *Deals → Settings* (off, 100, 300 (default), 600 or 1000). A set that no shop sells is looked up only every 14 days after three tries. It needs the price-comparison sites to be on.
+- **Retired sets**: whether a set is retired is checked on its market value page when it is first looked up and then every 30 days. Retired sets are no longer looked up for prices and show as *Retired* with the year.
+- **Deals**: a set is a deal when its lowest price is at least the discount threshold below the RRP (and within the price limits of *Deal settings*). The logbook notes every new deal, and the notification trigger *Deal on a set you don't follow* tells you about it, the first time and again when the price drops another 2 %. A rule for certain themes only hears about those themes.
+- The results are kept in their own storage file, so the main data stays small.
+
 ## Deal settings
 *Deals → Settings* decides what counts as a deal and which sets take part:
 - **What counts as a deal**: the discount threshold, the minimum deal score (default 70), the minimum days of history for "lowest ever", and whether "lowest price ever" and "target price reached" count as a deal.
 - **Which sets**: a lowest price between € x and € y, a minimum discount on the RRP, a minimum and maximum number of pieces, leave out sets you own, leave out retired sets. An empty field means no limit; amounts may be typed with a decimal comma.
+- **Deals on every LEGO set**: how many sets of the database are looked up per day (see *Deals on every LEGO set*).
 - **Themes**: the full list of LEGO themes, your own themes first (with the number of sets), with a search field and *All on* / *All off*. Untick a theme to leave it out. Spellings from different sources match ("Star Wars" = "star-wars").
 
 **Left out also means no notifications.** Left-out sets don't appear under *Today* and *All prices*, don't count as a deal, and give no deal or price notifications, also not in the daily digest or the ticker. Notification rules for sets you picked one by one keep working, and the watchlist still shows them. The tab shows how many sets are left out right now.
@@ -139,7 +149,7 @@ For **RRP, image and name** LEGO.com comes first. The integration looks up the o
 ## Notifications
 *Manage → Notifications* works with rules, almost entirely with dropdowns:
 1. **For which sets**: all, watchlist, my collection, certain themes, or certain sets (choose a theme first, then the set, or type any set number).
-2. **When**: all-time low, discount ≥ x %, target price reached, price below € x, price drop ≥ x %, deal score ≥ x, retiring soon, back in stock, any price change; general: daily digest, new LEGO set announced, job finished, problems (shop paused, errors). Optionally limited to certain shops.
+2. **When**: all-time low, discount ≥ x %, target price reached, price below € x, price drop ≥ x %, deal score ≥ x, retiring soon, back in stock, any price change; general: daily digest, new LEGO set announced, deal on a set you don't follow, job finished, problems (shop paused, errors). Optionally limited to certain shops.
 3. **To whom and how**: 📱 Home Assistant app (choose a device; with image and link), ✉️ e-mail (SMTP or another notify service, free addresses), 💬 any notify service (Telegram, Signal…), 📣 notify entities, 🔔 Home Assistant notification, 🔊 speech on a speaker (TTS + media player), ⚡ only the event `lego_tracker_notification`.
 4. **Extras**: don't notify again within x hours, quiet hours (notifications are bundled and sent afterwards), include image.
 

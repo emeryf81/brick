@@ -122,6 +122,7 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_dev_tool)
     websocket_api.async_register_command(hass, ws_ticker)
     websocket_api.async_register_command(hass, ws_new_sets)
+    websocket_api.async_register_command(hass, ws_catalog)
     websocket_api.async_register_command(hass, ws_setdb_search)
     hass.http.register_view(UserscriptView())
     hass.http.register_view(RelayView())
@@ -789,6 +790,22 @@ def ws_new_sets(hass, connection, msg):
         connection.send_result(msg["id"], {"items": [], "count": 0})
         return
     connection.send_result(msg["id"], coord.new_sets())
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/catalog", vol.Optional("q", default=""): vol.All(str, vol.Length(max=80)),
+                                  vol.Optional("theme", default=""): vol.All(str, vol.Length(max=80)),
+                                  vol.Optional("status", default=""): vol.In(["", "deal", "sale", "none", "unknown", "retired", "followed"]),
+                                  vol.Optional("sort", default="deal"): vol.In(["deal", "new", "price", "name"]),
+                                  vol.Optional("offset", default=0): vol.All(int, vol.Range(min=0, max=100000)),
+                                  vol.Optional("limit", default=120): vol.All(int, vol.Range(min=1, max=500))})
+@callback
+def ws_catalog(hass, connection, msg):
+    """Deals → All LEGO sets: the whole set database with prices, deals and retirement."""
+    coord = _coord(hass)
+    if coord is None:
+        connection.send_result(msg["id"], {"items": [], "total": 0, "count": 0, "themes": [], "scan": {}})
+        return
+    connection.send_result(msg["id"], coord.catalog(msg["q"], msg["theme"], msg["status"], msg["sort"], msg["offset"], msg["limit"]))
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/setdb/search", vol.Required("q"): vol.All(str, vol.Length(max=80)),
