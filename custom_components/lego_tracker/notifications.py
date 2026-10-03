@@ -221,33 +221,62 @@ class Notifier:
                 del sent[k]
         return True
 
+    def shop_link(self, num: str, status: dict[str, Any]) -> str | None:
+        """Return the selected notification offer's product URL, or None if unavailable."""
+        return self.shop_offer(num, status)[2]
+
+    def shop_offer(self, num: str, status: dict[str, Any],
+                   shops: list[str] | None = None) -> tuple[float | None, str | None, str | None]:
+        """The product page at the cheapest shop (never a comparison page or a search page when a real
+        product link exists), so one tap opens the item where it is cheapest."""
+        from .compare import is_compare_url
+        from .parsers import is_search_url
+
+        best = status.get("best_url")
+        selected = (status.get("best_price"), status.get("best_retailer"), best)
+        if best and not is_compare_url(best) and not is_search_url(best):
+            return selected
+        offers = self.store["offers"].get(num, {})
+        priced = sorted((o["last_price"], rid, o["url"]) for rid, o in offers.items()
+                        if (not shops or rid in shops) and o.get("available") and o.get("last_price") and o.get("url")
+                        and not is_compare_url(o["url"]) and not is_search_url(o["url"]))
+        return priced[0] if priced else selected
+
     # ---------------------------------------------------------------- events
     async def on_set_change(self, num: str, before: dict[str, Any], after: dict[str, Any]) -> None:
+        """Send enabled, in-scope rule notifications for triggers outside their cooldowns."""
         s = self.store["sets"].get(num, {})
+        blocked = self.coord.deal_blocked(num, after)        # left out under Deals → Settings
         for rule in self.rules:
             if not rule.get("enabled") or not self.in_scope(rule, num):
+                continue
+            if blocked and rule["scope"]["type"] != "sets":  # sets you picked by hand in a rule still notify
                 continue
             hits = [h for h in set_triggers(rule, before, after)
                     if self._cooled(f"{rule['id']}|{num}|{h[0]}", rule.get("cooldown_hours", 24))]
             if not hits:
                 continue
-            shop = RETAILERS.get(after.get("best_retailer"), ("",))[0]
+            price, retailer, url = self.shop_offer(num, after, rule["shops"])
+            shop = RETAILERS.get(retailer, ("",))[0]
             title = f"🧱 {num} {s.get('name') or ''}".strip()
-            message = tr("€{price} at {shop}", price=f"{after['best_price']:.2f}", shop=shop) + ": " + ", ".join(h[1] for h in hits)
-            await self.send(rule, title, message, url=after.get("best_url") if rule.get("link") else None,
+            message = tr("€{price} at {shop}", price=f"{price:.2f}", shop=shop) + ": " + ", ".join(h[1] for h in hits)
+            await self.send(rule, title, message, url=url,
                             image=s.get("image") if rule.get("image") else None,
-                            data={"set_number": num, "triggers": [h[0] for h in hits], "price": after["best_price"]})
+                            data={"set_number": num, "triggers": [h[0] for h in hits], "price": price})
 
     async def on_digest(self, digest: dict[str, Any]) -> None:
+        """Send each enabled digest rule the deals allowed by its scope and shop filters."""
         for rule in self.rules:
             if not rule.get("enabled") or "digest" not in rule["triggers"]:
                 continue
             deals = [d for d in digest["deals"] if self.in_scope(rule, d["set_number"])
-                     and (not rule["shops"] or d["retailer"] in rule["shops"])]
+                     and (not rule["shops"] or d["retailer"] in rule["shops"])
+                     and (rule["scope"]["type"] == "sets" or not self.coord.deal_blocked(d["set_number"]))]
             if not deals:
                 continue
             lines = [f"• {d['set_number']} {d['name'] or ''}: " + tr("€{price} at {shop}", price=f"{d['price']:.2f}", shop=RETAILERS.get(d["retailer"], ("",))[0])
                      + (f" (−{d['discount']:.0f}%)" if d.get("discount") else "") + (" 🔻" if d.get("all_time_low") else "")
+                     + (f"\n  {u}" if (u := d.get("url")) else "")
                      for d in deals[:15]]
             more = "\n" + tr("… and {n} more", n=len(deals) - 15) if len(deals) > 15 else ""
             await self.send(rule, "🧱 " + tr("LEGO deals today ({n})", n=len(deals)), "\n".join(lines) + more,

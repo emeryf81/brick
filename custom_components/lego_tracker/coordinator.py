@@ -11,7 +11,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
@@ -21,7 +21,7 @@ from .client import DOMAIN_GAP, SEARCH_GAP, Fetcher, lookup_metadata
 from .const import (
     CONF_COMPARE, CONF_COMPARE_OLD, CONF_BLOCK_WORDS, CYCLE_CHOICES, CONF_WATCH_CYCLE, WATCH_CYCLE_CHOICES, WATCH_LIMIT,
     FULL_REFRESH_GAP, MANUAL_GAP, CONF_DEAL_MIN_SCORE, CONF_DEAL_ATL, CONF_DEAL_TARGET, DEFAULT_DEAL_MIN_SCORE, CONF_DEV_FIXED_TIMES, CONF_DEV_FULL_REFRESH, CONF_DEV_FREE_CYCLE, CONF_DEV_WATCH_UNLIMITED, CONF_ALLOW_WORDS, CONF_COMPARE_SOURCES, COMPARE_FRESH_HOURS, COMPARE_MISSING_HOURS, COMPARE_NET_ERRORS, COMPARE_PAUSE_HOURS,
-    CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET, CONF_BOL_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS,
+    CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET, CONF_BOL_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS, CONF_MARKET, CONF_TICKER, TICKER_DEFAULT, CONF_DEAL_FILTER, DEAL_FILTER_DEFAULT,
     CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_LANGUAGE, CONF_REFRESH_MODE, CONF_SPREAD_HOURS, DEFAULT_REFRESH_MODE, DEFAULT_SPREAD_HOURS, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, CONF_CUSTOM_SHOPS, CONF_DIGEST_TIME, CONF_NO_AUTOPAUSE, CONF_SHOP_SEARCH, CONF_VALUE_SOURCE, DEFAULT_DIGEST_TIME, GENERIC_SHOPS, CONF_DISCOUNT_THRESHOLD, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
     DEFAULT_REFRESH_TIMES, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS, DEFAULT_RETAILERS,
     DOMAIN, EVENT_JOB_DONE, EVENT_HIGH_DISCOUNT, EVENT_NEW_LOW, EVENT_TARGET_HIT, RETAILERS, STORAGE_KEY,
@@ -98,6 +98,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return resolve(self.opt(self.entry, CONF_LANGUAGE, DEFAULT_LANGUAGE), self.hass.config.language)
 
     async def async_load(self) -> None:
+        """Load and migrate stored data, initialize the fetcher, and restore cooldowns."""
         await self.hass.async_add_executor_job(catalog.load)
         set_language(self.language)
         set_custom_words(self.opt(self.entry, CONF_BLOCK_WORDS, []), self.opt(self.entry, CONF_ALLOW_WORDS, []))
@@ -105,6 +106,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if (data := await self._store.async_load()):
             self.store = {**new_store(), **data}
         self._drop_old_source_links()
+        self._fix_lost_commas()
+        self._watch_dates(first=True)
         for num, st in self.store["sets"].items():            # fill gaps from the built-in catalogue (no network)
             catalog.apply(num, st, self.store["offers"].setdefault(num, {}))
         from .csv_import import LEGACY_CONDITIONS
@@ -155,8 +158,26 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         return self.compute()
 
+    def _watch_dates(self, first: bool = False) -> None:
+        """When each set came on the watchlist (sort by date). first: older data gets its earliest known date."""
+        early: dict[str, float] = {}
+        if first:
+            for e in self.store.get("activity", []):
+                if (n := e.get("set_number")) and n not in early:
+                    early[n] = e["ts"]
+            for n, per in self.store["offers"].items():
+                pts = [h[0] for o in per.values() for h in (o.get("history") or [])[:1]]
+                if pts:
+                    early[n] = min(early.get(n, pts[0]), *pts)
+        for num, st in self.store["sets"].items():
+            if is_watched(self.store, num):
+                st.setdefault("watch_since", early.get(num) or time.time())
+            else:
+                st.pop("watch_since", None)
+
     def push_update(self) -> None:
         """Recompute without hitting the network (after edits/imports)."""
+        self._watch_dates()
         self._save()
         self.async_set_updated_data(self.compute())
 
@@ -203,6 +224,39 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             score = DEFAULT_DEAL_MIN_SCORE
         return {"threshold": self.threshold, "min_score": score, "atl": bool(self.opt(self.entry, CONF_DEAL_ATL, True)),
                 "target": bool(self.opt(self.entry, CONF_DEAL_TARGET, True))}
+
+    @property
+    def deal_filter(self) -> dict[str, Any]:
+        """Return deal filter defaults merged with the configured overrides."""
+        return {**DEAL_FILTER_DEFAULT, **(self.opt(self.entry, CONF_DEAL_FILTER, None) or {})}
+
+    def deal_blocked(self, num: str, status: dict[str, Any] | None = None) -> str | None:
+        """Why a set is left out of Deals and price notifications (Deals → Settings), or None."""
+        from .themes import key as theme_key
+
+        f, s = self.deal_filter, self.store["sets"].get(num, {})
+        if status is None:
+            status = ((self.data or {}).get("statuses") or {}).get(num) or self.compute()["statuses"].get(num, {})
+        st = status
+        off = {theme_key(x) for x in f["themes_off"]}
+        if s.get("theme") and theme_key(s["theme"]) in off:
+            return "theme"
+        price, pieces = st.get("best_price"), s.get("pieces")
+        if price is not None and f["min_price"] is not None and price < f["min_price"]:
+            return "min_price"
+        if price is not None and f["max_price"] is not None and price > f["max_price"]:
+            return "max_price"
+        if f["min_discount"] is not None and (st.get("discount_rrp") is None or st["discount_rrp"] < f["min_discount"]):
+            return "min_discount"
+        if pieces and f["min_pieces"] is not None and pieces < f["min_pieces"]:
+            return "min_pieces"
+        if pieces and f["max_pieces"] is not None and pieces > f["max_pieces"]:
+            return "max_pieces"
+        if f["skip_owned"] and num in self.store["collection"]:
+            return "owned"
+        if f["skip_retired"] and st.get("retired"):
+            return "retired"
+        return None
 
     def is_watched(self, num: str) -> bool:
         """On the watchlist: every set you don't own, plus owned sets you also watch (e.g. for a second copy)."""
@@ -355,6 +409,26 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         now = time.time()
         for rid in rids:
             self._manual["site:" + self._site(rid)] = now
+
+    def approve_price(self, num: str, rid: str) -> float:
+        """A price held back as suspicious is right after all: store it, and accept prices like it (±25 %)
+        for this link from now on."""
+        num = normalize_set_number(num)
+        offer = (self.store["offers"].get(num) or {}).get(rid)
+        if not offer or not offer.get("suspect"):
+            raise LocalizedError("There is no suspicious price to approve for this shop.")
+        price = float(offer.pop("suspect")["price"])
+        before = self.compute()["statuses"].get(num, {})
+        offer["approved"] = price
+        record_price(offer, price)
+        offer["last_ok"], offer["error"] = offer.get("last_checked") or time.time(), None
+        offer.pop("ignored_error", None)
+        self.log("ok", "price", T("suspicious price €{price} approved by hand", price=f"{price:.2f}"),
+                 set_number=num, retailer=rid, url=offer.get("url"), price=price, source="panel")
+        self._fire_events(num, before, self.compute()["statuses"].get(num, {}))
+        self._save()
+        self.push_update()
+        return price
 
     def report_problem(self, num: str, problems: list[str], shops: list[str], comment: str,
                        save: bool = True) -> tuple[dict[str, Any], str]:
@@ -527,7 +601,116 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """The hidden option: price-comparison sites as extra price sources."""
         return bool(self.opt(self.entry, CONF_COMPARE, self.opt(self.entry, CONF_COMPARE_OLD, False)))
 
+    @property
+    def market_enabled(self) -> bool:
+        """BrickEconomy market value (and expected retirement), on by default."""
+        return bool(self.opt(self.entry, CONF_MARKET, True))
+
+    @property
+    def ticker(self) -> dict[str, Any]:
+        """Return ticker defaults merged with the configured overrides."""
+        return {**TICKER_DEFAULT, **(self.opt(self.entry, CONF_TICKER, None) or {})}
+
+    async def ticker_data(self, lang: str) -> dict[str, Any]:
+        """The ticker at the bottom of the panel: latest prices of watched sets, deal notifications and news,
+        each as configured under Settings (on/off and how many)."""
+        from .news import NewsFeed, for_language
+
+        cfg, now, out = self.ticker, time.time(), []
+        if cfg["watch"] and cfg["max_watch"]:
+            seen: set[str] = set()
+            for e in reversed(self.store.get("activity", [])):
+                if now - e["ts"] > 14 * 86400 or len(seen) >= cfg["max_watch"]:
+                    break
+                num = e.get("set_number")
+                if e.get("kind") != "price" or e.get("price") is None or not num or num in seen \
+                        or num not in self.store["sets"] or not self.is_watched(num):
+                    continue
+                seen.add(num)
+                old, price = e.get("old_price"), e["price"]
+                out.append({"kind": "price", "ts": e["ts"], "set_number": num, "name": self.store["sets"][num].get("name") or "",
+                            "price": price, "old": old, "pct": round((price - old) / old * 100, 1) if old else None,
+                            "shop": RETAILERS.get(e.get("retailer"), ("",))[0], "url": e.get("url")})
+        if cfg["deals"] and cfg["max_deals"]:
+            for ev in list(reversed(self.store.get("events", [])))[: cfg["max_deals"]]:
+                num = ev.get("set_number")
+                out.append({"kind": "deal", "ts": ev["ts"], "set_number": num, "name": ev.get("name") or "",
+                            "price": ev.get("price"), "discount": ev.get("discount"), "score": ev.get("score"),
+                            "deal": ev.get("kind"), "shop": RETAILERS.get(ev.get("retailer"), ("",))[0], "url": ev.get("url")})
+        news: list[dict[str, Any]] = []
+        if cfg["news"] and cfg["max_news"]:
+            if not hasattr(self, "news"):
+                self.news = NewsFeed(lambda: async_get_clientsession(self.hass))
+            news = for_language(await self.news.get(), lang)[: cfg["max_news"]]
+        return {"items": out, "news": news, "config": cfg}
+
+    @callback
+    def market_tick(self, _now: Any = None) -> None:
+        """Every minute: when it is time, the market value of the set that waited longest. All sets are
+        spread over the whole day (one set every 24 h / number of sets, at least 2 minutes apart)."""
+        src, now = "brickeconomy", time.time()
+        if not self.market_enabled or getattr(self, "_market_busy", False) or now < getattr(self, "_market_next", 0) \
+                or self.fetcher.cooldown_left(src) > 0 or not self.store["sets"]:
+            return
+        st = self._cstore(src)
+        def age(n: str) -> float:
+            """Return seconds since the last check, or -1 while a failed lookup is deferred."""
+            e = st.get(n) or {}
+            if e.get("status") in ("missing", "unreadable") and now - e.get("ts", 0) < COMPARE_MISSING_HOURS * 3600:
+                return -1
+            return now - e.get("ts", 0)
+        num = max(self.store["sets"], key=age)
+        if age(num) < compare.FRESH_HOURS.get(src, 24) * 3600:
+            self._market_next = now + 600                    # everything is fresh: look again in 10 minutes
+            return
+        self._market_next = now + max(120.0, 86400 / len(self.store["sets"]))
+        self._market_busy = True
+
+        async def run() -> None:
+            """Refresh the selected market value and always release the busy flag and publish state."""
+            try:
+                await self._compare_one(src, num, False, False, False)
+            except Exception:  # noqa: BLE001 - an extra source must never break anything
+                _LOGGER.exception("market value failed for %s", num)
+            finally:
+                self._market_busy = False
+                self.push_update()
+        self.entry.async_create_background_task(self.hass, run(), f"{DOMAIN}_market_{num}")
+
     OLD_SOURCE_HOSTS = ("brickwatch.net",)       # sources that were removed: keep their data, drop every link
+
+    def _fix_lost_commas(self) -> None:
+        """Older panels used number fields in which some phone keyboards dropped the decimal comma
+        (an RRP of 164,99 became 16499). Only amounts with evidence are repaired: the amount is far above
+        what the shops ask (or, for a purchase price, the RRP) and the amount / 100 matches it. Anything
+        else, e.g. a real €2500, stays as it is."""
+        def fits(v: float, ref: float | None) -> bool:
+            """Check whether dividing an outlying amount by 100 brings it near the reference."""
+            return bool(ref) and not 0.3 <= v / ref <= 3 and 0.4 <= (v / 100) / ref <= 2.5
+
+        def shop_median(num: str) -> float | None:
+            """Return the upper median of available automatic shop prices, or None."""
+            prices = sorted(o["last_price"] for o in (self.store["offers"].get(num) or {}).values()
+                            if o.get("available") and o.get("last_price") and not o.get("manual_price"))
+            return prices[len(prices) // 2] if prices else None
+
+        def fix(num: str, rec: dict[str, Any], key: str, ref: float | None) -> None:
+            """Correct and log an amount above 1000 when the reference supports a lost comma."""
+            v = rec.get(key)
+            if isinstance(v, (int, float)) and v > 1000 and fits(v, ref):
+                rec[key] = round(v / 100, 2)
+                self.log("info", "meta", T("{field} {old} corrected to {new} (decimal comma lost)", field=key, old=f"{v:g}", new=f"{v / 100:.2f}"),
+                         set_number=num, source="server")
+
+        for num, st in self.store["sets"].items():
+            ref = shop_median(num)
+            for key in ("rrp", "target_price"):
+                fix(num, st, key, ref)
+        for num, e in self.store["collection"].items():
+            st = self.store["sets"].get(num, {})
+            ref = st.get("rrp") if st.get("rrp") and st.get("rrp") < 1000 else shop_median(num)
+            for key in ("paid", "current_value"):
+                fix(num, e, key, ref * max(1, int(e.get("qty") or 1)) if ref and key == "paid" else ref)
 
     def _drop_old_source_links(self) -> None:
         """Brickwatch was removed in 0.9.10: its prices and history stay, but no link to it remains
@@ -576,6 +759,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         have the set is not asked again within a day, a paused site is skipped (unless forced from the panel)."""
         out: dict[str, dict[str, Any]] = {}
         for src in sources or self.compare_sources:
+            if src == "brickeconomy" and not self.market_enabled:      # the market value is switched off
+                continue
             try:
                 if (entry := await self._compare_one(src, num, refresh or force, force, retry_missing)):
                     out[src] = entry
@@ -864,7 +1049,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             price = parsed.price if parsed else None
             others = [p for r, p in {**known, **round_prices}.items() if r != rid]
             if price is not None and (warn := is_suspicious_price(price, s, offer, others)):
+                offer["suspect"] = {"price": price, "reason": warn, "ts": time.time()}   # kept: you can approve it
                 price, error = None, warn
+            elif price is not None:
+                offer.pop("suspect", None)
             manual = offer.get("manual_price")
             if manual:                        # manual price has priority: only remember what the shop said
                 offer["auto_price"], offer["last_checked"], offer["error"] = price, time.time(), error
@@ -1090,6 +1278,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._sitemap_busy = True
         self.entry.async_create_background_task(self.hass, self._sitemap_round([rid]), f"{DOMAIN}_sitemap_{rid}")
 
+    @callback
     def sitemap_tick(self, _now: Any = None) -> None:
         """Every few hours: shops whose sitemap is older than a week are read again (in the background)."""
         if getattr(self, "_sitemap_busy", False):
@@ -1171,8 +1360,9 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def continuous_items(self, limit: int = 20) -> dict[str, Any]:
         """Work for the userscript's continuous check, most useful first:
-        1. links that never had a price; 2. sets without any price: search the shops that have no link yet;
-        3. links the server can't fetch (blocked, paused, errors) and not checked by the browser recently."""
+        1. links that never had a price; 2. open errors (shown under Shops & jobs): the browser fetches the page,
+        a price solves the error; 3. sets without any price: search the shops that have no link yet;
+        4. links the server can't fetch (blocked, paused) and not checked by the browser recently."""
         now = time.time()
         searched = self.store.setdefault("relay_searched", {})
         items: list[tuple[int, float, dict[str, Any]]] = []
@@ -1194,12 +1384,29 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if not o.get("history") and not o.get("last_ok"):
                         if now - last_try > 3600:                       # never a price: first, once an hour at most
                             items.append((0, last_try, {**base, "url": o["url"], "reason": "no_price"}))
+                    elif o.get("error") and o.get("ignored_error") != o["error"] and not o.get("suspect"):
+                        if now - last_try > 3600:                       # an open error: try it in the browser, once an hour
+                            items.append((1, last_try, {**base, "url": o["url"], "reason": "open_error"}))
                     elif (o.get("error") or self.fetcher.cooldown_left(rid) > 0) and now - max(last_try, o.get("last_ok") or 0) > self.RELAY_FAIL_HOURS * 3600:
-                        items.append((2, o.get("last_ok") or 0, {**base, "url": o["url"], "reason": "server_fails"}))
+                        items.append((3, o.get("last_ok") or 0, {**base, "url": o["url"], "reason": "server_fails"}))
                 elif not priced and rid != "lego_com" and (url := search_url(rid, num)) \
                         and now - searched.get(f"{num}|{rid}", 0) > self.RELAY_SEARCH_DAYS * 86400:
-                    items.append((1, searched.get(f"{num}|{rid}", 0), {**base, "kind": "search", "url": url, "reason": "search",
+                    items.append((2, searched.get(f"{num}|{rid}", 0), {**base, "kind": "search", "url": url, "reason": "search",
                                                                        "render": rid in self.store.get("shop_js", {})}))
+        if self.market_enabled:
+            # market values (BrickEconomy) the server can't fetch (paused / errors): last, at most once a day per set
+            src, locale = "brickeconomy", self.opt(self.entry, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE)
+            paused, tried = self.fetcher.cooldown_left(src) > 0, self.store.setdefault("relay_market", {})
+            for num, s in self.store["sets"].items():
+                e = self._cstore(src).get(num) or {}
+                fresh = e.get("status") == "ok" and now - e["ts"] < 24 * 3600 and not e.get("last_error")
+                missing = e.get("status") in ("missing", "unreadable") and now - e["ts"] < COMPARE_MISSING_HOURS * 3600
+                failing = paused or e.get("status") == "error" or bool(e.get("last_error"))
+                if fresh or missing or not failing or now - tried.get(num, 0) < 24 * 3600:
+                    continue
+                if (url := compare.first_url(src, num, locale, s.get("ean"))):
+                    items.append((4, tried.get(num, 0), {"kind": "page", "source": src, "set_number": num, "retailer": src,
+                                                         "shop": compare.SOURCES[src][0], "url": url, "step": 0, "reason": "market"}))
         items.sort(key=lambda x: (x[0], x[1]))
         counts: dict[str, int] = {}
         for _, _, it in items:
@@ -1272,6 +1479,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return status
 
     def _relay_page(self, item: dict[str, Any]) -> str | dict[str, Any]:
+        """Process a browser comparison result and return a follow-up page or outcome key."""
         src, url = item.get("source"), str(item.get("url") or "")
         num = normalize_set_number(str(item.get("set_number") or ""))
         if src not in compare.SOURCES or not compare.is_compare_url(url) or num not in self.store["sets"]:
@@ -1281,15 +1489,19 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             status, step = int(item.get("status") or 0), max(0, min(compare.MAX_STEPS - 1, int(item.get("step") or 0)))
         except (TypeError, ValueError):
             status, step = 0, 0
+        if src == "brickeconomy":
+            self.store.setdefault("relay_market", {})[num] = time.time()     # not asked again within a day
         if status == 0:        # the browser couldn't reach it either: log, but don't count it towards a server pause
             self.log("warning", "userscript", T("your browser could not fetch the price either: {error}", error=str(item.get("error") or "")[:120] or "?"),
                      set_number=num, url=url, source="relay")
             kind, nxt = "error", None
         else:
             kind, nxt = self.compare_page(src, num, url, status, html, None, step, via="relay")
-        if kind == "ok":
+        if kind == "ok" and src != "brickeconomy":           # BrickEconomy has no shop prices, only the market value
             self._compare_links(num)
             self._compare_apply_prices(num)
+        elif kind == "ok":
+            self.push_update()
         rl = self.store.setdefault("relay_last", {"ts": 0, "ok": 0, "fail": 0})
         if time.time() - rl.get("ts", 0) > 900:
             rl.update(ok=0, fail=0)
@@ -1435,6 +1647,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     SECRET_KEYS = (CONF_BRICKSET_KEY, CONF_REBRICKABLE_KEY, CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET)
 
     def settings_get(self) -> dict[str, Any]:
+        """Return panel settings and shop state with configured secret values masked."""
         o = {**self.entry.data, **self.entry.options}
         mask = lambda v: f"••••{v[-4:]}" if v and len(v) > 4 else ("••••" if v else "")  # noqa: E731
         shops = []
@@ -1462,6 +1675,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "language": o.get(CONF_LANGUAGE, DEFAULT_LANGUAGE), "languages": LANGUAGES,
             "bol_country": o.get(CONF_BOL_COUNTRY, "auto"), "bol_api": bool(self.bol_api),
             "browser_relay": bool(o.get(CONF_RELAY, True)), "compare": self.compare_enabled,
+            "market_value": self.market_enabled, "ticker": self.ticker, "deal_filter": self.deal_filter,
             "compare_sources": self.compare_sources,
             "block_words": list(o.get(CONF_BLOCK_WORDS, [])), "allow_words": list(o.get(CONF_ALLOW_WORDS, [])),
             "builtin_words": list(BUILTIN_WORDS), "relay_hours": int(o.get(CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS)),
@@ -1490,7 +1704,39 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for key in (CONF_DEAL_ATL, CONF_DEAL_TARGET):
             if key in fields:
                 opts[key] = bool(fields[key])
-        for key in ("auto_refresh", "use_impersonation", CONF_RELAY, CONF_COMPARE, CONF_DEV_FIXED_TIMES, CONF_DEV_FULL_REFRESH,
+        if CONF_DEAL_FILTER in fields:
+            raw = fields[CONF_DEAL_FILTER] if isinstance(fields[CONF_DEAL_FILTER], dict) else {}
+            df: dict[str, Any] = {"themes_off": sorted({str(x)[:80] for x in (raw.get("themes_off") or []) if str(x).strip()})[:300],
+                                  "skip_owned": bool(raw.get("skip_owned")), "skip_retired": bool(raw.get("skip_retired"))}
+            for k, hi in (("min_price", 10000), ("max_price", 10000), ("min_discount", 95), ("min_pieces", 20000), ("max_pieces", 20000)):
+                v = raw.get(k)
+                if v in (None, ""):
+                    df[k] = None
+                    continue
+                try:
+                    v = float(str(v).replace(",", "."))
+                except ValueError as err:
+                    raise LocalizedError("{field}: not a number", field=k) from err
+                if not 0 <= v <= hi:
+                    raise LocalizedError("{field}: must be between {lo} and {hi}", field=k, lo=0, hi=hi)
+                df[k] = v
+            for lo, hi in (("min_price", "max_price"), ("min_pieces", "max_pieces")):
+                if df[lo] is not None and df[hi] is not None and df[lo] > df[hi]:
+                    raise LocalizedError("{field}: must be between {lo} and {hi}", field=lo, lo=0, hi=df[hi])
+            opts[CONF_DEAL_FILTER] = df
+        if CONF_TICKER in fields:
+            raw, tk = fields[CONF_TICKER] if isinstance(fields[CONF_TICKER], dict) else {}, {}
+            for k, v in TICKER_DEFAULT.items():
+                val = raw.get(k, v)
+                if isinstance(v, bool):
+                    tk[k] = bool(val)
+                else:
+                    try:
+                        tk[k] = max(0, min(50, int(float(val))))
+                    except (TypeError, ValueError) as err:
+                        raise LocalizedError("{field}: not a number", field=k) from err
+            opts[CONF_TICKER] = tk
+        for key in ("auto_refresh", "use_impersonation", CONF_RELAY, CONF_COMPARE, CONF_MARKET, CONF_DEV_FIXED_TIMES, CONF_DEV_FULL_REFRESH,
                     CONF_DEV_FREE_CYCLE, CONF_DEV_WATCH_UNLIMITED):
             if key in fields:
                 opts[key] = bool(fields[key])
@@ -1786,18 +2032,28 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             snaps.append(row)
 
     def _fire_events(self, num: str, before: dict, after: dict) -> None:
+        """Emit eligible deal events once per day and schedule notifications for changed status."""
         s = self.store["sets"][num]
+        # the link opens the product page itself; price, shop and discount describe that same offer
+        price, retailer, url = self.notifier.shop_offer(num, after)
+        discount = after.get("discount_rrp")
+        if retailer != after.get("best_retailer") and price and s.get("rrp"):
+            discount = round((s["rrp"] - price) / s["rrp"] * 100, 1)
         payload = {"set_number": num, "name": s.get("name"), "theme": s.get("theme"),
-                   "price": after.get("best_price"), "retailer": after.get("best_retailer"),
-                   "url": after.get("best_url"), "discount": after.get("discount_rrp"),
+                   "price": price, "retailer": retailer, "url": url, "discount": discount,
                    "target_price": s.get("target_price")}
         day = today_iso()
+        if self.deal_blocked(num, after):            # left out under Deals → Settings: no deal events or notifications
+            if before.get("best_price") != after.get("best_price"):
+                self.hass.async_create_task(self.notifier.on_set_change(num, dict(before), dict(after)))
+            return
         for flag, event in (("is_all_time_low", EVENT_NEW_LOW), ("high_discount", EVENT_HIGH_DISCOUNT),
                             ("target_hit", EVENT_TARGET_HIT)):
             key = (num, flag + day)
             if after.get(flag) and not before.get(flag) and key not in self._alerted:
                 self._alerted.add(key)
                 self.hass.bus.async_fire(event, payload)
+                self.store["sets"][num]["last_deal"] = time.time()      # sort deals by when they came in
                 add_event(self.store, flag, {k: payload[k] for k in ("set_number", "name", "price", "retailer", "url")}
                           | {"discount": payload["discount"], "score": after.get("deal_score")})
         if before.get("best_price") != after.get("best_price") or any(
@@ -2002,6 +2258,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
     def retailer_stats(self) -> dict[str, dict[str, Any]]:
+        """Summarize each retailer's offers, errors, cheapest prices, and cooldown."""
         statuses = (self.data or self.compute())["statuses"]
         out: dict[str, dict[str, Any]] = {}
         for rid, (label, _) in RETAILERS.items():
@@ -2015,7 +2272,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "cheapest": sum(1 for n, _ in offers if statuses.get(n, {}).get("best_retailer") == rid),
                 "last_ok": last_ok or None,
                 "paused_hours": round(self.fetcher.cooldown_left(rid) / 3600, 1),
-                "failing": [{"set_number": n, "name": self.store["sets"].get(n, {}).get("name"), "error": o["error"]}
+                "failing": [{"set_number": n, "name": self.store["sets"].get(n, {}).get("name"), "error": o["error"],
+                             "suspect": (o.get("suspect") or {}).get("price")}
                             for n, o in offers if o.get("error")][:50],
             }
         return out
@@ -2049,6 +2307,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         num, retailer = found
         others = [o["last_price"] for r, o in self.store["offers"][num].items() if r != retailer and o.get("available") and o.get("last_price")]
         if url and (warn := is_suspicious_price(price, self.store["sets"][num], self.store["offers"][num][retailer], others)):
+            self.store["offers"][num][retailer]["suspect"] = {"price": price, "reason": warn, "ts": time.time()}
             self.log("error", "userscript", warn, set_number=num, retailer=retailer, url=url, price=price, source=source)
             raise ValueError(warn)   # already English (panel translates)
         offer = self.store["offers"][num][retailer]
@@ -2056,6 +2315,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             offer["title"] = title[:300]
             offer["link_status"], offer["link_reason"] = link_check(offer, self.store["sets"][num], num)
         before = self.compute()["statuses"].get(num, {})
+        had_error = bool(offer.get("error"))
         record_price(offer, price)
         offer["last_ok"] = offer["last_checked"]
         if url:
@@ -2063,10 +2323,15 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         msg = (T("price €{price} fetched by your browser (relay)", price=f"{price:.2f}") if source == "relay"
                else T("price €{price} received via Tampermonkey", price=f"{price:.2f}") if url
                else T("price €{price} entered by hand", price=f"{price:.2f}"))
-        if url:
+        if url:          # a price from the shop page itself: the open error is solved (it leaves the error lists)
             offer["error"] = None
+            offer.pop("ignored_error", None)
+            offer.pop("suspect", None)
         self.log("ok", "userscript" if url else "user", msg,
                  set_number=num, retailer=retailer, url=url or offer.get("url"), price=price, source=source)
+        if url and had_error:
+            self.log("ok", "userscript", T("open error solved by your browser"), set_number=num, retailer=retailer,
+                     url=url, source=source)
         if url:
             self.store["userscript_last"] = {"ts": time.time(), "set_number": num, "retailer": retailer, "price": price}
         self._fire_events(num, before, self.compute()["statuses"].get(num, {}))

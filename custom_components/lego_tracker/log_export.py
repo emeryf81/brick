@@ -57,6 +57,21 @@ def select_sets(store: dict[str, Any], f: dict[str, Any], is_watched: Callable[[
     return out
 
 
+COMPARE_NAMES = {"kieskeurig": "Kieskeurig", "shoparize": "Shoparize", "channable": "Channable Shopping",
+                 "producthero": "Producthero", "brickeconomy": "BrickEconomy"}
+
+
+def method(via: str | None, source: str | None) -> str:
+    """How the price was read, in words: the shop's own site, a comparison site, or the user's browser."""
+    if via in ("relay", "userscript") or source in ("relay", "userscript"):
+        return "userscript (your browser)"
+    if via in COMPARE_NAMES:
+        return f"{COMPARE_NAMES[via]} (comparison site)"
+    if source == "panel" or source == "user":
+        return "entered by hand"
+    return "shop site (direct)"
+
+
 def checks_rows(store: dict[str, Any], start: float, end: float, f: dict[str, Any]) -> list[dict[str, Any]]:
     """One row per shop per check: when, set, shop, result, price, error, source."""
     wanted_sets = {str(x) for x in (f.get("sets") or [])}
@@ -64,10 +79,23 @@ def checks_rows(store: dict[str, Any], start: float, end: float, f: dict[str, An
     status = f.get("status")                       # ok | failed | skipped
     rows = []
     for e in store.get("activity", []):
-        if e.get("kind") != "check" or not start <= e.get("ts", 0) <= end:
+        if not start <= e.get("ts", 0) <= end:
             continue
         num = e.get("set_number")
         if wanted_sets and num not in wanted_sets:
+            continue
+        if e.get("kind") == "userscript" and e.get("retailer") and e.get("price") is not None:
+            # a price fetched by the browser (userscript / relay) is a check too
+            rid = e["retailer"]
+            st = "ok" if e.get("level") == "ok" else "failed"
+            if (shops and rid not in shops) or (status and st != status):
+                continue
+            rows.append({"time": _stamp(e["ts"]), "set_number": num, "name": store["sets"].get(num, {}).get("name", ""),
+                         "shop": RETAILERS.get(rid, (rid,))[0], "result": st, "price": e["price"],
+                         "error": "" if st == "ok" else e.get("message") or "", "via": e.get("source") or "",
+                         "method": method(None, e.get("source")), "source": e.get("source") or ""})
+            continue
+        if e.get("kind") != "check":
             continue
         for rid, r in (e.get("results") or {}).items():
             if shops and rid not in shops:
@@ -78,7 +106,8 @@ def checks_rows(store: dict[str, Any], start: float, end: float, f: dict[str, An
             rows.append({"time": _stamp(e["ts"]), "set_number": num, "name": store["sets"].get(num, {}).get("name", ""),
                          "shop": RETAILERS.get(rid, (rid,))[0], "result": st,
                          "price": r.get("price") if r.get("price") is not None else "", "error": r.get("error") or "",
-                         "via": r.get("via") or "", "source": e.get("source") or ""})
+                         "via": r.get("via") or "", "method": method(r.get("via"), e.get("source")) if st != "skipped" else "",
+                         "source": e.get("source") or ""})
     rows.sort(key=lambda r: r["time"])
     return rows
 
@@ -127,7 +156,7 @@ def total_rows(store: dict[str, Any], nums: list[str], start: float, end: float)
 
 
 COLUMNS = {
-    "checks": ["time", "set_number", "name", "shop", "result", "price", "error", "via", "source"],
+    "checks": ["time", "set_number", "name", "shop", "result", "price", "method", "error", "via", "source"],
     "history": ["date", "set_number", "name", "theme", "shop", "price", "rrp"],
     "total": ["date", "sets_with_price", "total_lowest_price"],
 }

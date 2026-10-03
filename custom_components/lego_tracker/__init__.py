@@ -95,10 +95,11 @@ def digest(coord: LegoCoordinator) -> dict:
     for num, st in data["statuses"].items():
         if st["is_all_time_low"] or st["high_discount"]:
             s = coord.store["sets"][num]
+            price, retailer, url = coord.notifier.shop_offer(num, st)
             rows.append({"set_number": num, "name": s.get("name"), "theme": s.get("theme"),
-                         "price": st["best_price"], "retailer": st["best_retailer"],
+                         "price": price, "retailer": retailer,
                          "discount": st["discount_rrp"], "all_time_low": st["is_all_time_low"],
-                         "owned": num in coord.store["collection"], "url": st["best_url"]})
+                         "owned": num in coord.store["collection"], "url": url})
     rows.sort(key=lambda r: (not r["all_time_low"], -(r["discount"] or 0)))
     return {"deals": rows, "collection": data["summary"], "threshold": coord.threshold}
 
@@ -111,6 +112,7 @@ async def _send_digest(hass: HomeAssistant, coord: LegoCoordinator) -> None:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up the coordinator, platforms, panel, services, and scheduled refreshes."""
     apply_shop_options(dict(entry.options))
     # New built-in shops (e.g. Dreamland) are switched on once; afterwards the user's choice wins.
     known = set(entry.options.get(CONF_KNOWN_SHOPS) or ("amazon_nl", "amazon_de", "amazon_be", "bol", "kruidvat_be"))
@@ -155,6 +157,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         coord.start_spread()
     # product links from the shops' sitemaps: first look 15 minutes after start, then every 6 hours (weekly per shop)
     entry.async_on_unload(async_call_later(hass, 900, coord.sitemap_tick))
+    # market values (BrickEconomy): one set at a time, spread over the day
+    entry.async_on_unload(async_track_time_interval(hass, coord.market_tick, timedelta(minutes=1)))
     entry.async_on_unload(async_track_time_interval(hass, coord.sitemap_tick, timedelta(hours=6)))
     if coord.auto_refresh:
         for hour, minute in coord.refresh_times:

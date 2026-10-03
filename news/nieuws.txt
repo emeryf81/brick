@@ -1,0 +1,136 @@
+# Nieuws voor de ticker van LEGO Organizing Tool (https://www.emery.be/lot/nieuws.txt)
+#
+# Elk bericht is een blok, gescheiden door een regel met alleen ---
+# Velden bovenaan (id, date, lang, title, link), dan een lege regel, dan de tekst.
+# - id:    uniek; zo weet het paneel welk bericht al gelezen is (● = nieuw)
+# - date:  JJJJ-MM-DD; het nieuwste staat vooraan
+# - lang:  nl / en / ... (leeg = in elke taal tonen; zonder bericht in de eigen taal komt Engels)
+# - link:  optioneel; https://... of een pad in Home Assistant zoals /hacs/dashboard
+# Tekst: gewone tekst, lege regel = nieuwe alinea, https-links worden klikbaar.
+
+id: 2026-10-03-update
+date: 2026-10-03
+lang: nl
+title: UPDATE 3 oktober! Nieuwe versie klaar in HACS
+link: /hacs/dashboard
+
+Er staat een nieuwe versie van LEGO Organizing Tool klaar.
+
+Wat is er nieuw?
+• Verdachte prijzen kun je nu zelf goedkeuren (in de set, bij Winkels & taken en in het logboek, met een eigen filter).
+• Het userscript lost openstaande fouten zelf op: het haalt de prijs in je browser en de fout verdwijnt uit de lijst.
+• In het logboek zie je meteen hoe elke prijs gelezen werd: ⌂ rechtstreeks van de winkel, ⓤ via je browser (userscript).
+• Sorteren op datum: wanneer een set op je watchlist kwam en wanneer de laatste dealmelding binnenkwam.
+• Marktwaarde van BrickEconomy, één keer per dag per set.
+• Deze ticker! In te stellen bij Beheer → Instellingen → Ticker.
+• Meldingen bevatten nu altijd een directe link naar het product bij de goedkoopste winkel.
+• Bedragen met een komma (164,99) worden overal juist gelezen.
+
+Bijwerken: klik op de knop hieronder (HACS), zoek "LEGO Organizing Tool", kies "Bijwerken" en herstart Home Assistant.
+
+---
+id: 2026-10-03-update-en
+date: 2026-10-03
+lang: en
+title: UPDATE October 3! A new version is ready in HACS
+link: /hacs/dashboard
+
+A new version of LEGO Organizing Tool is ready.
+
+What's new?
+• Approve suspicious prices yourself (in the set, under Shops & jobs and in the logbook, with its own filter).
+• The userscript solves open errors by itself: it fetches the price in your browser and the error leaves the list.
+• The logbook shows how every price was read: ⌂ directly from the shop, ⓤ via your browser (userscript).
+• Sort by date: when a set came on your watchlist and when the latest deal notification came in.
+• Market value from BrickEconomy, once a day per set.
+• This ticker! Set it up under Manage → Settings → Ticker.
+• Notifications always contain a direct link to the product at the cheapest shop.
+• Amounts with a decimal comma (164,99) are read correctly everywhere.
+
+To update: click the button below (HACS), find "LEGO Organizing Tool", choose "Update" and restart Home Assistant.
+
+---
+id: 2026-10-03-userscript
+date: 2026-10-03
+lang: nl
+title: Tip: laat je eigen browser meehelpen met het userscript
+link: /lego-tracker
+
+Sommige winkels (bol.com, Amazon, Smyths, ...) blokkeren servers zoals Home Assistant, maar niet een gewone browser. Met het userscript haalt je eigen browser die prijzen op. Je hoeft er niets voor te doen: zolang Home Assistant open staat, werkt het rustig op de achtergrond.
+
+Wat doet het?
+• Het zoekt prijzen voor links die nog nooit een prijs hadden.
+• Het lost openstaande fouten op (Winkels & taken → Aanbiedingen zonder prijs).
+• Het zoekt winkels af voor sets die nog helemaal geen prijs hebben.
+• Het is rustig voor de winkels: hoogstens twee pagina's per minuut per winkel.
+
+Installeren in 5 minuten:
+1. Installeer Tampermonkey in je browser (Chrome, Edge, Firefox of Safari).
+2. Ga in LEGO Organizing Tool naar Beheer → Userscript en klik op "Userscript installeren". Tampermonkey vraagt of je het wilt installeren: klik op "Installeren".
+3. Maak een token: klik linksonder in Home Assistant op je naam → Beveiliging → "Langdurige toegangstokens" → "Token aanmaken". Kopieer het (je ziet het maar één keer).
+4. Klik op het Tampermonkey-icoon → "LEGO Price Tracker-instellingen" en plak het token.
+5. Ga terug naar Beheer → Userscript en klik op "Aanzetten in deze browser". Klaar!
+
+Prijzen die je browser ophaalde, krijgen het teken ⓤ. Op dezelfde pagina (Beheer → Userscript) staat de volledige handleiding met afbeeldingen van elke stap, en wat je doet als iets niet lukt.
+
+Klik op de knop hieronder om naar LEGO Organizing Tool te gaan.
+
+---
+id: 2026-10-03-userscript-en
+date: 2026-10-03
+lang: en
+title: Tip: let your own browser help with the userscript
+link: /lego-tracker
+
+Some shops (bol.com, Amazon, Smyths, ...) block servers like Home Assistant, but not a normal browser. With the userscript your own browser fetches those prices. You don't have to do anything: while Home Assistant is open, it works calmly in the background.
+
+What does it do?
+• It looks up prices for links that never had one.
+• It solves open errors (Shops & jobs → Offers without a price).
+• It searches the shops for sets that have no price at all yet.
+• It is gentle on the shops: at most two pages a minute per shop.
+
+Install in 5 minutes:
+1. Install Tampermonkey in your browser (Chrome, Edge, Firefox or Safari).
+2. In LEGO Organizing Tool go to Manage → Userscript and click "Install userscript". Tampermonkey asks whether to install it: click "Install".
+3. Create a token: click your name at the bottom left in Home Assistant → Security → "Long-lived access tokens" → "Create token". Copy it (you only see it once).
+4. Click the Tampermonkey icon → "LEGO Price Tracker settings" and paste the token.
+5. Go back to Manage → Userscript and click "Switch on in this browser". Done!
+
+Prices fetched by your browser get the mark ⓤ. The same page (Manage → Userscript) has the full guide, step by step, and what to do when something doesn't work.
+
+Click the button below to go to LEGO Organizing Tool.
+
+---
+id: 2026-10-03-beta
+date: 2026-10-02
+lang: nl
+title: Bedankt, BETA-testers! Help ons met zoveel mogelijk info
+
+Een dikke merci aan iedereen die LEGO Organizing Tool test! Dankzij jullie meldingen wordt de tool elke week beter.
+
+Zie je iets wat niet klopt (een verkeerde prijs, een foute link, een winkel die nooit werkt)? Geef het door, met zoveel mogelijk info. Zo doe je dat:
+
+1. Open de set waar het misgaat en klik op "Probleem met deze set". Vink aan wat er mis is (link, prijs, winkel, ...), duid de winkel(s) aan en schrijf kort wat je zag of verwachtte.
+2. Klik op "In het logboek schrijven" en daarna op "Downloaden als CSV". In het bestand staat alles wat de tool over die set weet: links, prijzen, fouten en het recente logboek.
+3. Werkt een winkel helemaal niet? Ga naar Logboek → Exporteren (CSV), kies de periode en de winkel, en download het bestand.
+4. Stuur de bestanden door, samen met een schermafbeelding als dat helpt, en vermeld de versie (staat bovenaan in het paneel, bv. v0.9.18).
+
+Hoe meer je meestuurt, hoe sneller het opgelost is. Bedankt!
+
+---
+id: 2026-10-03-beta-en
+date: 2026-10-02
+lang: en
+title: Thank you, BETA testers! Help us with as much info as possible
+
+A big thank you to everyone testing LEGO Organizing Tool! Thanks to your reports the tool gets better every week.
+
+See something that's wrong (a wrong price, a wrong link, a shop that never works)? Let us know, with as much info as possible. This is how:
+
+1. Open the set where it goes wrong and click "Problem with this set". Tick what is wrong (link, price, shop, ...), pick the shop(s) and write briefly what you saw or expected.
+2. Click "Write to the logbook" and then "Download as CSV". The file holds everything the tool knows about that set: links, prices, errors and the recent logbook.
+3. A shop doesn't work at all? Go to Logbook → Export (CSV), choose the period and the shop, and download the file.
+4. Send the files, with a screenshot if that helps, and mention the version (at the top of the panel, e.g. v0.9.18).
+
+The more you send, the faster it's fixed. Thank you!
