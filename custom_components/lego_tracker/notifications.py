@@ -225,7 +225,8 @@ class Notifier:
         """Return the selected notification offer's product URL, or None if unavailable."""
         return self.shop_offer(num, status)[2]
 
-    def shop_offer(self, num: str, status: dict[str, Any]) -> tuple[float | None, str | None, str | None]:
+    def shop_offer(self, num: str, status: dict[str, Any],
+                   shops: list[str] | None = None) -> tuple[float | None, str | None, str | None]:
         """The product page at the cheapest shop (never a comparison page or a search page when a real
         product link exists), so one tap opens the item where it is cheapest."""
         from .compare import is_compare_url
@@ -237,7 +238,7 @@ class Notifier:
             return selected
         offers = self.store["offers"].get(num, {})
         priced = sorted((o["last_price"], rid, o["url"]) for rid, o in offers.items()
-                        if o.get("available") and o.get("last_price") and o.get("url")
+                        if (not shops or rid in shops) and o.get("available") and o.get("last_price") and o.get("url")
                         and not is_compare_url(o["url"]) and not is_search_url(o["url"]))
         return priced[0] if priced else selected
 
@@ -255,7 +256,7 @@ class Notifier:
                     if self._cooled(f"{rule['id']}|{num}|{h[0]}", rule.get("cooldown_hours", 24))]
             if not hits:
                 continue
-            price, retailer, url = self.shop_offer(num, after)
+            price, retailer, url = self.shop_offer(num, after, rule["shops"])
             shop = RETAILERS.get(retailer, ("",))[0]
             title = f"🧱 {num} {s.get('name') or ''}".strip()
             message = tr("€{price} at {shop}", price=f"{price:.2f}", shop=shop) + ": " + ", ".join(h[1] for h in hits)

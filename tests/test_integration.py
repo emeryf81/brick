@@ -2044,3 +2044,31 @@ async def test_notification_offer_values_stay_together(
             assert expected_url in send.call_args.args[2]
         else:
             assert product_url not in send.call_args.args[2]
+
+
+@pytest.mark.parametrize("shops, expected_price, expected_retailer", [
+    ([], 39.99, "bol"),
+    (["amazon_nl"], 35.0, "amazon_nl"),
+    (["amazon_nl", "amazon_de"], 45.0, "amazon_de"),
+    (["amazon_nl", "amazon_de", "bol"], 39.99, "bol"),
+])
+async def test_notification_fallback_respects_rule_shops(
+    hass: HomeAssistant, entry, shops, expected_price, expected_retailer,
+):
+    from custom_components.lego_tracker.const import RETAILERS
+
+    c = await _setup(hass, entry)
+    await c.add_set("10281", name="Bonsai", rrp=100)
+    c.store["offers"]["10281"] = {
+        "amazon_nl": {"url": "https://www.amazon.nl/s?k=lego+10281", "available": True, "last_price": 35.0},
+        "bol": {"url": "https://www.bol.com/nl/nl/p/x/1/", "available": True, "last_price": 39.99},
+        "amazon_de": {"url": "https://www.amazon.de/dp/B012345678", "available": True, "last_price": 45.0},
+    }
+    c.async_set_updated_data(c.compute())
+    c.store["notify_rules"] = [_rule(triggers=["back_in_stock"], shops=shops)]
+    with patch.object(c.notifier, "send", new_callable=AsyncMock) as send:
+        await c.notifier.on_set_change("10281", {}, c.data["statuses"]["10281"])
+        assert send.call_count == 1
+        assert f"€{expected_price:.2f} at {RETAILERS[expected_retailer][0]}" in send.call_args.args[2]
+        assert send.call_args.kwargs["url"] == c.store["offers"]["10281"][expected_retailer]["url"]
+        assert send.call_args.kwargs["data"]["price"] == expected_price
