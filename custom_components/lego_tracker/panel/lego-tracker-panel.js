@@ -516,6 +516,7 @@ class LegoTrackerPanel extends HTMLElement {
       this.state.data = d; this.state.coll = c; this.state.err = null; this.state.mAt = Date.now() / 1000;
       if (this.state.threshold == null) this.state.threshold = d.threshold;
       this.state.job = d.job; if (d.job && d.job.running) this.pollJob();
+      if ((d.first_checks || []).length) this.followFirstChecks();
       if (!this._tickerAt || Date.now() - this._tickerAt > 300000) this.loadTicker();
     } catch (e) { this.state.err = e.message || String(e); }
     this.render(animate || !this._rendered);
@@ -725,6 +726,24 @@ class LegoTrackerPanel extends HTMLElement {
       }
     };
     this._poll = setTimeout(tick, 1200);
+  }
+  /** Sets just added get their first prices in the background: look every few seconds and show them when they are in. */
+  followFirstChecks() {
+    if (this._fcPoll) return;
+    let left = (this.state.data && this.state.data.first_checks) || [], tries = 0;
+    const tick = async () => {                            // _fcPoll stays set while a tick runs: load() below starts no second loop
+      if (!this.isConnected) { this._fcPoll = null; return; }
+      let info; try { info = await this._hass.callWS({ type: "lego_tracker/job" }); } catch (e) { this._fcPoll = null; return; }
+      const now = info.first_checks || [], done = left.filter((n) => !now.includes(n));
+      const dlg = this.shadowRoot.getElementById("dlg"), typing = this.shadowRoot.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(this.shadowRoot.activeElement.tagName);
+      if (done.length && !typing) {
+        left = now;
+        await this.load();
+        if (dlg && dlg.open && done.includes(this._dlgNum)) this.openSet(this._dlgNum);
+      } else if (!done.length) left = now;                 // also follow sets added in the meantime
+      this._fcPoll = (left.length || done.length) && ++tries < 100 ? setTimeout(tick, 3000) : null;
+    };
+    this._fcPoll = setTimeout(tick, 3000);
   }
   renderJob() {
     const box = this.shadowRoot.getElementById("jobbar"); if (!box) return;
@@ -1264,7 +1283,7 @@ class LegoTrackerPanel extends HTMLElement {
     const L = this.state.logv, checks = this.state.sub.log === "checks", sc = this.state.data.schedule || {};
     if (!L.data && !L.err) this.loadLog();
     const d = L.data, f = d ? d.facets : { kind: {}, retailer: {}, source: {} }, kinds = d ? d.kinds : {};
-    const srcLabel = { server: "Server", schedule: "Schedule (automatic)", panel: "Panel (you)", userscript: "Tampermonkey userscript", import: "Import" };
+    const srcLabel = { server: "Server", schedule: "Schedule (automatic)", panel: "Panel (you)", userscript: "Tampermonkey userscript", import: "Import", added: "Just added (first check)" };
     const opt = (list, cur, all) => `<option value="">${all}</option>` + list.map(([v, l, n]) => `<option value="${esc(v)}" ${cur === v ? "selected" : ""}>${esc(l)}${n != null ? ` (${n})` : ""}</option>`).join("");
     const st = (v, l, cls) => `<span class="chip ${L.status === v ? "on" : ""} ${cls}" data-lstat="${v}">${l}</span>`;
     const errs = this.errorRows().length;
@@ -1838,7 +1857,7 @@ class LegoTrackerPanel extends HTMLElement {
         await this.svc("add_set", d);
         const extra = {}; if (v("a_prio") && +v("a_prio")) extra.priority = +v("a_prio"); if (v("a_cond")) extra.condition = v("a_cond"); if (v("a_loc")) extra.location = v("a_loc");
         if (Object.keys(extra).length) await this._hass.callWS({ type: "lego_tracker/update_set", set_number: n, fields: extra });
-        s.addPrefill = null; await this.load(); this.toast(t("Set {number} added", { number: n }), "ok"); this.openSet(n);
+        s.addPrefill = null; await this.load(); this.toast(t("Set {number} added: its first prices are being fetched", { number: n }), "ok"); this.openSet(n);
       });
     });
     const bulk = $("bulk"); if (bulk) bulk.addEventListener("input", () => { const ns = [...new Set(bulk.value.match(/\d{3,7}/g) || [])], known = ns.filter((n) => this.sets.some((x) => x.set_number === n)).length; $("bulk_hint").textContent = ns.length ? t(ns.length > 1 ? "{n} set numbers recognised" : "{n} set number recognised", { n: ns.length }) + (known ? ", " + t("{n} already tracked", { n: known }) : "") : ""; });
@@ -2383,6 +2402,7 @@ class LegoTrackerPanel extends HTMLElement {
   closeDialog(instant = false) { this._dlgGen = (this._dlgGen || 0) + 1; clearInterval(this._shopTimer); const d = this.shadowRoot.getElementById("dlg"); if (!d || !d.open) return; if (instant || REDUCED) { d.close(); return; } d.classList.add("closing"); setTimeout(() => { d.classList.remove("closing"); d.close(); }, 170); }
   async openSet(num, focusShop = null) {
     const gen = (this._dlgGen = (this._dlgGen || 0) + 1);
+    this._dlgNum = num;
     clearInterval(this._shopTimer);
     const dlg = this.shadowRoot.getElementById("dlg");
     if (!dlg.open) { dlg.innerHTML = `<div class="dbody"><div class="skel" style="height:110px;margin-bottom:12px"></div><div class="skel" style="height:240px"></div></div>`; dlg.showModal(); }

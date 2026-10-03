@@ -38,6 +38,16 @@ def no_manual_gap():
 
 
 @pytest.fixture(autouse=True)
+def no_first_check(request):
+    """Most tests count every fetch: the first check right after adding a set only runs where a test asks for it."""
+    if request.node.get_closest_marker("first_check"):
+        yield
+        return
+    with patch("custom_components.lego_tracker.coordinator.LegoCoordinator.queue_first_check"):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def no_catalogue():
     """Tests use real set numbers: without this the built-in catalogue would fill them in."""
     from custom_components.lego_tracker import catalog
@@ -2281,3 +2291,55 @@ def test_news_body_without_empty_line_and_other_line_ends():
     c = news.parse("# comment\rtitle: Z\r\rMac line ends")
     assert a[0]["body"] == "De tekst.\nTweede regel." and a[0]["link"] == "/hacs/dashboard"
     assert b[0]["body"] == "Eerste regel\nTweede" and c[0]["body"] == "Mac line ends"
+
+
+@pytest.mark.first_check
+async def test_new_set_gets_prices_and_market_value_right_away(hass: HomeAssistant, entry, no_network):
+    """A set that was never checked is fetched right after adding (one set at a time), with its market value;
+    adding it again or a set that already has prices does not start another check."""
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][entry.entry_id]
+    order = []
+
+    async def compare(num, refresh=False, force=False, retry_missing=False, sources=None):
+        order.append(("compare", num, tuple(sources or ())))
+        return {}
+
+    async def discover(retailer, num, force=False, url=None):
+        return f"https://www.amazon.nl/dp/B0{num}0" if retailer == "amazon_nl" else None
+
+    with patch.object(c.fetcher, "discover", discover), patch.object(c, "compare_refresh", side_effect=compare):
+        await c.add_set("10281")
+        await c.add_set("42143")
+        await hass.async_block_till_done(wait_background_tasks=True)
+    linked = sum(len(c.store["offers"][n]) for n in ("10281", "42143"))
+    assert linked == 2 and no_network.await_count == 2      # the linked shop of both sets, right away
+    assert [x[1] for x in order] == ["10281", "42143"]       # one after the other, in the order they were added
+    for num in ("10281", "42143"):
+        assert c.store["offers"][num]["amazon_nl"].get("last_checked")
+        assert any(e["kind"] == "check" and e.get("set_number") == num and e.get("source") == "added"
+                   for e in c.store["activity"])
+    assert not c._first_busy and not c._first_checks and c.job_info()["first_checks"] == []
+
+    no_network.reset_mock()
+    order.clear()
+    await c.add_set("10281")                                  # already has prices: no extra check
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert no_network.await_count == 0 and not order
+
+    # comparison sites switched off: the market value is still fetched for a new set
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "compare_sites": False})
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][entry.entry_id]
+    with patch.object(c.fetcher, "discover", AsyncMock(return_value=None)), \
+         patch.object(c, "compare_refresh", side_effect=compare):
+        await c.add_set("21028")
+        await hass.async_block_till_done(wait_background_tasks=True)
+    assert order == [("compare", "21028", ("brickeconomy",))]
+
+    # a set removed while waiting is skipped
+    c._first_checks.extend(["99999"])
+    c._first_busy = True
+    await c._run_first_checks()
+    assert not c._first_busy and not c._first_checks

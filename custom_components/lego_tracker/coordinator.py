@@ -74,6 +74,9 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._compare_fallback: dict[tuple[str, str], Any] = {}   # prices on a search page, used when its product page fails
         self._no_follow: dict[str, float] = {}                     # site -> until when its product pages are skipped (403)
         self._compare_retry_unsub: Callable[[], None] | None = None
+        self._first_checks: list[str] = []                         # sets just added, waiting for their first prices
+        self._first_busy = False
+        self._first_current: str | None = None
         def _paused(rid: str, hours: float) -> None:
             if rid in compare.SOURCES:
                 self.log("error", "shop", T("{shop} blocked us: paused for {hours} h", shop=compare.SOURCES[rid][0], hours=hours),
@@ -466,7 +469,12 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def job_info(self) -> dict[str, Any]:
         return {"job": dict(self.job) if self.job else None, "last": self.last_job,
                 "paused": {RETAILERS[r][0]: h for r, h in self.fetcher.paused().items() if r in RETAILERS},
-                "schedule": self.schedule_info()}
+                "schedule": self.schedule_info(), "first_checks": self.first_checks}
+
+    @property
+    def first_checks(self) -> list[str]:
+        """Sets just added that are still waiting for (or getting) their first prices."""
+        return ([self._first_current] if self._first_current else []) + list(self._first_checks)
 
     @property
     def job_running(self) -> bool:
@@ -2142,8 +2150,40 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.store["collection"][num] = owned
         if discover:
             await self.discover_set(num)
+            self.queue_first_check(num)
         self.push_update()
         return num
+
+    def queue_first_check(self, num: str) -> None:
+        """A set that was never checked gets its prices and market value right after it is added, instead of
+        waiting for the next round. Sets are checked one after the other, so a bulk add stays polite."""
+        offers = self.store["offers"].get(num, {})
+        if num in self._first_checks or any(o.get("last_checked") for o in offers.values()):
+            return
+        self._first_checks.append(num)
+        if not self._first_busy:
+            self._first_busy = True
+            self.entry.async_create_background_task(self.hass, self._run_first_checks(), f"{DOMAIN}_first_check")
+
+    async def _run_first_checks(self) -> None:
+        """Work through the sets waiting for their first check; always release the busy flag."""
+        try:
+            while self._first_checks:
+                num = self._first_checks.pop(0)
+                if num not in self.store["sets"]:
+                    continue                                       # removed again in the meantime
+                self._first_current = num
+                try:
+                    await self.refresh_set(num, source="added")
+                    if not self.compare_enabled and self.market_enabled:   # refresh_set already did it otherwise
+                        await self.compare_refresh(num, sources=["brickeconomy"])
+                except Exception:  # noqa: BLE001 - the regular rounds try again
+                    _LOGGER.exception("first check failed for %s", num)
+                self._first_current = None
+                self._save()
+                self.push_update()
+        finally:
+            self._first_busy, self._first_current = False, None
 
     def _fill_from_setdb(self, num: str, s: dict[str, Any]) -> bool:
         """Empty fields of a set from the LEGO set database (no network). Values already there win."""
