@@ -19,12 +19,12 @@ from homeassistant.helpers.event import async_call_later, async_track_time_chang
 from homeassistant.util import dt as dt_util
 
 from .const import (
-    BUILTIN_RETAILERS, CONF_DIGEST_TIME, CONF_KNOWN_SHOPS, DEFAULT_DIGEST_TIME, DEFAULT_RETAILERS, DOMAIN, EVENT_DIGEST, PANEL_ELEMENT, PANEL_URL, RETAILERS,
+    BUILTIN_RETAILERS, CONF_DIGEST_TIME, CONF_KNOWN_SHOPS, DEFAULT_DIGEST_TIME, DEFAULT_RETAILERS, DOMAIN, EVENT_DIGEST, GENERIC_SHOPS, PANEL_ELEMENT, PANEL_URL, RETAILERS,
     STATIC_URL,
 )
 from .coordinator import LegoCoordinator
 from .i18n import T
-from .shops import apply_shop_options
+from .shops import apply_shop_options, domain_of
 from .csv_import import analyze_csv, apply_import, importable_rows
 from .models import normalize_set_number
 from .websocket_api import async_register_websocket
@@ -118,7 +118,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     known = set(entry.options.get(CONF_KNOWN_SHOPS) or ("amazon_nl", "amazon_de", "amazon_be", "bol", "kruidvat_be"))
     if new_shops := [r for r in BUILTIN_RETAILERS if r not in known]:
         enabled = list(entry.options.get("retailers", DEFAULT_RETAILERS))
-        enabled += [r for r in new_shops if r not in enabled]
+        # a shop you already added yourself (same domain) stays yours: the built-in one is not switched on next to it
+        own = {g["domain"] for rid, g in GENERIC_SHOPS.items() if rid not in BUILTIN_RETAILERS}
+        enabled += [r for r in new_shops if r not in enabled and domain_of(r) not in own]
         hass.config_entries.async_update_entry(
             entry, options={**entry.options, "retailers": enabled, CONF_KNOWN_SHOPS: list(BUILTIN_RETAILERS)})
     coord = LegoCoordinator(hass, entry)

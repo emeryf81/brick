@@ -50,7 +50,7 @@ SHOP_ALIASES = (
     ("amazon.nl", "amazon_nl"), ("amazon nl", "amazon_nl"), ("amazon nederland", "amazon_nl"),
     ("amazon.de", "amazon_de"), ("amazon de", "amazon_de"), ("amazon duitsland", "amazon_de"),
     ("bol.com", "bol"), ("bol", "bol"), ("lego.com", "lego_com"), ("lego shop", "lego_com"), ("lego store", "lego_com"),
-    ("lego", "lego_com"), ("kruidvat", "kruidvat_be"), ("dreamland", "dreamland_be"),
+    ("lego", "lego_com"), ("kruidvat", "kruidvat_be"), ("dreamland", "dreamland_be"), ("smyths", "smyths_be"), ("smythstoys", "smyths_be"),
 )
 
 

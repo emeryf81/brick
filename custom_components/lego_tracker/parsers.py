@@ -481,7 +481,28 @@ def _generic_result(page: str, domain: str, set_number: str) -> str | None:
     """Any shop: links on the shop's own domain whose link text or URL passes the title check;
     otherwise the product tile around a link that mentions the set number (shops like Smyths Toys
     link to /p/<their own code> and put the set number elsewhere in the tile)."""
-    return _generic_link(page, domain, set_number) or _generic_tile(page, domain, set_number)
+    return _generic_link(page, domain, set_number) or _generic_tile(page, domain, set_number) \
+        or _generic_url_text(page, domain, set_number)
+
+
+def _generic_url_text(page: str, domain: str, set_number: str) -> str | None:
+    """A product URL of the shop anywhere in the page, also in the page's own data (JSON, with escaped
+    slashes): shops that build the page with JavaScript (e.g. Smyths Toys) often have the product's
+    address only there. The URL itself must name the set (its slug) and pass the title check."""
+    text = page.replace("\\u002F", "/").replace("\\/", "/")
+    num = re.compile(rf"(?<!\d){re.escape(set_number)}(?!\d)")
+    # the shop's own absolute URLs, or paths that start a string (not the path of a link to another site)
+    for m in re.finditer(rf'(?:https?://(?:www\.)?{re.escape(domain)}|(?<![\w.:/%-]))(/[A-Za-z0-9._~%-][A-Za-z0-9._~%/-]{{5,300}})', text):
+        url = m.group(0) if m.group(0).startswith("http") else f"https://www.{domain}{m.group(1)}"
+        path = urlparse(url).path
+        low = path.lower()
+        if not num.search(path) or NAV_PATH_RE.search(path) or any(w in low for w in ("search", "zoek", "/c/", "/cart", "/login")) \
+                or low.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg", ".css", ".js", ".pdf", ".json")):
+            continue
+        words = re.sub(r"[-/_]+", " ", path)
+        if title_check(words if "lego" in words.lower() else f"lego {words}", set_number)[0] == "ok":
+            return url
+    return None
 
 
 # links inside a product tile that are not another product (cart, wishlist, compare, reviews, account)

@@ -2494,3 +2494,43 @@ async def test_catalog_deal_notification_rule(hass: HomeAssistant, entry, no_net
     await c.notifier.on_catalog_deal("76300", {"price": 70.0, "shop": "bol", "url": "https://www.bol.com/p/1", "rrp": 100.0, "deal": 30.0})
     assert len(sent) == 1 and sent[0][0] == "a" and "76300" in sent[0][1] and "70.00" in sent[0][2] and "30%" in sent[0][2]
     assert sent[0][3] == "https://www.bol.com/p/1"
+
+
+async def test_smyths_toys_built_in(hass: HomeAssistant, no_network):
+    """Smyths Toys is a built-in shop: the search for the bare set number jumps to the product page, whose
+    standard product data gives the price; a product URL in the page's own data is found too. A Smyths
+    shop you added yourself stays yours: the built-in one is not switched on next to it."""
+    from custom_components.lego_tracker import compare
+    from custom_components.lego_tracker.client import Fetcher
+    from custom_components.lego_tracker.parsers import find_search_result, parse_page, search_url
+    from custom_components.lego_tracker.shops import all_domains
+
+    product = "https://www.smythstoys.com/be/nl-be/speelgoed/lego/lego-botanicals/lego-botanicals-11504-lepelplant-set/p/253664"
+    page = ('<html><head><title>LEGO Botanicals 11504 Lepelplant Set | Smyths Toys België</title>'
+            '<meta property="og:price:amount" content="37.99"><meta property="og:price:currency" content="EUR">'
+            '<meta property="og:title" content="LEGO Botanicals 11504 Lepelplant Set | Smyths Toys België">'
+            f'<meta property="og:url" content="{product}"></head></html>')
+    assert search_url("smyths_be", "11504") == "https://www.smythstoys.com/be/nl-be/search?text=11504"
+    p = parse_page("smyths_be", page, "11504")
+    assert p.price == 37.99 and "11504" in p.title
+    f = Fetcher(None, use_impersonation=False)
+    f.final_url["smyths_be"] = product
+    assert f._landed_on_product("smyths_be", search_url("smyths_be", "11504"), page, "11504") == product
+    payload = '<script id="__NUXT_DATA__">["' + product.replace("https://www.smythstoys.com", "").replace("/", "\\/") + '"]</script>'
+    assert find_search_result("smyths_be", payload, "11504") == product
+    assert find_search_result("smyths_be", payload.replace("11504", "11505"), "11504") is None
+    assert compare.shop_retailer("Smyths Toys", None, all_domains()) == "smyths_be"
+
+    async def setup(options):
+        e = MockConfigEntry(domain=DOMAIN, data={}, options=options)
+        e.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(e.entry_id)
+        await hass.async_block_till_done()
+        enabled = list(e.options["retailers"])
+        assert await hass.config_entries.async_unload(e.entry_id)
+        return enabled
+    base = {"retailers": ["bol"], "known_shops": ["amazon_nl", "amazon_de", "amazon_be", "bol", "kruidvat_be", "lego_com", "dreamland_be"]}
+    assert "smyths_be" in await setup(dict(base))
+    own = {**base, "custom_shops": [{"id": "c_smyths", "name": "Smyths", "domain": "smythstoys.com",
+                                     "search": "https://www.smythstoys.com/be/nl-be/search?text={query}"}], "retailers": ["bol", "c_smyths"]}
+    assert "smyths_be" not in (r := await setup(own)) and "c_smyths" in r
