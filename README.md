@@ -63,7 +63,7 @@ The integration keeps a database of **every LEGO set there is** (number, name, y
 - **Notification**: the trigger *New LEGO set announced* (Manage → Notifications) sends one message per download with the new sets; a rule for certain themes only hears about those themes, and themes switched off under *Deals → Settings* never notify.
 
 ## Deals on every LEGO set
-Also sets you don't follow are looked up for deals. *Deals → All LEGO sets* shows the whole database: search by name or number, filter on theme and status, and sort by biggest discount, newest, lowest price or name. **W** puts a set on your watchlist and **＋** opens the add form for your collection; from then on all its shops are followed.
+Also sets you don't follow are looked up for deals. *Deals → All LEGO sets* shows the whole database and is the place to browse for sets: type a number or part of the name (suggestions appear while you type), filter on theme, year and status, and sort by biggest discount, newest, lowest price or name. *Manage → Add* links to it. **W** puts a set on your watchlist and **＋** opens the add form for your collection; from then on all its shops are followed.
 - **Which sets**: sets released this year and in the three years before that are not retired and that you don't follow yet. Themes, prices and piece limits from *Deals → Settings* apply.
 - **How**: one set at a time, spread over the day, on one of the price-comparison sites (one page lists the prices of many shops). Only shops LOT knows count, and a price below a quarter of the RRP is ignored (a part or a sticker, not the set). How many sets are looked up per day is set under *Deals → Settings* (off, 100, 300 (default), 600 or 1000). A set that no shop sells is looked up only every 14 days after three tries. It needs the price-comparison sites to be on.
 - **Retired sets**: whether a set is retired is checked on its market value page when it is first looked up and then every 30 days. Retired sets are no longer looked up for prices and show as *Retired* with the year.
@@ -128,6 +128,9 @@ The **📜 Logbook** section (top level, next to your collection) keeps the last
 
 Filters: ✓ succeeded / ✕ failed / ⚠ suspicious prices, errors & warnings / events, kind, shop, source (server, schedule, panel, userscript, import), set number and free text / link. Identical consecutive messages are merged (×count). Click a line for details and the result per shop; for a problem you can enter the correct link and/or price right there (**Fix**), try again, ignore it or remove the link. The set dialog has a 📜 button that opens the logbook filtered on that set, and the shop cards link to their failed checks.
 
+
+### Progress of the open errors
+*Logbook → Open errors* starts with **Progress**: how many errors were solved (a price came in, a link was fixed or found) and how many new ones came in today, in the last 7 days and in the last 30 days, with a chart per day, week or month (solved in green, new in red). Click a block to see which sets were solved (with the shop and how long the error was open) or which errors are new; click a set to open it. Counting starts when you install this version; removing a set doesn't count as solving its errors.
 ## Sold out or no longer sold
 When a shop page has no price and says why — sold out, not in stock, no longer sold, out of the range (in Dutch, English, German, French or Spanish, or in the page's structured product data) — that is a **warning, not an error**: the logbook says it once with the reason (⚠ *sold out* or ⚠ *no longer sold*), the shop table of the set shows it, and it is not in *Open errors* (there is nothing to fix). As soon as the shop has a price again, the warning goes away.
 

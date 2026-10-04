@@ -2535,14 +2535,14 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.hass.async_create_task(self.notifier.on_catalog_deal(num, dict(e)))
 
     def catalog(self, q: str = "", theme: str = "", status: str = "", sort: str = "deal", offset: int = 0,
-                limit: int = 120) -> dict[str, Any]:
+                limit: int = 120, year: int = 0) -> dict[str, Any]:
         """Deals → All LEGO sets: the whole set database with what is known about each set: followed by you,
         a deal, for sale, retired or not looked up yet."""
         statuses = (self.data or self.compute())["statuses"]
         words = q.strip().lower().split()
         rows = []
         for num, row in self.setdb.items():
-            if theme and row[setdb.THEME] != theme:
+            if (theme and row[setdb.THEME] != theme) or (year and row[setdb.YEAR] != year):
                 continue
             if words and not all(w in f"{num} {row[setdb.NAME]} {row[setdb.THEME]} {row[setdb.SUB]}".lower() for w in words):
                 continue
@@ -2575,6 +2575,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             k = scan.status(e)
             counts[k] = counts.get(k, 0) + 1
         return {"items": items, "total": len(rows), "count": len(self.setdb), "themes": sorted({r[setdb.THEME] for r in self.setdb.values() if r[setdb.THEME]}),
+                "years": sorted({r[setdb.YEAR] for r in self.setdb.values() if r[setdb.YEAR]}, reverse=True),
                 "scan": {"per_day": self.scan_per_day, "candidates": len(self.scan_candidates()), "looked_up": sum(1 for e in self.scan.values() if e.get("ts")),
                          "counts": counts, "today": self.scan_info["today"] if self.scan_info["day"] == dt_util.now().date().isoformat() else 0,
                          "error": self.scan_info["error"], "compare": self.compare_enabled, "market": self.market_enabled,

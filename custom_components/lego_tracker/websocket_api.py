@@ -810,7 +810,8 @@ def ws_error_stats(hass, connection, msg):
                                   vol.Optional("status", default=""): vol.In(["", "deal", "sale", "none", "unknown", "retired", "followed"]),
                                   vol.Optional("sort", default="deal"): vol.In(["deal", "new", "price", "name"]),
                                   vol.Optional("offset", default=0): vol.All(int, vol.Range(min=0, max=100000)),
-                                  vol.Optional("limit", default=120): vol.All(int, vol.Range(min=1, max=500))})
+                                  vol.Optional("limit", default=120): vol.All(int, vol.Range(min=1, max=500)),
+                                  vol.Optional("year", default=0): vol.All(int, vol.Range(min=0, max=2100))})
 @callback
 def ws_catalog(hass, connection, msg):
     """Deals → All LEGO sets: the whole set database with prices, deals and retirement."""
@@ -818,7 +819,8 @@ def ws_catalog(hass, connection, msg):
     if coord is None:
         connection.send_result(msg["id"], {"items": [], "total": 0, "count": 0, "themes": [], "scan": {}})
         return
-    connection.send_result(msg["id"], coord.catalog(msg["q"], msg["theme"], msg["status"], msg["sort"], msg["offset"], msg["limit"]))
+    connection.send_result(msg["id"], coord.catalog(msg["q"], msg["theme"], msg["status"], msg["sort"], msg["offset"], msg["limit"],
+                                                    msg["year"]))
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/setdb/search", vol.Required("q"): vol.All(str, vol.Length(max=80)),

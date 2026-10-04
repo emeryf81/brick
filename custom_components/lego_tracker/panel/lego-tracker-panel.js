@@ -1009,20 +1009,39 @@ class LegoTrackerPanel extends HTMLElement {
   }
   /** Deals → All LEGO sets: the whole set database (searched on the server), with prices, deals and retirement. */
   vCatalog() {
-    const C = this.state.cat || (this.state.cat = { q: "", theme: "", status: "", sort: "deal", limit: 120 });
-    const key = JSON.stringify([C.q, C.theme, C.status, C.sort, C.limit]);
+    const C = this.state.cat || (this.state.cat = { q: "", theme: "", status: "", sort: "deal", limit: 120, year: 0 });
+    const key = JSON.stringify([C.q, C.theme, C.status, C.sort, C.limit, C.year]);
     if (!C.r || C.key !== key || Date.now() - C.at > 120000) {
       if (C.loading !== key) {
         C.loading = key;
         const here = () => this.state.section === "deals" && this.state.sub.deals === "lego";
-        this._hass.callWS({ type: "lego_tracker/catalog", q: C.q, theme: C.theme, status: C.status, sort: C.sort, limit: C.limit })
-          .then((r) => { if (C.loading !== key) return; C.r = r; C.key = key; C.at = Date.now(); C.err = null; C.loading = null; if (here()) this.renderContent(); })
+        this._hass.callWS({ type: "lego_tracker/catalog", q: C.q, theme: C.theme, status: C.status, sort: C.sort, limit: C.limit, year: +C.year || 0 })
+          .then((r) => { if (C.loading !== key) return; C.r = r; C.key = key; C.at = Date.now(); C.err = null; C.loading = null; if (here()) this.catalogRefresh(); })
           .catch((e) => { if (C.loading !== key) return; C.err = e.message; C.r = C.r || { items: [], total: 0, count: 0, themes: [], scan: {} }; C.key = key; C.at = Date.now(); C.loading = null; if (here()) this.renderContent(); });
       }
       if (!C.r) return `<div class="skel" style="height:300px"></div>`;
     }
     const r = C.r, S = r.scan || {}, n = S.counts || {};
-    const stLabel = { deal: "🏷️ " + t("Deal"), sale: "🛒 " + t("In the shops"), none: "∅ " + t("No shop found"), unknown: "… " + t("Not looked up yet"), retired: "🏁 " + t("Retired"), followed: "👁 " + t("You follow this set") };
+    const stLabel = this.catalogLabels();
+    const opt = (v, label, cur) => `<option value="${v}" ${v === cur ? "selected" : ""}>${esc(label)}</option>`;
+    const scanTxt = !S.per_day ? t("Looking up deals on every set is switched off (Deals → Settings).")
+      : !S.compare ? t("Looking up deals on every set needs the price-comparison sites (Manage → Settings).")
+      : t("Every day {n} sets of the database are looked up on a comparison site, spread over the day. {done} of {total} sets that may still be in the shops have been looked up; {today} pages today.", { n: S.per_day, done: (S.looked_up || 0).toLocaleString(LOC), total: (S.candidates || 0).toLocaleString(LOC), today: S.today || 0 });
+    return `<div class="panel"><p style="margin:0">${t("Every LEGO set there is. Sets of the last few years that are not retired are looked up now and then for deals, also when you don't follow them; retired sets are left out (checked again every month). Add a set to your watchlist (W) or collection (＋) to follow all its shops.")}</p>
+        <p class="muted" style="font-size:12px;margin:6px 0 0">${esc(t("LEGO set database: {n} sets", { n: (r.count || 0).toLocaleString(LOC) }))} · ${esc(scanTxt)}${S.error ? ` · <span class="warn">${esc(tx(S.error))}</span>` : ""}${C.err ? ` · <span class="warn">${esc(tx(C.err))}</span>` : ""}</p>
+        <p class="muted" style="font-size:12px;margin:4px 0 0">🏷️ ${t("{n} deals", { n: n.deal || 0 })} · 🛒 ${t("{n} in the shops", { n: n.sale || 0 })} · 🏁 ${t("{n} retired", { n: n.retired || 0 })} · ∅ ${t("{n} without shop", { n: n.none || 0 })}</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><input id="cg_q" list="cg_sugg" autocomplete="off" placeholder="${t("Number or part of the name")}" value="${esc(C.q)}" style="max-width:260px"><datalist id="cg_sugg"></datalist>
+          <select id="cg_yr" aria-label="${t("Year")}"><option value="0">${t("Every year")}</option>${(r.years || []).map((y) => `<option value="${y}" ${y === +C.year ? "selected" : ""}>${y}</option>`).join("")}</select>
+          <select id="cg_th" aria-label="${t("Theme")}"><option value="">${t("All themes")}</option>${(r.themes || []).map((x) => `<option ${x === C.theme ? "selected" : ""}>${esc(x)}</option>`).join("")}</select>
+          <select id="cg_st" aria-label="${t("Status")}">${opt("", t("Every status"), C.status)}${["deal", "sale", "none", "unknown", "retired", "followed"].map((k) => opt(k, stLabel[k], C.status)).join("")}</select>
+          <select id="cg_so" aria-label="${t("Sort")}">${opt("deal", t("Biggest discount"), C.sort)}${opt("new", t("Newest"), C.sort)}${opt("price", t("Lowest price"), C.sort)}${opt("name", t("Name"), C.sort)}</select></div>
+        <p class="muted" style="font-size:12px;margin:6px 0 0" id="cg_n">${t("{n} sets found", { n: (r.total || 0).toLocaleString(LOC) })}</p></div>
+      <div id="cg_res">${this.catalogResults(r)}</div>`;
+  }
+  /** The result cards of Deals → All LEGO sets (replaced on their own while you type in the search field). */
+  catalogResults(r) {
+    const S = r.scan || {};
+    const stLabel = this.catalogLabels();
     const card = (x) => {
       const btns = `<div class="cbtns">${x.watched ? "" : `<button class="cbtn" data-stop data-cwatch2="${esc(x.set_number)}" title="${esc(t("Add to watchlist"))}" aria-label="${esc(t("Add to watchlist"))}">W</button>`}${x.owned ? "" : `<button class="cbtn" data-stop data-cown2="${esc(x.set_number)}" title="${esc(t("Add to my collection"))}" aria-label="${esc(t("Add to my collection"))}">＋</button>`}</div>`;
       const link = x.url && /^https:\/\//.test(x.url) ? `<a href="${esc(x.url)}" target="_blank" rel="noopener" data-stop>${esc(x.shop || t("shop"))} ↗</a>` : esc(x.shop || "");
@@ -1033,26 +1052,44 @@ class LegoTrackerPanel extends HTMLElement {
         <div class="n">${esc(x.name || x.set_number)}</div><div class="m">${esc(x.set_number)}${x.theme ? " · " + esc(x.theme) : ""}${x.year ? " · " + esc(x.year) : ""}</div>
         ${price}<div class="m muted">${st}${rrp}${x.checked && !x.tracked ? " · " + esc(ago(x.checked)) : ""}</div></div>`;
     };
-    const opt = (v, label, cur) => `<option value="${v}" ${v === cur ? "selected" : ""}>${esc(label)}</option>`;
-    const scanTxt = !S.per_day ? t("Looking up deals on every set is switched off (Deals → Settings).")
-      : !S.compare ? t("Looking up deals on every set needs the price-comparison sites (Manage → Settings).")
-      : t("Every day {n} sets of the database are looked up on a comparison site, spread over the day. {done} of {total} sets that may still be in the shops have been looked up; {today} pages today.", { n: S.per_day, done: (S.looked_up || 0).toLocaleString(LOC), total: (S.candidates || 0).toLocaleString(LOC), today: S.today || 0 });
-    return `<div class="panel"><p style="margin:0">${t("Every LEGO set there is. Sets of the last few years that are not retired are looked up now and then for deals, also when you don't follow them; retired sets are left out (checked again every month). Add a set to your watchlist (W) or collection (＋) to follow all its shops.")}</p>
-        <p class="muted" style="font-size:12px;margin:6px 0 0">${esc(t("LEGO set database: {n} sets", { n: (r.count || 0).toLocaleString(LOC) }))} · ${esc(scanTxt)}${S.error ? ` · <span class="warn">${esc(tx(S.error))}</span>` : ""}${C.err ? ` · <span class="warn">${esc(tx(C.err))}</span>` : ""}</p>
-        <p class="muted" style="font-size:12px;margin:4px 0 0">🏷️ ${t("{n} deals", { n: n.deal || 0 })} · 🛒 ${t("{n} in the shops", { n: n.sale || 0 })} · 🏁 ${t("{n} retired", { n: n.retired || 0 })} · ∅ ${t("{n} without shop", { n: n.none || 0 })}</p>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><input id="cg_q" placeholder="${t("Search a set")}" value="${esc(C.q)}" style="max-width:240px">
-          <select id="cg_th" aria-label="${t("Theme")}"><option value="">${t("All themes")}</option>${(r.themes || []).map((x) => `<option ${x === C.theme ? "selected" : ""}>${esc(x)}</option>`).join("")}</select>
-          <select id="cg_st" aria-label="${t("Status")}">${opt("", t("Every status"), C.status)}${["deal", "sale", "none", "unknown", "retired", "followed"].map((k) => opt(k, stLabel[k], C.status)).join("")}</select>
-          <select id="cg_so" aria-label="${t("Sort")}">${opt("deal", t("Biggest discount"), C.sort)}${opt("new", t("Newest"), C.sort)}${opt("price", t("Lowest price"), C.sort)}${opt("name", t("Name"), C.sort)}</select></div>
-        <p class="muted" style="font-size:12px;margin:6px 0 0">${t("{n} sets found", { n: (r.total || 0).toLocaleString(LOC) })}</p></div>
-      ${r.items.length ? `<div class="grid">${r.items.map(card).join("")}</div>${r.total > r.items.length ? `<div style="text-align:center;margin:14px"><button class="btn ghost" id="cg_more">${t("Show more")}</button></div>` : ""}`
+    return `${r.items.length ? `<div class="grid">${r.items.map(card).join("")}</div>${r.total > r.items.length ? `<div style="text-align:center;margin:14px"><button class="btn ghost" id="cg_more">${t("Show more")}</button></div>` : ""}`
         : this.emptyState("🧱", r.count ? t("Nothing found with these filters.") : t("The LEGO set database is downloaded within 10 minutes after Home Assistant starts, then once a day."))}`;
+  }
+  catalogLabels() {
+    return { deal: "🏷️ " + t("Deal"), sale: "🛒 " + t("In the shops"), none: "∅ " + t("No shop found"), unknown: "… " + t("Not looked up yet"), retired: "🏁 " + t("Retired"), followed: "👁 " + t("You follow this set") };
+  }
+  /** New results: only the cards and the count when you were typing (the search field keeps its focus and suggestions). */
+  catalogRefresh() {
+    const C = this.state.cat, res = this.shadowRoot.getElementById("cg_res"), cnt = this.shadowRoot.getElementById("cg_n");
+    if (!C.partial || !res || !cnt) { C.partial = false; this.renderContent(); return; }
+    C.partial = false;
+    res.innerHTML = this.catalogResults(C.r);
+    cnt.textContent = t("{n} sets found", { n: (C.r.total || 0).toLocaleString(LOC) });
+    this.bindCatalogCards(res, true);
   }
   bindCatalog(root, $) {
     const C = this.state.cat;
-    const qi = $("cg_q"); if (qi) qi.oninput = () => { clearTimeout(this._cgT); this._cgT = setTimeout(() => { C.q = qi.value.trim(); C.limit = 120; this.renderContent(); const n = this.shadowRoot.getElementById("cg_q"); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }, 350); };
-    for (const [id, k] of [["cg_th", "theme"], ["cg_st", "status"], ["cg_so", "sort"]]) { const el = $(id); if (el) el.onchange = () => { C[k] = el.value; C.limit = 120; this.renderContent(); }; }
-    const more = $("cg_more"); if (more) more.onclick = () => { C.limit += 120; this.renderContent(); };
+    const qi = $("cg_q");
+    if (qi) qi.oninput = () => {
+      const v = qi.value.trim();
+      // suggestions while typing (number or part of the name), from the LEGO set database
+      clearTimeout(this._cgS);
+      if (v.length >= 2) this._cgS = setTimeout(async () => {
+        const id = (this._cgSid = (this._cgSid || 0) + 1);
+        let r; try { r = await this._hass.callWS({ type: "lego_tracker/setdb/search", q: v, limit: 12 }); } catch (e) { return; }
+        const dl = this.shadowRoot.getElementById("cg_sugg"); if (!dl || id !== this._cgSid) return;
+        dl.innerHTML = (r.items || []).map((x) => `<option value="${esc(x.set_number)}">${esc(`${x.set_number} ${x.name || ""} (${x.theme || "?"}, ${x.year || "?"})`)}</option>`).join("");
+      }, 200);
+      clearTimeout(this._cgT); this._cgT = setTimeout(() => { C.q = qi.value.trim(); C.limit = 120; C.partial = true; this.vCatalog(); }, 400);
+    };
+    for (const [id, k] of [["cg_th", "theme"], ["cg_st", "status"], ["cg_so", "sort"], ["cg_yr", "year"]]) { const el = $(id); if (el) el.onchange = () => { C[k] = el.value; C.limit = 120; this.renderContent(); }; }
+    this.bindCatalogCards(root, false);
+  }
+  /** sets: also make the cards open their set (after a partial refresh; a full render does that itself). */
+  bindCatalogCards(root, sets = true) {
+    const C = this.state.cat;
+    const more = root.querySelector("#cg_more"); if (more) more.onclick = () => { C.limit += 120; this.renderContent(); };
+    if (sets) root.querySelectorAll("[data-set]").forEach((el) => el.addEventListener("click", (e) => { if (e.target.closest("[data-stop]")) return; this.openSet(el.dataset.set); }));
     const find = (n) => ((C.r && C.r.items) || []).find((x) => x.set_number === n);
     root.querySelectorAll("[data-cwatch2]").forEach((b) => b.onclick = (e) => { e.stopPropagation(); this.busy(b, "", async () => {
       const n = b.dataset.cwatch2;
@@ -1248,7 +1285,8 @@ class LegoTrackerPanel extends HTMLElement {
     const themes = this.state.data.themes.map((th) => `<option value="${esc(th)}">`).join("");
     const preBox = pre ? `<div class="prefill"><div class="img">${this.img({ image: pre.image })}</div><div><div class="muted" style="font-size:12px">${m === "own" ? t("You are adding this set to your collection") : t("You are adding this set to your watchlist")}</div>
       <b>${esc(pre.num)} ${esc(pre.name || "")}</b></div><button class="btn ghost sm" id="a_clearpre" title="${t("Another set")}">✕</button></div>` : "";
-    return `<div class="panel"><h3>＋ ${t("Add a set")}</h3>${preBox}
+    return `<div class="panel" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span>🔎 ${t("Looking for a set? Browse every LEGO set by number, name, theme or year and put it on your watchlist or in your collection with one click.")}</span><button class="btn ghost sm" data-goto="deals/lego">${t("Browse all LEGO sets")}</button></div>
+      <div class="panel"><h3>＋ ${t("Add a set")}</h3>${preBox}
       <div class="radio"><label class="${m === "watch" ? "on" : ""}"><input type="radio" name="mode" value="watch" ${m === "watch" ? "checked" : ""}><b>👀 ${t("Keep an eye on it")}</b><span>${t("Track prices and get notified of a deal")}</span></label>
       <label class="${m === "own" ? "on" : ""}"><input type="radio" name="mode" value="own" ${m === "own" ? "checked" : ""}><b>📦 ${t("Add to my collection")}</b><span>${t("I already own this set")}</span></label></div>
       <div style="margin:0 0 12px"><label style="display:block;font-size:13px">🔎 ${t("Search the LEGO set database (name or number)")}<input id="a_find" autocomplete="off" placeholder="${t("e.g. {example}", { example: "Millennium Falcon" })}" style="width:100%;max-width:420px;margin-top:4px"></label>
