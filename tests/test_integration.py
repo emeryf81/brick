@@ -2655,9 +2655,15 @@ async def test_every_copy_has_its_own_price_date_condition_and_value(hass: HomeA
     c.update_set("10281", {"qty": 4, "location": "Attic"})                    # new copies get the new location too
     assert len(e["items"]) == 4 and all(x["location"] == "Attic" for x in e["items"])
     c.update_set("10281", {"qty": 2})
-    for bad in ([], [{"paid": -1}], [{"added": "2999-01-01"}], [{"condition": "Mint"}], ["x"]):
+    for bad in ([], [{"paid": -1}], [{"paid": "nan"}], [{"paid": "inf"}], [{"added": "2999-01-01"}], [{"condition": "Mint"}], ["x"]):
         with pytest.raises(LocalizedError):
             c.update_set("10281", {"copies": bad})
+    before = [dict(x) for x in e["items"]]
+    with pytest.raises(LocalizedError):                                       # a bad field elsewhere: nothing changes
+        c.update_set("10281", {"copies": [{"paid": 1}], "current_value": "nan"})
+    with pytest.raises(LocalizedError):
+        c.update_set("10281", {"copies": [{"paid": 1}], "rrp": -5})
+    assert e["items"] == before and e["qty"] == 2
 
     # import: one line per copy keeps them apart; the same quantity again on one line keeps your own copies
     rows = [{"set_number": "42143", "qty": 1, "paid": 300.0, "condition": "Sealed"},

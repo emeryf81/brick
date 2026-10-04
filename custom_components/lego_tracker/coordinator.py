@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+import math
 import re
 import time
 from collections.abc import Awaitable, Callable
@@ -2650,8 +2651,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return bool(value)
         try:
             num = typ(value)
-        except (TypeError, ValueError) as err:
+        except (TypeError, ValueError, OverflowError) as err:
             raise LocalizedError("{field}: {value} is not a number", field=key, value=value) from err
+        if not math.isfinite(num):                       # nan / inf compare false with every limit
+            raise LocalizedError("{field}: {value} is not a number", field=key, value=value)
         limits = {"rrp": 10000, "paid": 10000, "current_value": 10000, "target_price": 10000, "pieces": 12000,
                   "qty": 999, "priority": 3, "year": 2100}
         if num < 0 or num > limits.get(key, 1e9):
@@ -2698,16 +2701,14 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         num = normalize_set_number(set_number)
         s = self.store["sets"][num]
         refill = False
+        copies_new = None
         if "copies" in fields:                         # every copy with its own price, date, condition, ...
-            items = self._clean_copies(fields["copies"])
-            entry = self.store["collection"].setdefault(num, {"qty": 1})
-            entry["items"] = items
-            sync_copies(entry)
-            self.log("info", "user", T("copies edited: {n}", n=len(items)), set_number=num, source="panel")
+            copies_new = self._clean_copies(fields["copies"])   # validated now, stored once the whole edit is valid
             fields = {k: v for k, v in fields.items() if k not in ("copies", "owned", *self.COLL_FIELDS) or k == "current_value"}
-            if not fields:
-                self.push_update()
-                return
+            for key, value in fields.items():           # the rest of the edit must be valid too before anything changes
+                if (typ := self.SET_FIELDS.get(key) or self.COLL_FIELDS.get(key)) and value not in ("", None) \
+                        and not (key == "watch" and value is False):
+                    self._coerce(key, typ, value)
         clean_set: dict[str, Any] = {}
         clean_coll: dict[str, Any] = {}
         for key, value in fields.items():
@@ -2730,6 +2731,11 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if clean_set.get("watch") and not self.is_watched(num) and (limit := self.watch_limit) is not None \
                 and len(self.watched_sets()) >= limit:
             raise LocalizedError("The watchlist is full ({n} sets): remove a set or move one to your collection first.", n=limit)
+        if copies_new is not None:
+            entry = self.store["collection"].setdefault(num, {"qty": 1})
+            entry["items"] = copies_new
+            sync_copies(entry)
+            self.log("info", "user", T("copies edited: {n}", n=len(copies_new)), set_number=num, source="panel")
         s.update(clean_set)
         if clean_set or clean_coll or "owned" in fields:
             self.log("info", "user", T("details edited: {fields}", fields=", ".join(sorted(set(clean_set) | set(clean_coll) | ({"owned"} if "owned" in fields else set())))),
