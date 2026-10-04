@@ -537,14 +537,16 @@ class LegoTrackerPanel extends HTMLElement {
     const tag = (l, title) => `<span class="tktag" title="${esc(title)}">${l}</span>`;
     for (const it of tk.items || []) {
       const who = `<b>${esc(it.set_number)}</b> ${esc((it.name || "").slice(0, 40))}`;
+      // a discount is only shown when the price is below the RRP (never "−-110%")
+      const off = it.discount > 0 && Math.round(it.discount) > 0 ? ` −${Math.round(it.discount)}%` : "";
       if (it.kind === "deal") {
-        parts.push(`<button class="ti deal" type="button" data-tset="${esc(it.set_number)}">${tag("D", t("Deal notification"))}${fire(it.score)} ${who} ${it.price != null ? EUR(it.price) : ""}${it.discount ? ` −${Math.round(it.discount)}%` : ""}${it.shop ? ` · ${esc(it.shop)}` : ""}</button>`);
+        parts.push(`<button class="ti deal" type="button" data-tset="${esc(it.set_number)}">${tag("D", t("Deal"))}${fire(it.score)} ${who} ${it.price != null ? EUR(it.price) : ""}${off}${it.shop ? ` · ${esc(it.shop)}` : ""}</button>`);
       } else {
-        const p = it.pct, cls = p == null ? "" : p <= -10 ? "big" : p < 0 ? "small" : "up", mark = p == null ? "•" : p <= -10 ? "⬇⬇" : p < 0 ? "↓" : "↑";
-        parts.push(`<button class="ti ${cls}" type="button" data-tset="${esc(it.set_number)}">${tag("W", t("Watchlist"))}${fire(it.score)} ${mark} ${who} ${it.old != null ? `<s class="muted">${EUR(it.old)}</s> ` : ""}${EUR(it.price)}${p != null ? ` (${p > 0 ? "+" : ""}${p}%)` : ""}${it.shop ? ` · ${esc(it.shop)}` : ""}</button>`);
+        parts.push(`<button class="ti" type="button" data-tset="${esc(it.set_number)}">${tag("W", t("Watchlist"))}${fire(it.score)} ${who} ${EUR(it.price)}${off}${it.shop ? ` · ${esc(it.shop)}` : ""}</button>`);
       }
     }
     const cfg = tk.config || {};
+    if (cfg.shuffle !== false) for (let i = parts.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [parts[i], parts[j]] = [parts[j], parts[i]]; }   // mixed
     if (!parts.length && (cfg.watch || cfg.deals || cfg.news)) parts.push(`<span class="ti muted">${esc(t("No prices or news yet: they appear here as soon as the first prices come in."))}</span>`);
     if (!parts.length) { el.innerHTML = ""; return; }
     const place = () => { const r = this.getBoundingClientRect(); el.style.left = Math.max(0, r.left) + "px"; el.style.right = Math.max(0, window.innerWidth - r.right) + "px"; };
@@ -1731,8 +1733,9 @@ class LegoTrackerPanel extends HTMLElement {
       <div class="panel"><h3>📈 ${t("Ticker")}</h3>
         <p>${t("The bar at the bottom of the screen. Click an item to open the set, or a news item to read it.")}</p>
         <div class="tscroll"><table class="tbl"><tr><th></th><th class="num">${t("At most")}</th></tr>
-        ${[["watch", t("Latest prices of your watchlist")], ["deals", t("Deal notifications")], ["news", t("News")]].map(([k, l]) => `<tr><td><label class="chk" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="o_tk_${k}" ${(st.ticker || {})[k] ? "checked" : ""}> ${esc(l)}</label></td>
-          <td class="num"><input id="o_tkn_${k}" type="text" inputmode="numeric" autocomplete="off" style="width:70px" value="${(st.ticker || {})["max_" + k] ?? 3}"></td></tr>`).join("")}</table></div></div>
+        ${[["watch", t("Watchlist sets at a good price (🔥 or better)")], ["deals", t("Deals (deal score at least the minimum under Deals → Settings)")], ["news", t("News")]].map(([k, l]) => `<tr><td><label class="chk" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="o_tk_${k}" ${(st.ticker || {})[k] ? "checked" : ""}> ${esc(l)}</label></td>
+          <td class="num"><input id="o_tkn_${k}" type="text" inputmode="numeric" autocomplete="off" style="width:70px" value="${(st.ticker || {})["max_" + k] ?? 3}"></td></tr>`).join("")}</table></div>
+        <label class="chk" style="margin-top:8px"><input type="checkbox" id="o_tk_shuffle" ${(st.ticker || {}).shuffle !== false ? "checked" : ""}> ${t("Mix news, deals and watchlist")}</label></div>
       <div class="panel"><h3>🏪 ${t("Shops")}</h3><p>${t("Tick the shops to check. “Pause automatically” pauses a shop after a block (1 → 3 → 6 → 12 → 24 h); switch it off if you don't want that (more risk of stricter blocks).")}</p>
         <p>${t("The search URL decides how “Find links” finds a product; every shop has a default that you can change. Easiest: search the shop for e.g. “lego 10311”, copy the address bar and paste it here — the set number is replaced by {query} automatically. {query} = “LEGO + set number”, {number} = the set number, {locale} = the LEGO.com country. ↺ restores the default.", { query: "<code>{query}</code>", number: "<code>{number}</code>", locale: "<code>{locale}</code>" })}</p>
         <div class="form" style="max-width:420px"><label>${t("LEGO.com country (language-country)")}<input id="o_locale" value="${esc(st.lego_locale || "nl-be")}" placeholder="nl-be"></label></div>
@@ -2071,7 +2074,7 @@ class LegoTrackerPanel extends HTMLElement {
       };
       // a number field some phone keyboards leave empty: keep the saved number instead of 0
       const tkn = (k) => { const v = parseInt(String($("o_tkn_" + k).value).replace(/\D/g, ""), 10); return Number.isFinite(v) ? Math.max(0, Math.min(50, v)) : ((st.ticker || {})["max_" + k] ?? 3); };
-      f.ticker = Object.fromEntries(["watch", "deals", "news"].flatMap((k) => [[k, $("o_tk_" + k).checked], ["max_" + k, tkn(k)]]));
+      f.ticker = { ...Object.fromEntries(["watch", "deals", "news"].flatMap((k) => [[k, $("o_tk_" + k).checked], ["max_" + k, tkn(k)]])), shuffle: $("o_tk_shuffle").checked };
       f.bol_country = $("o_bolc").value; f.browser_relay = $("o_relay").checked; f.relay_hours = +$("o_relayh").value || 6;
       f.block_words = lines($("o_block").value); f.allow_words = lines($("o_allow").value);
       for (const k of ["brickset_api_key", "rebrickable_api_key", "bol_client_id", "bol_client_secret"]) { const el = $("k_" + k), v = el.value.trim(); if (v) f[k] = v; else if (el.dataset.clear) f[k] = ""; }

@@ -1873,19 +1873,28 @@ def test_news_file_parsing():
 
 async def test_ticker_market_tick_and_shop_link(hass: HomeAssistant, entry, no_network):
     c = await _setup(hass, entry)
-    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
-    c.log("ok", "price", "€49.99 → €39.99", set_number="10281", retailer="bol", url="https://www.bol.com/nl/nl/p/x/1/",
-          price=39.99, old_price=49.99, source="server")
-    c.store["events"] = [{"ts": time.time(), "kind": "deal", "set_number": "10281", "name": "Bonsai", "price": 39.99,
-                          "retailer": "bol", "url": "https://www.bol.com/nl/nl/p/x/1/", "discount": 20, "score": 80}]
+    now = time.time()
+    for num, price in (("10281", 39.99), ("42143", 99.0), ("10305", 110.0)):     # a deal, -1 % (lowest ever), above the RRP
+        await c.add_set(num, name=f"Set {num}", rrp=100, discover=False)
+        c.store["offers"][num] = {"bol": {"url": f"https://www.bol.com/nl/nl/p/x/{num}/", "available": True, "last_price": price,
+                                          "last_checked": now, "history": [[now - 86400 * 30, 100.0], [now, price]]}}
+    c.store["events"] = [{"ts": now, "kind": "price_drop", "set_number": "10305", "name": "x", "price": 110.0, "discount": -110}]
+    c.push_update()
     from custom_components.lego_tracker.news import NewsFeed
     c.news = NewsFeed(lambda: None)
     c.news.ts, c.news.items = time.time(), [{"id": "a", "title": "Hi", "body": "x", "link": "", "lang": ""}]
     tk = await c.ticker_data("nl")
-    assert [i["kind"] for i in tk["items"]] == ["price", "deal"] and tk["items"][0]["pct"] == -20.0 and tk["news"][0]["id"] == "a"
-    c.hass.config_entries.async_update_entry(c.entry, options={**c.entry.options, "ticker": {"watch": False, "deals": True, "news": False, "max_deals": 1}})
-    tk = await c.ticker_data("nl")
-    assert [i["kind"] for i in tk["items"]] == ["deal"] and tk["news"] == []
+    # only the real deal (deal score), with its discount; no "-1 %" and no "-110 %" from an old notification
+    assert [(i["kind"], i["set_number"]) for i in tk["items"]] == [("deal", "10281")]
+    assert tk["items"][0]["discount"] == 60.0 and tk["items"][0]["score"] >= 70 and tk["news"][0]["id"] == "a"
+    assert tk["config"]["shuffle"] is True
+    from custom_components.lego_tracker.const import DEAL_FILTER_DEFAULT, TICKER_DEFAULT
+    cls = type(c)
+    with patch.object(cls, "ticker", property(lambda self: {**TICKER_DEFAULT, "deals": False, "news": False})):
+        tk = await c.ticker_data("nl")            # deals off: the watched set at a good price shows as a watchlist item
+        assert [(i["kind"], i["set_number"]) for i in tk["items"]] == [("price", "10281")] and tk["news"] == []
+    with patch.object(cls, "deal_filter", property(lambda self: {**DEAL_FILTER_DEFAULT, "max_price": 30})):
+        assert (await c.ticker_data("nl"))["items"] == []                     # left out under Deals → Settings
 
     # market value: one set per tick, never more often than the spread allows
     calls = []
@@ -2097,15 +2106,15 @@ async def test_ticker_defaults_api_level_and_market_label(hass: HomeAssistant, e
     from custom_components.lego_tracker.const import API_LEVEL
 
     c = await _setup(hass, entry)
-    assert c.ticker == {"watch": True, "deals": True, "news": True, "max_watch": 3, "max_deals": 3, "max_news": 3}
-    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
+    assert c.ticker == {"watch": True, "deals": True, "news": True, "max_watch": 3, "max_deals": 3, "max_news": 3, "shuffle": True}
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281", "rrp": 100}, blocking=True)
     c.store["offers"]["10281"]["bol"] = {"url": "https://www.bol.com/nl/nl/p/x/1/", "available": True, "last_price": 39.99,
                                          "last_checked": time.time(), "history": [[time.time(), 39.99]]}
     c.push_update()
     from custom_components.lego_tracker.news import NewsFeed
     c.news = NewsFeed(lambda: None)
     c.news.ts = time.time()
-    tk = await c.ticker_data("nl")                  # no recent price change: the current price is shown anyway
+    tk = await c.ticker_data("nl")                  # 60 % below the RRP: a deal
     assert tk["items"][0]["set_number"] == "10281" and tk["items"][0]["price"] == 39.99
     ws = await hass_ws_client(hass)
     await ws.send_json({"id": 1, "type": "lego_tracker/overview"})
@@ -2115,27 +2124,6 @@ async def test_ticker_defaults_api_level_and_market_label(hass: HomeAssistant, e
     c._rename_market_source()
     assert c.store["sets"]["10281"]["exit_date_source"] == "Market value" and c.store["sets"]["10281"]["market"]["source"] == "Market value"
     assert c.store["activity"][-1]["source"] == "Market value" and "BrickEconomy" not in c.store["activity"][-1]["message"]
-
-
-@pytest.mark.parametrize("price, retailer, expected_score", [
-    (39.99, "bol", True),
-    (49.99, "bol", False),
-    (39.99, "amazon_nl", False),
-    (49.99, "amazon_nl", False),
-])
-async def test_ticker_recent_price_score_matches_best_offer(hass: HomeAssistant, entry, price, retailer, expected_score):
-    hass.config_entries.async_update_entry(entry, options={**entry.options, "ticker": {"news": False, "deals": False}})
-    c = await _setup(hass, entry)
-    await c.add_set("10281", name="Bonsai", rrp=100)
-    c.store["offers"]["10281"] = {"bol": {"available": True, "last_price": 39.99}}
-    c.store["activity"] = [{"kind": "price", "ts": time.time(), "set_number": "10281",
-                            "price": price, "old_price": 59.99, "retailer": retailer}]
-    c.push_update()
-    score = c.data["statuses"]["10281"]["deal_score"]
-    assert score > 0
-    item = (await c.ticker_data("en"))["items"][0]
-    assert item["price"] == price
-    assert item["score"] == (score if expected_score else None)
 
 
 @pytest.mark.parametrize("merge", [False, True])

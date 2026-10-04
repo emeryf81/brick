@@ -32,7 +32,8 @@ CONF_DEAL_FILTER = "deal_filter"           # Deals → Settings: themes switched
 DEAL_FILTER_DEFAULT = {"themes_off": [], "min_price": None, "max_price": None, "min_discount": None,
                        "min_pieces": None, "max_pieces": None, "skip_owned": False, "skip_retired": False}
 CONF_TICKER = "ticker"                      # bottom ticker: {"watch": bool, "deals": bool, "news": bool, "max_*": int}
-TICKER_DEFAULT = {"watch": True, "deals": True, "news": True, "max_watch": 3, "max_deals": 3, "max_news": 3}
+TICKER_GOOD_SCORE = 45                     # a watched set shows in the ticker from this deal score (🔥 good price)
+TICKER_DEFAULT = {"watch": True, "deals": True, "news": True, "max_watch": 3, "max_deals": 3, "max_news": 3, "shuffle": True}
 CONF_COMPARE_OLD = "brickwatch"             # name of that option before 0.9.10 (still read once)
 CONF_BLOCK_WORDS = "block_words"            # your own words: a product with one of these is never the set
 CONF_ALLOW_WORDS = "allow_words"            # exceptions: words/phrases that may appear in a real set's title

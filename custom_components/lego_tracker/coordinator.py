@@ -22,7 +22,7 @@ from .client import DOMAIN_GAP, SEARCH_GAP, Fetcher, lookup_metadata
 from .const import (
     CONF_COMPARE, CONF_COMPARE_OLD, CONF_BLOCK_WORDS, CYCLE_CHOICES, CONF_WATCH_CYCLE, WATCH_CYCLE_CHOICES, WATCH_LIMIT,
     FULL_REFRESH_GAP, MANUAL_GAP, CONF_DEAL_MIN_SCORE, CONF_DEAL_ATL, CONF_DEAL_TARGET, DEFAULT_DEAL_MIN_SCORE, CONF_DEV_FIXED_TIMES, CONF_DEV_FULL_REFRESH, CONF_DEV_FREE_CYCLE, CONF_DEV_WATCH_UNLIMITED, CONF_ALLOW_WORDS, CONF_COMPARE_SOURCES, COMPARE_FRESH_HOURS, COMPARE_MISSING_HOURS, COMPARE_NET_ERRORS, COMPARE_PAUSE_HOURS,
-    CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET, CONF_BOL_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS, CONF_MARKET, CONF_TICKER, TICKER_DEFAULT, CONF_DEAL_FILTER, DEAL_FILTER_DEFAULT, CONF_SCAN,
+    CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET, CONF_BOL_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS, CONF_MARKET, CONF_TICKER, TICKER_DEFAULT, TICKER_GOOD_SCORE, CONF_DEAL_FILTER, DEAL_FILTER_DEFAULT, CONF_SCAN,
     CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_LANGUAGE, CONF_REFRESH_MODE, CONF_SPREAD_HOURS, DEFAULT_REFRESH_MODE, DEFAULT_SPREAD_HOURS, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, CONF_CUSTOM_SHOPS, CONF_DIGEST_TIME, CONF_NO_AUTOPAUSE, CONF_SHOP_SEARCH, CONF_VALUE_SOURCE, DEFAULT_DIGEST_TIME, GENERIC_SHOPS, CONF_DISCOUNT_THRESHOLD, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
     DEFAULT_REFRESH_TIMES, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS, DEFAULT_RETAILERS,
     DOMAIN, EVENT_JOB_DONE, EVENT_HIGH_DISCOUNT, EVENT_NEW_LOW, EVENT_TARGET_HIT, RETAILERS, STORAGE_KEY,
@@ -637,44 +637,36 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return {**TICKER_DEFAULT, **(self.opt(self.entry, CONF_TICKER, None) or {})}
 
     async def ticker_data(self, lang: str) -> dict[str, Any]:
-        """The ticker at the bottom of the panel: latest prices of watched sets, deal notifications and news,
-        each as configured under Settings (on/off and how many)."""
+        """The ticker at the bottom of the panel, each part as configured under Settings (on/off and how many):
+        the current deals (deal score at least the minimum of Deals → Settings, best first), watched sets at
+        a good price at least (deal score 45) that are not a deal yet, and news. Sets left out under
+        Deals → Settings never show; a discount is only shown when the price is below the RRP."""
         from .news import NewsFeed, for_language
 
         cfg, now, out = self.ticker, time.time(), []
         statuses = (self.data or self.compute())["statuses"]
+
+        def item(kind: str, num: str, st: dict[str, Any]) -> dict[str, Any]:
+            """One set at its current lowest price; the discount only when there is one."""
+            disc = st.get("discount_rrp")
+            return {"kind": kind, "ts": self.store["sets"][num].get("last_deal") or now, "set_number": num,
+                    "name": self.store["sets"][num].get("name") or "", "price": st["best_price"],
+                    "discount": disc if disc is not None and disc > 0 else None, "score": st.get("deal_score"),
+                    "shop": RETAILERS.get(st.get("best_retailer"), ("",))[0], "url": st.get("best_url")}
+        by_score = lambda n: (-(statuses[n].get("deal_score") or 0), n)  # noqa: E731
+        priced = [n for n in self.store["sets"] if statuses.get(n, {}).get("best_price") is not None]
+        # deals: sets whose deal score reaches the minimum of Deals → Settings (not "lowest ever" at -1 % alone)
+        min_score = self.deal_rules["min_score"]
+        deals = sorted((n for n in priced if (statuses[n].get("deal_score") or 0) >= min_score
+                        and not self.deal_blocked(n, statuses[n])), key=by_score) if cfg["deals"] else []
+        shown = set(deals[: cfg["max_deals"]])
+        # watchlist: watched sets at a good price at least (deal score 45, one flame) that are not a deal above
         if cfg["watch"] and cfg["max_watch"]:
-            seen: set[str] = set()
-            for e in reversed(self.store.get("activity", [])):
-                if now - e["ts"] > 14 * 86400 or len(seen) >= cfg["max_watch"]:
-                    break
-                num = e.get("set_number")
-                if e.get("kind") != "price" or e.get("price") is None or not num or num in seen \
-                        or num not in self.store["sets"] or not self.is_watched(num):
-                    continue
-                seen.add(num)
-                old, price = e.get("old_price"), e["price"]
-                st = statuses.get(num, {})
-                out.append({"kind": "price", "ts": e["ts"], "set_number": num, "name": self.store["sets"][num].get("name") or "",
-                            "price": price, "old": old, "pct": round((price - old) / old * 100, 1) if old else None,
-                            "score": st.get("deal_score") if price == st.get("best_price")
-                            and e.get("retailer") == st.get("best_retailer") else None,
-                            "shop": RETAILERS.get(e.get("retailer"), ("",))[0], "url": e.get("url")})
-            # no recent changes: the current lowest price of the watched sets that were checked last
-            rest = sorted((n for n in self.store["sets"] if n not in seen and self.is_watched(n)
-                           and statuses.get(n, {}).get("best_price") is not None),
-                          key=lambda n: -max([o.get("last_checked") or 0 for o in self.store["offers"].get(n, {}).values()] or [0]))
-            for num in rest[: max(0, cfg["max_watch"] - len(seen))]:
-                st = statuses[num]
-                out.append({"kind": "price", "ts": now, "set_number": num, "name": self.store["sets"][num].get("name") or "",
-                            "price": st["best_price"], "old": None, "pct": None, "score": st.get("deal_score"),
-                            "shop": RETAILERS.get(st.get("best_retailer"), ("",))[0], "url": st.get("best_url")})
+            good = sorted((n for n in priced if n not in shown and self.is_watched(n) and not self.deal_blocked(n, statuses[n])
+                           and (statuses[n].get("deal_score") or 0) >= TICKER_GOOD_SCORE), key=by_score)
+            out += [item("price", n, statuses[n]) for n in good[: cfg["max_watch"]]]
         if cfg["deals"] and cfg["max_deals"]:
-            for ev in list(reversed(self.store.get("events", [])))[: cfg["max_deals"]]:
-                num = ev.get("set_number")
-                out.append({"kind": "deal", "ts": ev["ts"], "set_number": num, "name": ev.get("name") or "",
-                            "price": ev.get("price"), "discount": ev.get("discount"), "score": ev.get("score"),
-                            "deal": ev.get("kind"), "shop": RETAILERS.get(ev.get("retailer"), ("",))[0], "url": ev.get("url")})
+            out += [item("deal", n, statuses[n]) for n in deals[: cfg["max_deals"]]]
         news: list[dict[str, Any]] = []
         if cfg["news"] and cfg["max_news"]:
             if not hasattr(self, "news"):
