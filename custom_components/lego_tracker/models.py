@@ -645,7 +645,7 @@ def wishlist_summary(store: dict[str, Any], statuses: dict[str, dict[str, Any]])
 
 
 COLLECTION_COLUMNS = ["Number", "Name", "Theme", "Subtheme", "Year", "Pieces", "Qty", "Paid", "Value", "Purchase Date",
-                      "Condition", "Retail Price"]
+                      "Condition", "Location", "Notes", "Retail Price"]
 
 
 def collection_rows(store: dict[str, Any], statuses: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -662,6 +662,7 @@ def collection_rows(store: dict[str, Any], statuses: dict[str, dict[str, Any]]) 
                 "Year": s.get("year", ""), "Pieces": s.get("pieces", ""), "Qty": c.get("qty", 1),
                 "Paid": c.get("paid", ""), "Value": round(unit, 2) if unit else "",
                 "Purchase Date": c.get("added", ""), "Condition": c.get("condition", ""),
+                "Location": c.get("location", ""), "Notes": c.get("notes", ""),
                 "Retail Price": s.get("rrp", ""),
             })
     return sorted(rows, key=lambda r: r["Number"])

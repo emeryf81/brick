@@ -2705,10 +2705,14 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if "copies" in fields:                         # every copy with its own price, date, condition, ...
             copies_new = self._clean_copies(fields["copies"])   # validated now, stored once the whole edit is valid
             fields = {k: v for k, v in fields.items() if k not in ("copies", "owned", *self.COLL_FIELDS) or k == "current_value"}
-            for key, value in fields.items():           # the rest of the edit must be valid too before anything changes
-                if (typ := self.SET_FIELDS.get(key) or self.COLL_FIELDS.get(key)) and value not in ("", None) \
-                        and not (key == "watch" and value is False):
-                    self._coerce(key, typ, value)
+        # the whole edit is checked before anything changes: a rejected edit leaves the set as it was
+        for key, value in fields.items():
+            if (typ := self.SET_FIELDS.get(key) or self.COLL_FIELDS.get(key)) and value not in ("", None) \
+                    and not (key == "watch" and value is False) and not (value == 0 and key in self.CLEARABLE):
+                self._coerce(key, typ, value)
+        if fields.get("watch") not in (None, False, "", 0) and not self.is_watched(num) \
+                and (limit := self.watch_limit) is not None and len(self.watched_sets()) >= limit:
+            raise LocalizedError("The watchlist is full ({n} sets): remove a set or move one to your collection first.", n=limit)
         clean_set: dict[str, Any] = {}
         clean_coll: dict[str, Any] = {}
         for key, value in fields.items():
@@ -2728,9 +2732,6 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 continue
             target = clean_set if key in self.SET_FIELDS else clean_coll
             target[key] = self._coerce(key, typ, value)
-        if clean_set.get("watch") and not self.is_watched(num) and (limit := self.watch_limit) is not None \
-                and len(self.watched_sets()) >= limit:
-            raise LocalizedError("The watchlist is full ({n} sets): remove a set or move one to your collection first.", n=limit)
         if copies_new is not None:
             entry = self.store["collection"].setdefault(num, {"qty": 1})
             entry["items"] = copies_new

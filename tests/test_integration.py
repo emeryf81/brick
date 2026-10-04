@@ -2646,6 +2646,7 @@ async def test_every_copy_has_its_own_price_date_condition_and_value(hass: HomeA
     assert [x["value"] for x in card["collection"]["copies"]] == [50.0, 35.0, 35.0]
     rows = [r for r in collection_rows(c.store, st) if r["Number"] == "10281"]
     assert [(r["Qty"], r["Paid"], r["Condition"]) for r in rows] == [(1, 39.99, "Sealed"), (1, 25.5, "Built"), (1, "", "Opened")]
+    assert [(r["Location"], r["Notes"]) for r in rows] == [("Attic", ""), ("", "living room"), ("", "")]   # per copy, also on import
 
     # a new quantity on the set adds or removes copies at the end; set-level fields go to every copy
     c.update_set("10281", {"qty": 4})
@@ -2664,6 +2665,12 @@ async def test_every_copy_has_its_own_price_date_condition_and_value(hass: HomeA
     with pytest.raises(LocalizedError):
         c.update_set("10281", {"copies": [{"paid": 1}], "rrp": -5})
     assert e["items"] == before and e["qty"] == 2
+    # a full watchlist refuses watch=True before anything changes (the name is not cleared either)
+    c.store["sets"]["10281"].update(name="Bonsai", name_source="user")
+    with patch.object(type(c), "watch_limit", property(lambda self: 0)), \
+         patch.object(c, "is_watched", return_value=False), pytest.raises(LocalizedError):
+        c.update_set("10281", {"copies": [{"paid": 1}], "name": "", "watch": True})
+    assert c.store["sets"]["10281"]["name"] == "Bonsai" and c.store["sets"]["10281"]["name_source"] == "user" and e["items"] == before
 
     # import: one line per copy keeps them apart; the same quantity again on one line keeps your own copies
     rows = [{"set_number": "42143", "qty": 1, "paid": 300.0, "condition": "Sealed"},
