@@ -26,6 +26,35 @@ class Parsed:
     unavailable: bool = False
     list_price: float | None = None      # LEGO.com: regular price = RRP (price may be a sale price)
     retiring: bool = False
+    reason: str | None = None            # why there is no price: "sold_out" or "discontinued" (no error, a warning)
+
+
+# Why a shop page has no price. The structured availability (JSON-LD / schema.org) counts first; the words
+# only when the page has no price at all (they can also appear in menus or translations of every page).
+LD_GONE_RE = re.compile(r'"availability"\s*:\s*"(?:https?://schema\.org/)?Discontinued"', re.I)
+LD_SOLD_OUT_RE = re.compile(r'"availability"\s*:\s*"(?:https?://schema\.org/)?(?:OutOfStock|SoldOut)"', re.I)
+GONE_WORDS_RE = re.compile(r"niet meer (?:leverbaar|verkrijgbaar|beschikbaar|in (?:het )?assortiment)|uit (?:het )?assortiment|"
+                           r"uit (?:de )?(?:handel|productie)|no longer (?:available|sold|in stock)|discontinued|"
+                           r"nicht mehr (?:lieferbar|erhältlich|verfügbar)|aus dem sortiment|plus disponible|"
+                           r"n'est plus (?:vendu|disponible|fabriqué)|ya no está disponible|descatalogado", re.I)
+SOLD_OUT_WORDS_RE = re.compile(r"(?:tijdelijk )?uitverkocht|niet (?:op voorraad|leverbaar)|out of stock|sold out|"
+                               r"currently unavailable|ausverkauft|nicht (?:vorrätig|lieferbar|auf lager)|épuisé|"
+                               r"rupture de stock|agotado|sin stock", re.I)
+
+
+def availability_reason(page: str) -> str | None:
+    """'discontinued', 'sold_out' or None for a page without a price."""
+    if LD_GONE_RE.search(page):
+        return "discontinued"
+    if LD_SOLD_OUT_RE.search(page):
+        return "sold_out"
+    text = re.sub(r"<script\b.*?</script>|<style\b.*?</style>", " ", page[:600000], flags=re.S | re.I)
+    text = re.sub(r"<[^>]+>", " ", text)
+    if GONE_WORDS_RE.search(text):
+        return "discontinued"
+    if SOLD_OUT_WORDS_RE.search(text):
+        return "sold_out"
+    return None
 
 
 AMAZON_DOMAINS = {"amazon_nl": "amazon.nl", "amazon_de": "amazon.de", "amazon_be": "amazon.com.be"}
@@ -273,7 +302,8 @@ def parse_lego(page: str, num: str | None = None) -> Parsed:
     sold_out = in_stock is False or bool(LEGO_SOLD_OUT_RE.search(win[:20000] if num else ""))
     gone = bool(LEGO_GONE_RE.search(head))
     if sold_out or (price is None and gone):
-        return Parsed(None, title, image, unavailable=True, list_price=list_price, retiring=bool(LEGO_RETIRING_RE.search(head)))
+        return Parsed(None, title, image, unavailable=True, list_price=list_price, retiring=bool(LEGO_RETIRING_RE.search(head)),
+                      reason="discontinued" if gone else "sold_out")
     return Parsed(price, title, image, list_price=list_price, retiring=bool(LEGO_RETIRING_RE.search(head)))
 
 
@@ -299,6 +329,10 @@ def parse_page(retailer: str, page: str, set_number: str | None = None) -> Parse
         fallback = parse_generic(page)
         if fallback.price is not None:
             return fallback
+    if result.price is None and not result.blocked and (result.unavailable or result.title) and not result.reason:
+        # no price: say why when the page says so (sold out / no longer sold); a warning, not an error
+        if (why := availability_reason(page)) or result.unavailable:
+            result.unavailable, result.reason = True, why or "sold_out"
     return result
 
 

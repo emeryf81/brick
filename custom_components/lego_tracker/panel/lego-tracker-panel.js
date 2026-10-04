@@ -73,7 +73,7 @@ const signPct = (v) => (v == null ? "–" : `${v > 0 ? "+" : ""}${v.toLocaleStri
 const DATE = (ts, o = { day: "2-digit", month: "short" }) => new Date(ts * 1000).toLocaleDateString(LOC, o);
 const TIME = (ts) => new Date(ts * 1000).toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" });
 /** What this panel needs from the server (API_LEVEL in const.py). Different = Home Assistant still runs older code. */
-const API_LEVEL = 5;
+const API_LEVEL = 6;
 const SRC = { kieskeurig: "Kieskeurig", shoparize: "Shoparize", channable: "Channable Shopping", producthero: "Producthero", brickeconomy: "Market value" };
 /** How a price was read, as one letter: ⓤ your own browser (userscript), ⓢ ⓚ ⓒ ⓟ ⓑ a comparison site, ⌂ the shop's own site. */
 const VIA_MARK = { relay: "ⓤ", userscript: "ⓤ", shoparize: "ⓢ", kieskeurig: "ⓚ", channable: "ⓒ", producthero: "ⓟ", brickeconomy: "ⓜ" };
@@ -82,6 +82,8 @@ const viaTitle = (via) => (via === "relay" || via === "userscript" ? t("Price fe
 const viaMark = (via, direct = true) => (VIA_MARK[via] ? `<span class="vbadge" title="${esc(viaTitle(via))}">${VIA_MARK[via]}</span>`
   : direct ? `<span class="vbadge" title="${esc(viaTitle(""))}">⌂</span>` : "");
 /** Next to a shop price: only when it did not come from the shop's own site. */
+/** Why a shop has no price (sold out / no longer sold): a warning, not an error. */
+const unavailableText = (why) => (why === "discontinued" ? t("no longer sold (out of the range)") : t("sold out"));
 const viaBadge = (via) => (VIA_MARK[via] ? " " + viaMark(via) : "");
 /** A small version of a product image: full-size LEGO images are ~2000 px (≈16 MB decoded each),
  *  which makes iOS kill the page when a view shows hundreds of sets. */
@@ -170,6 +172,15 @@ function bars(items, { fmt = INT } = {}) {
   return `<div class="bars">${items.map((it, i) => `<div class="bar" style="--i:${i}"><div class="bv">${fmt(it.value)}</div><div class="bf" style="--h:${(it.value / max) * 100}%"></div><div class="bl">${esc(it.label)}</div></div>`).join("")}</div>`;
 }
 
+/** Solved (green) and new (red) side by side per period, with the net change as a title. */
+function pairBars(rows) {
+  const max = Math.max(1, ...rows.flatMap((r) => [r.a, r.b]));
+  return `<div class="pbars">${rows.map((r, i) => `<div class="pbar" style="--i:${i}" title="${esc(r.label)}: ${esc(t("{n} solved", { n: r.a }))}, ${esc(t("{n} new", { n: r.b }))}">
+    <div class="pcols"><div class="pc ok" style="--h:${(r.a / max) * 100}%"><span>${r.a || ""}</span></div><div class="pc bad" style="--h:${(r.b / max) * 100}%"><span>${r.b || ""}</span></div></div>
+    <div class="bl">${esc(r.label)}</div></div>`).join("")}</div>
+    <div class="legend"><span class="lg"><i style="background:var(--lt-green)"></i>${esc(t("Solved"))}</span><span class="lg"><i style="background:var(--lt-red)"></i>${esc(t("New"))}</span></div>`;
+}
+
 function spark(vals) {
   if (!vals || vals.length < 2) return `<div class="spark ph-spark"></div>`;
   const min = Math.min(...vals), max = Math.max(...vals), w = 100, h = 26;
@@ -209,7 +220,7 @@ a.btn{text-decoration:none}.btn[disabled]{opacity:.5;pointer-events:none}.btn.sm
 .spin{display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite}
 .erow.on{background:var(--lt-soft)}.setlink{cursor:pointer;color:inherit;text-decoration:none;border-bottom:1px dashed var(--lt-muted)}.setlink:hover{color:var(--lt-accent);border-color:var(--lt-accent)}
 .res{display:inline-flex;gap:4px;align-items:center;font-size:12px;padding:2px 8px;border-radius:99px;margin:1px 2px 1px 0;white-space:nowrap}.res.ok{background:color-mix(in srgb,var(--lt-green) 16%,transparent);color:var(--lt-green)}
-.res.fail{background:color-mix(in srgb,var(--lt-red) 14%,transparent);color:var(--lt-red)}.res.skip{background:var(--lt-soft);color:var(--lt-muted)}div.res{border-radius:8px;display:flex}
+.res.fail{background:color-mix(in srgb,var(--lt-red) 14%,transparent);color:var(--lt-red)}.res.skip{background:var(--lt-soft);color:var(--lt-muted)}.res.warn{background:color-mix(in srgb,var(--lt-yellow) 18%,transparent);color:color-mix(in srgb,var(--lt-yellow) 70%,var(--lt-text))}div.res{border-radius:8px;display:flex}
 .tbl.log tr.lrow td:first-child{border-left:3px solid transparent}.tbl.log tr.lv-ok td:first-child{border-left-color:var(--lt-green)}.tbl.log tr.lv-error td:first-child{border-left-color:var(--lt-red)}.tbl.log tr.lv-warning td:first-child{border-left-color:var(--lt-yellow)}
 .tag{white-space:nowrap}.chip.okc.on{background:var(--lt-green)}
 @media(max-width:640px){.tbl.log tr:not(:has(td[colspan])) > :nth-child(3),.tbl.log tr:not(:has(td[colspan])) > :nth-child(5){display:none}.tbl.log td,.tbl.log th{padding:6px 4px}.tbl.log td:first-child{font-size:11px;white-space:normal!important;min-width:54px}.otbl .ou{min-width:150px}}.chip.failc.on{background:var(--lt-red)}
@@ -320,6 +331,10 @@ h2.sec{font-size:16px;margin:18px 0 10px;display:flex;align-items:center;gap:8px
 .bars{display:flex;align-items:flex-end;gap:6px;height:170px;padding-top:18px;overflow-x:auto}
 .bar{flex:1;min-width:30px;display:flex;flex-direction:column;align-items:center;height:100%;justify-content:flex-end}
 .bf{width:70%;height:var(--h);background:linear-gradient(var(--lt-accent),color-mix(in srgb,var(--lt-accent) 60%,var(--lt-card)));border-radius:6px 6px 2px 2px;animation:grow .8s cubic-bezier(.3,1.2,.5,1) both;animation-delay:calc(var(--i) * 40ms);transform-origin:bottom}
+.pbars{display:flex;align-items:flex-end;gap:4px;height:170px;padding-top:14px;overflow-x:auto}.pbar{flex:1;min-width:26px;display:flex;flex-direction:column;height:100%;justify-content:flex-end}
+.pcols{flex:1;display:flex;align-items:flex-end;gap:2px;justify-content:center}.pc{width:42%;max-width:16px;height:var(--h);min-height:1px;border-radius:4px 4px 1px 1px;position:relative;animation:grow .8s cubic-bezier(.3,1.2,.5,1) both;animation-delay:calc(var(--i) * 25ms);transform-origin:bottom}
+.pc.ok{background:var(--lt-green)}.pc.bad{background:var(--lt-red)}.pc span{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);font-size:10px;color:var(--lt-muted)}
+.pbar .bl{text-align:center;white-space:nowrap}
 .bv{font-size:11px;color:var(--lt-muted);margin-bottom:3px}.bl{font-size:11px;color:var(--lt-muted);margin-top:4px}
 .ring{position:relative;display:inline-block}.ring svg{width:100%;height:100%}.ring-bg{fill:none;stroke:var(--lt-line);stroke-width:4}
 .ring-fg{fill:none;stroke-width:4;stroke-linecap:round;stroke-dashoffset:var(--off);animation:ring 1s cubic-bezier(.4,0,.2,1) both}
@@ -1308,7 +1323,7 @@ class LegoTrackerPanel extends HTMLElement {
       return head + `<tr class="efix"><td colspan="5">${this.itemEditorHtml(r.s, r.rid)}</td></tr>`;
     }).join("");
     const chip = (k, l, n) => `<span class="chip ${E.type === k ? "on" : ""}" data-etype="${k}">${esc(l)}${n != null ? ` <span class="muted">${n}</span>` : ""}</span>`;
-    return `<div class="panel"><h3>⚠️ ${t("Open errors")} <span class="muted" style="font-weight:400">${all.length}</span><span class="hsp"></span><label class="chk" style="font-size:13px;font-weight:400;display:flex;gap:6px;align-items:center"><input type="checkbox" id="e_ign" ${E.showIgnored ? "checked" : ""}> ${t("show ignored")}</label></h3>
+    return `${this.errorStatsHtml()}<div class="panel"><h3>⚠️ ${t("Open errors")} <span class="muted" style="font-weight:400">${all.length}</span><span class="hsp"></span><label class="chk" style="font-size:13px;font-weight:400;display:flex;gap:6px;align-items:center"><input type="checkbox" id="e_ign" ${E.showIgnored ? "checked" : ""}> ${t("show ignored")}</label></h3>
       <p>${t("Click an error to fix it right away: enter the correct product page and/or the price. Anything you enter by hand wins over automatic values.")} ${t("Does a shop keep blocking? See the alternatives under {link}.", { link: `<a data-goto="manage/shops" style="cursor:pointer">${t("Shops & jobs")}</a>` })}</p>
       <div class="chips">${chip("all", t("All"), all.length)}${Object.entries(types).map(([k, [l, n]]) => chip(k, l, n)).join("")}</div>
       <div class="fbar"><select id="e_scope"><option value="all">${t("All sets")}</option><option value="owned" ${E.scope === "owned" ? "selected" : ""}>📦 ${t("My collection")}</option><option value="watch" ${E.scope === "watch" ? "selected" : ""}>👀 ${t("Watchlist")}</option></select>
@@ -1364,10 +1379,11 @@ class LegoTrackerPanel extends HTMLElement {
   shopResults(e, full = false) {
     const retailers = this.state.data.retailers;
     return Object.entries(e.results || {}).map(([rid, r]) => {
-      const cls = r.ok ? "ok" : r.ok === false ? "fail" : "skip", name = esc(retailers[rid] || rid);
+      const un = r.unavailable ? unavailableText(r.unavailable) : "";
+      const cls = un ? "warn" : r.ok ? "ok" : r.ok === false ? "fail" : "skip", name = esc(retailers[rid] || rid);
       const how = r.ok === undefined || r.ok === null ? "" : viaMark(r.via || (e.source === "relay" || e.source === "userscript" ? e.source : ""));
-      const val = r.ok ? `${r.price != null ? EUR(r.price) : "✓"}${r.manual ? " ✎" : ""}` : r.ok === false ? "✕" : "⏸";
-      const why = r.error ? tx(r.error) : r.manual ? t("manual price wins; the shop said {price}", { price: EUR(r.price) }) : viaTitle(r.via);
+      const val = un ? `⚠ ${esc(un)}` : r.ok ? `${r.price != null ? EUR(r.price) : "✓"}${r.manual ? " ✎" : ""}` : r.ok === false ? "✕" : "⏸";
+      const why = un ? t("No price because the shop says: {reason}. A warning, nothing to fix.", { reason: un }) : r.error ? tx(r.error) : r.manual ? t("manual price wins; the shop said {price}", { price: EUR(r.price) }) : viaTitle(r.via);
       return full ? `<div class="res ${cls}" style="display:flex;gap:8px;align-items:center;margin:3px 0">${how}<b style="min-width:110px">${name}</b><span>${val}</span><span class="muted" style="font-size:12px">${esc(why)}</span></div>`
         : `<span class="res ${cls}" title="${esc(why)}">${how} ${name} <b>${val}</b></span>`;
     }).join(full ? "" : " ");
@@ -1483,8 +1499,54 @@ class LegoTrackerPanel extends HTMLElement {
     Object.assign(this.state.logv, { level: "", kind: "", retailer: "", source: "", status: "", set: num, q: "", data: null, open: null });
     this.state.section = "log"; this.state.sub.log = "all"; this.persist(); this.closeDialog(); this.render(true);
   }
+  /** Logbook → Open errors: how many were solved and how many came in (today, 7 and 30 days), charts per
+   * day / week / month, and the latest solved or new errors (click to open the set). */
+  errorStatsHtml() {
+    const S = this.state.estats;
+    if (!S || Date.now() - S.at > 60000) {
+      if (!this._esLoading) {
+        this._esLoading = true;
+        this._hass.callWS({ type: "lego_tracker/error_stats" }).then((r) => { this.state.estats = { ...r, at: Date.now() }; })
+          .catch((e) => { this.state.estats = { days: {}, solved: [], new: [], err: e.message, at: Date.now() }; })
+          .finally(() => { this._esLoading = false; if (this.state.section === "log" && this.state.sub.log === "errors") this.renderContent(); });
+      }
+      if (!S) return `<div class="panel"><div class="skel" style="height:160px"></div></div>`;
+    }
+    const E = this.state.errs, per = E.per || "day", days = S.days || {};
+    const iso = (d) => { const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000); return z.toISOString().slice(0, 10); };
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const sum = (from) => { let a = 0, b = 0; for (const [k, v] of Object.entries(days)) if (k >= from) { a += v.solved || 0; b += v.new || 0; } return [a, b]; };
+    const back = (n) => { const d = new Date(today); d.setDate(d.getDate() - n); return iso(d); };
+    const [s0, n0] = sum(iso(today)), [s7, n7] = sum(back(6)), [s30, n30] = sum(back(29));
+    const rows = [];
+    if (per === "day") for (let i = 29; i >= 0; i--) { const k = back(i), v = days[k] || {}; rows.push({ label: DATE(new Date(k + "T12:00").getTime() / 1000, { day: "numeric", month: "numeric" }), a: v.solved || 0, b: v.new || 0 }); }
+    else if (per === "week") for (let i = 11; i >= 0; i--) {
+      const start = new Date(today); start.setDate(start.getDate() - ((start.getDay() + 6) % 7) - 7 * i); const end = new Date(start); end.setDate(end.getDate() + 6);
+      let a = 0, b = 0; for (const [k, v] of Object.entries(days)) if (k >= iso(start) && k <= iso(end)) { a += v.solved || 0; b += v.new || 0; }
+      rows.push({ label: DATE(start.getTime() / 1000, { day: "numeric", month: "numeric" }), a, b });
+    } else for (let i = 11; i >= 0; i--) {
+      const m = new Date(today.getFullYear(), today.getMonth() - i, 1), key = iso(m).slice(0, 7);
+      let a = 0, b = 0; for (const [k, v] of Object.entries(days)) if (k.startsWith(key)) { a += v.solved || 0; b += v.new || 0; }
+      rows.push({ label: DATE(m.getTime() / 1000, { month: "short" }), a, b });
+    }
+    const kpi = (label, a, b, k) => `<button class="kpi click" type="button" data-elist="${k}" style="text-align:left;border:0;font:inherit;color:inherit;cursor:pointer${E.list === k ? ";outline:2px solid var(--lt-accent)" : ""}"><div class="muted" style="font-size:12px">${esc(label)}</div>
+      <b style="color:var(--lt-green)">✓ ${a}</b> <span class="muted">${esc(t("solved"))}</span><br><b style="color:var(--lt-red)">＋ ${b}</b> <span class="muted">${esc(t("new"))}</span></button>`;
+    const chip = (k, l) => `<span class="chip ${per === k ? "on" : ""}" data-eper="${k}">${esc(l)}</span>`;
+    const list = E.list ? (E.list === "new" ? S.new : S.solved) : null;
+    const listHtml = list ? `<div class="tscroll" style="margin-top:10px"><table class="tbl"><tr><th>${t("When")}</th><th>Set</th><th>${t("Shop")}</th><th>${E.list === "new" ? t("Error") : t("Was open")}</th></tr>
+      ${list.slice(0, 100).map((x) => `<tr class="click" data-set="${esc(x.set_number)}"><td>${esc(DATE(x.ts, { day: "numeric", month: "short" }))} ${esc(TIME(x.ts))}</td><td><b>${esc(x.set_number)}</b> ${esc(x.name || "")}</td><td>${esc(x.shop || "–")}</td>
+        <td>${E.list === "new" ? esc(x.kind === "nolinks" ? t("No shop link at all") : x.kind === "suspect" ? t("Suspicious") : t("Error")) : esc(x.open_for != null ? dur(x.open_for) : "")}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">${t("Nothing yet.")}</td></tr>`}</table></div>` : "";
+    return `<div class="panel"><h3>📉 ${t("Progress")} <span class="muted" style="font-weight:400;font-size:13px">${t("{n} open now", { n: S.open ?? 0 })}</span></h3>
+      <p class="muted" style="font-size:13px;margin-top:0">${t("Every error that is solved (a price came in, a link was fixed or found) and every new one is counted. Click a block to see which sets.")}${S.since ? " " + t("Counting since {date}.", { date: DATE(S.since, { day: "numeric", month: "short", year: "numeric" }) }) : ""}</p>
+      <div class="kpis">${kpi(t("Today"), s0, n0, "solved")}${kpi(t("Last 7 days"), s7, n7, "solved")}${kpi(t("Last 30 days"), s30, n30, "solved")}
+        <button class="kpi click" type="button" data-elist="new" style="text-align:left;border:0;font:inherit;color:inherit;cursor:pointer${E.list === "new" ? ";outline:2px solid var(--lt-accent)" : ""}"><div class="muted" style="font-size:12px">${esc(t("Latest new errors"))}</div><b>${(S.new || []).length}</b> <span class="muted">→</span></button></div>
+      <div class="chips" style="margin-top:12px">${chip("day", t("Per day"))}${chip("week", t("Per week"))}${chip("month", t("Per month"))}</div>
+      ${pairBars(rows)}${listHtml}</div>`;
+  }
   bindErrors(root, $) {
     const E = this.state.errs;
+    root.querySelectorAll("[data-eper]").forEach((c) => c.addEventListener("click", () => { E.per = c.dataset.eper; this.renderContent(); }));
+    root.querySelectorAll("[data-elist]").forEach((c) => c.addEventListener("click", () => { E.list = E.list === c.dataset.elist ? null : c.dataset.elist; this.renderContent(); }));
     root.querySelectorAll("[data-etype]").forEach((c) => c.addEventListener("click", () => { E.type = c.dataset.etype; E.open = null; this.renderContent(); }));
     $("e_scope").addEventListener("change", (e) => { E.scope = e.target.value; this.renderContent(); });
     $("e_shop").addEventListener("change", (e) => { E.shop = e.target.value; this.renderContent(); });
@@ -2308,7 +2370,7 @@ class LegoTrackerPanel extends HTMLElement {
       if (!o) return `<tr class="orow${focus === rid ? " focus" : ""}" data-rid="${rid}"><td><b>${esc(retailers[rid])}</b>${p}<div class="muted" style="font-size:12px">${t("no link yet")}</div></td>
         <td><input class="ou" data-orig="" placeholder="${t("product URL, ASIN or search URL")}" title="${t("Paste the product page (or an Amazon ASIN) and save, or paste a search page of this shop and press 🔎 Find: the set is then looked for on that page.")}"></td><td class="num"><input class="op" type="text" inputmode="decimal" autocomplete="off" data-money data-orig="" placeholder="€" disabled title="${t("Add a link first")}"></td><td class="oact">${fetchBtn(rid, false)}</td></tr>`;
       const autoP = o.manual_price != null ? o.auto_price : o.price;
-      return `<tr class="orow${focus === rid ? " focus" : ""}" data-rid="${rid}"><td><b>${esc(o.label)}</b>${p} ${lk(o)}${o.title ? `<div class="muted" style="font-size:12px;max-width:240px">${esc(o.title.slice(0, 90))}</div>` : ""}${o.link_status === "suspect" ? `<div class="err">${esc(tx(o.link_reason || ""))}</div>` : ""}${o.error ? `<div class="err">${esc(tx(o.error))}${o.ignored ? ` <span class="muted">(${t("ignored")})</span>` : ""}</div>` : ""}${o.suspect ? `<div style="margin-top:4px">${approveBtn(s.set_number, rid, o.suspect.price)}</div>` : ""}${o.approved ? `<div class="muted" style="font-size:11px">✓ ${esc(t("approved around {price}", { price: EUR(o.approved) }))}</div>` : ""}</td>
+      return `<tr class="orow${focus === rid ? " focus" : ""}" data-rid="${rid}"><td><b>${esc(o.label)}</b>${p} ${lk(o)}${o.title ? `<div class="muted" style="font-size:12px;max-width:240px">${esc(o.title.slice(0, 90))}</div>` : ""}${o.link_status === "suspect" ? `<div class="err">${esc(tx(o.link_reason || ""))}</div>` : ""}${o.unavailable ? `<div class="warn" style="font-size:12px">⚠ ${esc(unavailableText(o.unavailable))}</div>` : ""}${o.error ? `<div class="err">${esc(tx(o.error))}${o.ignored ? ` <span class="muted">(${t("ignored")})</span>` : ""}</div>` : ""}${o.suspect ? `<div style="margin-top:4px">${approveBtn(s.set_number, rid, o.suspect.price)}</div>` : ""}${o.approved ? `<div class="muted" style="font-size:11px">✓ ${esc(t("approved around {price}", { price: EUR(o.approved) }))}</div>` : ""}</td>
         <td><div style="display:flex;gap:6px;align-items:center">${o.manual_url ? man : auto}${o.found_via === "sitemap" ? `<span class="abadge" title="${esc(t("Found in the shop's sitemap"))}">🗺</span>` : ""}${o.url ? `<a href="${esc(o.url)}" target="_blank" rel="noopener noreferrer" data-stop style="font-size:12px;white-space:nowrap">${t("open")} ↗</a>` : ""}</div><input class="ou" value="${esc(o.url || "")}" data-orig="${esc(o.url || "")}" placeholder="${t("empty = search automatically")}" style="margin-top:4px"></td>
         <td class="num"><div>${o.manual_price != null ? man : auto} ${o.price != null ? `<b class="${o.price === cheapest ? "ok" : ""}">${EUR(o.price)}</b>${viaBadge(o.via)}` : "–"}</div>
           <input class="op" type="text" inputmode="decimal" autocomplete="off" data-money value="${o.manual_price ?? ""}" data-orig="${o.manual_price ?? ""}" placeholder="${autoP != null ? EUR(autoP) : t("auto")}" title="${t("empty = automatic price")}" style="margin-top:4px">

@@ -2485,9 +2485,9 @@ async def test_catalog_deal_notification_rule(hass: HomeAssistant, entry, no_net
 
 
 async def test_smyths_toys_built_in(hass: HomeAssistant, no_network):
-    """Smyths Toys is a built-in shop: the search for the bare set number jumps to the product page, whose
-    standard product data gives the price; a product URL in the page's own data is found too. A Smyths
-    shop you added yourself stays yours: the built-in one is not switched on next to it."""
+    """Smyths Toys is a built-in shop, on by default: the search for the bare set number jumps to the product
+    page, whose standard product data gives the price; a product URL in the page's own data is found too.
+    A Smyths shop you added yourself is switched off and its links go to the built-in one."""
     from custom_components.lego_tracker import compare
     from custom_components.lego_tracker.client import Fetcher
     from custom_components.lego_tracker.parsers import find_search_result, parse_page, search_url
@@ -2521,4 +2521,72 @@ async def test_smyths_toys_built_in(hass: HomeAssistant, no_network):
     assert "smyths_be" in await setup(dict(base))
     own = {**base, "custom_shops": [{"id": "c_smyths", "name": "Smyths", "domain": "smythstoys.com",
                                      "search": "https://www.smythstoys.com/be/nl-be/search?text={query}"}], "retailers": ["bol", "c_smyths"]}
-    assert "smyths_be" not in (r := await setup(own)) and "c_smyths" in r
+    # on by default like bol.com; a Smyths shop you added yourself is switched off and hands over its links
+    assert "smyths_be" in (r := await setup(own)) and "c_smyths" not in r
+
+
+async def test_error_stats_solved_and_new(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    """Solved and new errors are counted per day; the first count is only the starting point, a removed
+    set is not 'solved', and the websocket gives the latest of each with the set and shop."""
+    c = await _setup(hass, entry)
+    await c.add_set("10281", name="Bonsai", discover=False)
+    await c.add_set("42143", name="Ferrari", discover=False)
+    c.store["offers"]["10281"] = {"bol": {"url": "https://www.bol.com/p/1", "error": "HTTP 404"}}
+    c.store["offers"]["42143"] = {}
+    c.store.pop("err_track", None)
+    c._track_errors(1000.0)
+    tr = c.store["err_track"]
+    assert set(tr["open"]) == {"10281|bol", "42143|"} and tr["days"] == {}           # starting point, not "new"
+    c.store["offers"]["10281"]["bol"]["error"] = None                                  # a price came in
+    c.store["offers"]["42143"] = {"amazon_nl": {"url": "https://www.amazon.nl/dp/x", "link_status": "suspect"}}
+    c._track_errors(2000.0)
+    total = lambda: {k: sum(d[k] for d in tr["days"].values()) for k in ("new", "solved")}  # noqa: E731
+    assert total() == {"new": 1, "solved": 2}                                          # no links → solved; suspect → new
+    await c.add_set("60400", name="Police", discover=False)                            # a set without links: new
+    c.remove_set("60400")
+    assert total() == {"new": 2, "solved": 2} and "60400|" not in tr["open"]            # removed: gone, not solved
+    c.store["offers"]["42143"]["amazon_nl"]["ignored"] = True                          # ignored errors don't count
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/error_stats"})
+    r = (await ws.receive_json())["result"]
+    assert r["open"] == 0 and r["solved"][0]["set_number"] == "42143" and r["solved"][0]["shop"] == "Amazon.nl"
+    assert {x["set_number"] for x in r["solved"]} == {"10281", "42143"} and r["solved"][-1]["open_for"] == 1000.0
+    assert r["new"][0]["set_number"] == "60400" and r["new"][0]["kind"] == "nolinks" and r["new"][1]["kind"] == "suspect"
+
+
+async def test_sold_out_and_discontinued_are_warnings_with_a_reason(hass: HomeAssistant, entry, no_network):
+    """A shop page without a price that says it is sold out or no longer sold gives a warning with the
+    reason, once, and no open error; a price clears it again."""
+    from custom_components.lego_tracker.parsers import availability_reason
+
+    assert availability_reason("<div>Dit product is niet meer leverbaar</div>") == "discontinued"
+    assert availability_reason('{"availability":"https://schema.org/SoldOut"}') == "sold_out"
+    assert availability_reason("<script>var t='uitverkocht'</script><p>Bonsai</p>") is None   # words in scripts don't count
+    c = await _setup(hass, entry)
+    await c.add_set("10281", name="Bonsai", discover=False)
+    c.store["offers"]["10281"] = {"bol": {"url": "https://www.bol.com/nl/nl/p/lego-10281/1/", "history": []}}
+    page = "<html><title>LEGO Icons 10281 Bonsai</title><body>Niet meer leverbaar</body></html>"
+    from custom_components.lego_tracker.parsers import parse_page
+    no_network.return_value = (parse_page("bol", page, "10281"), None)
+    await c.refresh_set("10281", ["bol"])
+    await c.refresh_set("10281", ["bol"])
+    o = c.store["offers"]["10281"]["bol"]
+    assert o["unavailable"] == "discontinued" and o["error"] is None and "10281|bol" not in c.open_error_keys()
+    logs = [e for e in c.store["activity"] if e.get("unavailable")]
+    assert len(logs) == 1 and logs[0]["level"] == "warning"
+    check = [e for e in c.store["activity"] if e["kind"] == "check"][-1]
+    assert check["results"]["bol"]["unavailable"] == "discontinued" and check["level"] == "ok"
+    no_network.return_value = (Parsed(price=59.99, title="LEGO Icons 10281 Bonsai"), None)
+    await c.refresh_set("10281", ["bol"])
+    assert "unavailable" not in o and o["last_price"] == 59.99
+
+
+async def test_own_shop_links_move_to_the_built_in_shop(hass: HomeAssistant, entry, no_network):
+    c = await _setup(hass, entry)
+    await c.add_set("11504", discover=False)
+    await c.add_set("10281", discover=False)
+    c.store["offers"]["11504"] = {"c_smyths": {"url": "https://www.smythstoys.com/be/nl-be/p/253664", "last_price": 37.99}}
+    c.store["offers"]["10281"] = {"c_smyths": {"url": "https://www.smythstoys.com/x"}, "smyths_be": {"url": "https://www.smythstoys.com/y"}}
+    assert c.move_shop("c_smyths", "smyths_be") == 1
+    assert c.store["offers"]["11504"] == {"smyths_be": {"url": "https://www.smythstoys.com/be/nl-be/p/253664", "last_price": 37.99}}
+    assert c.store["offers"]["10281"]["smyths_be"]["url"].endswith("/y") and "c_smyths" in c.store["offers"]["10281"]

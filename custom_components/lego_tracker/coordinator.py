@@ -146,8 +146,85 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.store["value_source"] = self.opt(self.entry, CONF_VALUE_SOURCE, "shop_first")
         self.verify_links()   # flag wrong links from older versions right away
 
+    def move_shop(self, old: str, new: str) -> int:
+        """Links and prices of a shop you added yourself go to the built-in shop for the same site (where that
+        one has no link yet). Your own shop is switched off, not deleted. Returns the number of links moved."""
+        n = 0
+        for num, offers in self.store["offers"].items():
+            if old in offers and offers[old].get("url") and not (offers.get(new) or {}).get("url"):
+                offers[new] = offers.pop(old)
+                n += 1
+        if n:
+            self.log("info", "shop", T("{n} links of your own shop {old} moved to the built-in shop {new}", n=n,
+                                       old=RETAILERS.get(old, (old,))[0], new=RETAILERS.get(new, (new,))[0]))
+            self._save()
+        return n
+
+    def open_error_keys(self) -> dict[str, str]:
+        """{"set|shop": kind} for every open error, the same list as Logbook → Open errors: a set without any
+        shop link, a shop page that failed, a suspicious link or price. Ignored errors don't count."""
+        out: dict[str, str] = {}
+        for num in self.store["sets"]:
+            offers = self.store["offers"].get(num) or {}
+            if not offers:
+                out[f"{num}|"] = "nolinks"
+            for rid, o in offers.items():
+                if o.get("ignored") or not (o.get("error") or o.get("link_status") == "suspect"):
+                    continue
+                out[f"{num}|{rid}"] = "suspect" if o.get("link_status") == "suspect" else "error"
+        return out
+
+    def _track_errors(self, now: float | None = None) -> None:
+        """Keep count of the errors that are solved and the ones that come in, per day (Logbook → Open errors).
+        The first time, today's open errors are only the starting point (not counted as new)."""
+        now = now or time.time()
+        tr = self.store.setdefault("err_track", {})
+        cur = self.open_error_keys()
+        day = dt_util.as_local(dt_util.utc_from_timestamp(now)).date().isoformat()
+        if "open" not in tr:
+            tr.update(open={k: now for k in cur}, days={}, solved=[], new=[], since=now)
+            return
+        was: dict[str, float] = tr["open"]
+        for k in [k for k in was if k not in cur and k.partition("|")[0] not in self.store["sets"]]:
+            was.pop(k)                                     # the set was removed: not solved, just gone
+        gone = [k for k in was if k not in cur]
+        came = [k for k in cur if k not in was]
+        if not gone and not came:
+            return
+        d = tr["days"].setdefault(day, {"new": 0, "solved": 0})
+        d["solved"] += len(gone)
+        d["new"] += len(came)
+        for k in gone:
+            tr["solved"].append([now, k, was.pop(k)])
+        for k in came:
+            was[k] = now
+            tr["new"].append([now, k, cur[k]])
+        del tr["solved"][:-500], tr["new"][:-500]
+        for old in sorted(tr["days"])[:-400]:              # a little more than a year of days
+            del tr["days"][old]
+
+    def error_stats(self) -> dict[str, Any]:
+        """Solved and new errors per day (for charts per day, week and month) and the latest of each, with
+        the set, the shop and how long the error was open."""
+        self._track_errors()
+        tr = self.store.get("err_track") or {}
+
+        def row(e: list[Any], solved: bool) -> dict[str, Any]:
+            num, _, rid = e[1].partition("|")
+            s = self.store["sets"].get(num) or {}
+            return {"ts": e[0], "set_number": num, "name": s.get("name") or "", "retailer": rid or None,
+                    "shop": RETAILERS.get(rid, (rid,))[0] if rid else None,
+                    **({"open_for": max(0, e[0] - e[2])} if solved else {"kind": e[2]})}
+        return {"open": len(tr.get("open") or {}), "since": tr.get("since"), "days": tr.get("days") or {},
+                "solved": [row(e, True) for e in reversed(tr.get("solved") or [])][:200],
+                "new": [row(e, False) for e in reversed(tr.get("new") or [])][:200]}
+
     def _save(self) -> None:
         # pauses survive restarts/reloads, otherwise a reload would hammer a shop that just blocked us
+        try:
+            self._track_errors()
+        except Exception:  # noqa: BLE001 - statistics must never stop a save
+            _LOGGER.exception("error statistics failed")
         self.store["cooldowns"] = {"until": dict(self.fetcher.blocked_until), "blocks": dict(self.fetcher.blocks)}
         self._store.async_delay_save(lambda: self.store, 5)
 
@@ -1121,6 +1198,17 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             shop_results[rid] = {"ok": not error, "price": price, "error": error, "manual": bool(manual)}
             if via:
                 shop_results[rid]["via"] = via
+            # the page says it is sold out / no longer sold: a warning with the reason, not an error to solve
+            why = parsed.reason if parsed and parsed.unavailable and price is None and not error else None
+            if why:
+                shop_results[rid]["unavailable"] = why
+                if offer.get("unavailable") != why:
+                    self.log("warning", "price", T("no price: sold out") if why == "sold_out"
+                             else T("no price: no longer sold (out of the range)"), set_number=num,
+                             retailer=rid, url=offer.get("url"), source=source, unavailable=why)
+                offer["unavailable"] = why
+            elif price is not None or error:
+                offer.pop("unavailable", None)
             if self.job and self.job.get("running"):
                 st = self.job["shops"].setdefault(rid, {"ok": 0, "err": 0})
                 st["err" if error else "ok"] += 1

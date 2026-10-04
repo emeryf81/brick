@@ -116,15 +116,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     apply_shop_options(dict(entry.options))
     # New built-in shops (e.g. Dreamland) are switched on once; afterwards the user's choice wins.
     known = set(entry.options.get(CONF_KNOWN_SHOPS) or ("amazon_nl", "amazon_de", "amazon_be", "bol", "kruidvat_be"))
+    moved: list[tuple[str, str]] = []
     if new_shops := [r for r in BUILTIN_RETAILERS if r not in known]:
         enabled = list(entry.options.get("retailers", DEFAULT_RETAILERS))
-        # a shop you already added yourself (same domain) stays yours: the built-in one is not switched on next to it
-        own = {g["domain"] for rid, g in GENERIC_SHOPS.items() if rid not in BUILTIN_RETAILERS}
-        enabled += [r for r in new_shops if r not in enabled and domain_of(r) not in own]
+        enabled += [r for r in new_shops if r not in enabled]
+        # a shop you added yourself on the same site (e.g. Smyths Toys) hands its links over to the built-in one
+        moved = [(rid, new) for new in new_shops for rid, g in GENERIC_SHOPS.items()
+                 if rid not in BUILTIN_RETAILERS and g.get("domain") == domain_of(new)]
+        enabled = [r for r in enabled if r not in {old for old, _ in moved}]
         hass.config_entries.async_update_entry(
             entry, options={**entry.options, "retailers": enabled, CONF_KNOWN_SHOPS: list(BUILTIN_RETAILERS)})
     coord = LegoCoordinator(hass, entry)
     await coord.async_load()
+    for old, new in moved:
+        coord.move_shop(old, new)
     _LOGGER.info("LEGO Price Tracker %s starting (request transport: %s)", VERSION, coord.fetcher.transport)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coord
     coord.async_set_updated_data(coord.compute())

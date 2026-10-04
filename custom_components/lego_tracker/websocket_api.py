@@ -68,6 +68,7 @@ def _card(coord, num: str, with_history: bool = False) -> dict[str, Any]:
             rid: {"label": RETAILERS[rid][0], "url": o.get("url"), "price": offer_price(o), "auto_price": o.get("auto_price") if o.get("manual_price") else None,
                   "manual_price": (o.get("manual_price") or {}).get("price"), "manual_url": bool(o.get("manual_url")),
                   "available": o.get("available"), "error": o.get("error"), "checked": o.get("last_checked"),
+                  "unavailable": o.get("unavailable") if not o.get("available") else None,
                   "low": min((p for _, p in o.get("history", [])), default=None),
                   "title": o.get("title"), "link_status": o.get("link_status"), "link_reason": o.get("link_reason"),
                   "via": o.get("last_via") if o.get("available") and not o.get("manual_price") else None, "found_via": o.get("found_via"),
@@ -123,6 +124,7 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_ticker)
     websocket_api.async_register_command(hass, ws_new_sets)
     websocket_api.async_register_command(hass, ws_catalog)
+    websocket_api.async_register_command(hass, ws_error_stats)
     websocket_api.async_register_command(hass, ws_setdb_search)
     hass.http.register_view(UserscriptView())
     hass.http.register_view(RelayView())
@@ -790,6 +792,17 @@ def ws_new_sets(hass, connection, msg):
         connection.send_result(msg["id"], {"items": [], "count": 0})
         return
     connection.send_result(msg["id"], coord.new_sets())
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/error_stats"})
+@callback
+def ws_error_stats(hass, connection, msg):
+    """Logbook → Open errors: solved and new errors per day, and the latest of each."""
+    coord = _coord(hass)
+    if coord is None:
+        connection.send_result(msg["id"], {"open": 0, "days": {}, "solved": [], "new": []})
+        return
+    connection.send_result(msg["id"], coord.error_stats())
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/catalog", vol.Optional("q", default=""): vol.All(str, vol.Length(max=80)),
