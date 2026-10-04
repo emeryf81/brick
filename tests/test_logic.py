@@ -314,7 +314,8 @@ def test_analyze_fatal_cases():
 def test_paid_average_ignores_missing_prices():
     store = models.new_store()
     csv_import.apply_import(store, [{"set_number": "1", "qty": 1, "paid": 40.0}, {"set_number": "1", "qty": 1}])
-    assert store["collection"]["1"] == {"qty": 2, "paid": 40.0}
+    # two lines = two copies, each its own price; the set-level average only counts the known price
+    assert store["collection"]["1"] == {"qty": 2, "paid": 40.0, "items": [{"paid": 40.0}, {}]}
 
 
 def test_csv_export_neutralises_formulas():
@@ -565,3 +566,18 @@ def test_custom_shop_search_must_be_on_the_shop_host():
     with pytest.raises(ValueError):
         shops.validate_custom_shop({"name": "x", "domain": "shop.be", "search": "https://shop.be.evil.example/?q={query}"})
     assert shops.validate_custom_shop({"name": "x", "domain": "shop.be", "search": "https://www.shop.be/zoek?q={query}"})["domain"] == "shop.be"
+
+
+
+
+def test_export_safety_apostrophe_is_removed_on_import():
+    """Our export puts an apostrophe before =, +, -, @ and ' (spreadsheet safety); importing the file again gives
+    the original text back, also for text that itself starts with an apostrophe. Other leading apostrophes stay."""
+    res = csv_import.analyze_csv("Number;Name;Location;Notes\n10281;'=Bonsai;'-shelf 2;'quoted\n")
+    item = res["rows"][0]
+    assert item["name"] == "=Bonsai" and item["location"] == "-shelf 2" and item["notes"] == "'quoted"
+
+    rows = [{"Number": "10281", "Name": "'=Bonsai", "Location": "=A1", "Notes": "'t Huis"}]
+    text = models.rows_to_csv(rows, ["Number", "Name", "Location", "Notes"])
+    item = csv_import.analyze_csv(text)["rows"][0]
+    assert item["name"] == "'=Bonsai" and item["location"] == "=A1" and item["notes"] == "'t Huis"

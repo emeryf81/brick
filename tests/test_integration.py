@@ -1873,19 +1873,39 @@ def test_news_file_parsing():
 
 async def test_ticker_market_tick_and_shop_link(hass: HomeAssistant, entry, no_network):
     c = await _setup(hass, entry)
-    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
-    c.log("ok", "price", "€49.99 → €39.99", set_number="10281", retailer="bol", url="https://www.bol.com/nl/nl/p/x/1/",
-          price=39.99, old_price=49.99, source="server")
-    c.store["events"] = [{"ts": time.time(), "kind": "deal", "set_number": "10281", "name": "Bonsai", "price": 39.99,
-                          "retailer": "bol", "url": "https://www.bol.com/nl/nl/p/x/1/", "discount": 20, "score": 80}]
+    now = time.time()
+    for num, price in (("10281", 39.99), ("42143", 99.0), ("10305", 110.0)):     # a deal, -1 % (lowest ever), above the RRP
+        await c.add_set(num, name=f"Set {num}", rrp=100, discover=False)
+        c.store["offers"][num] = {"bol": {"url": f"https://www.bol.com/nl/nl/p/x/{num}/", "available": True, "last_price": price,
+                                          "last_checked": now, "history": [[now - 86400 * 30, 100.0], [now, price]]}}
+    c.store["events"] = [{"ts": now, "kind": "price_drop", "set_number": "10305", "name": "x", "price": 110.0, "discount": -110}]
+    c.push_update()
     from custom_components.lego_tracker.news import NewsFeed
     c.news = NewsFeed(lambda: None)
     c.news.ts, c.news.items = time.time(), [{"id": "a", "title": "Hi", "body": "x", "link": "", "lang": ""}]
     tk = await c.ticker_data("nl")
-    assert [i["kind"] for i in tk["items"]] == ["price", "deal"] and tk["items"][0]["pct"] == -20.0 and tk["news"][0]["id"] == "a"
-    c.hass.config_entries.async_update_entry(c.entry, options={**c.entry.options, "ticker": {"watch": False, "deals": True, "news": False, "max_deals": 1}})
-    tk = await c.ticker_data("nl")
-    assert [i["kind"] for i in tk["items"]] == ["deal"] and tk["news"] == []
+    # only the real deal (deal score), with its discount; no "-1 %" and no "-110 %" from an old notification
+    assert [(i["kind"], i["set_number"]) for i in tk["items"]] == [("deal", "10281")]
+    assert tk["items"][0]["discount"] == 60.0 and tk["items"][0]["score"] >= 70 and tk["news"][0]["id"] == "a"
+    assert tk["config"]["shuffle"] is True
+    from custom_components.lego_tracker.const import DEAL_FILTER_DEFAULT, TICKER_DEFAULT
+    cls = type(c)
+    with patch.object(cls, "ticker", property(lambda self: {**TICKER_DEFAULT, "deals": False, "news": False})):
+        tk = await c.ticker_data("nl")            # deals off: the watched set at a good price shows as a watchlist item
+        assert [(i["kind"], i["set_number"]) for i in tk["items"]] == [("price", "10281")] and tk["news"] == []
+    with patch.object(cls, "ticker", property(lambda self: {**TICKER_DEFAULT, "max_deals": 0, "news": False})):
+        tk = await c.ticker_data("nl")            # no deals shown at all: the watched deal is a watchlist item
+        assert [(i["kind"], i["set_number"]) for i in tk["items"]] == [("price", "10281")]
+    await c.add_set("21342", name="Insects", rrp=100, discover=False)
+    c.store["offers"]["21342"] = {"bol": {"url": "https://www.bol.com/p/9", "available": True, "last_price": 30.0,
+                                          "last_checked": now, "history": [[now - 86400 * 30, 100.0], [now, 30.0]]}}
+    c.push_update()
+    assert c.data["statuses"]["21342"]["deal_score"] >= 70
+    with patch.object(cls, "ticker", property(lambda self: {**TICKER_DEFAULT, "max_deals": 1, "news": False})):
+        tk = await c.ticker_data("nl")            # two watched deals, one shown: the other is not a watchlist item
+        assert [i["kind"] for i in tk["items"]] == ["deal"]
+    with patch.object(cls, "deal_filter", property(lambda self: {**DEAL_FILTER_DEFAULT, "max_price": 20})):
+        assert (await c.ticker_data("nl"))["items"] == []                     # left out under Deals → Settings
 
     # market value: one set per tick, never more often than the spread allows
     calls = []
@@ -2097,15 +2117,15 @@ async def test_ticker_defaults_api_level_and_market_label(hass: HomeAssistant, e
     from custom_components.lego_tracker.const import API_LEVEL
 
     c = await _setup(hass, entry)
-    assert c.ticker == {"watch": True, "deals": True, "news": True, "max_watch": 3, "max_deals": 3, "max_news": 3}
-    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
+    assert c.ticker == {"watch": True, "deals": True, "news": True, "max_watch": 3, "max_deals": 3, "max_news": 3, "shuffle": True}
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281", "rrp": 100}, blocking=True)
     c.store["offers"]["10281"]["bol"] = {"url": "https://www.bol.com/nl/nl/p/x/1/", "available": True, "last_price": 39.99,
                                          "last_checked": time.time(), "history": [[time.time(), 39.99]]}
     c.push_update()
     from custom_components.lego_tracker.news import NewsFeed
     c.news = NewsFeed(lambda: None)
     c.news.ts = time.time()
-    tk = await c.ticker_data("nl")                  # no recent price change: the current price is shown anyway
+    tk = await c.ticker_data("nl")                  # 60 % below the RRP: a deal
     assert tk["items"][0]["set_number"] == "10281" and tk["items"][0]["price"] == 39.99
     ws = await hass_ws_client(hass)
     await ws.send_json({"id": 1, "type": "lego_tracker/overview"})
@@ -2115,27 +2135,6 @@ async def test_ticker_defaults_api_level_and_market_label(hass: HomeAssistant, e
     c._rename_market_source()
     assert c.store["sets"]["10281"]["exit_date_source"] == "Market value" and c.store["sets"]["10281"]["market"]["source"] == "Market value"
     assert c.store["activity"][-1]["source"] == "Market value" and "BrickEconomy" not in c.store["activity"][-1]["message"]
-
-
-@pytest.mark.parametrize("price, retailer, expected_score", [
-    (39.99, "bol", True),
-    (49.99, "bol", False),
-    (39.99, "amazon_nl", False),
-    (49.99, "amazon_nl", False),
-])
-async def test_ticker_recent_price_score_matches_best_offer(hass: HomeAssistant, entry, price, retailer, expected_score):
-    hass.config_entries.async_update_entry(entry, options={**entry.options, "ticker": {"news": False, "deals": False}})
-    c = await _setup(hass, entry)
-    await c.add_set("10281", name="Bonsai", rrp=100)
-    c.store["offers"]["10281"] = {"bol": {"available": True, "last_price": 39.99}}
-    c.store["activity"] = [{"kind": "price", "ts": time.time(), "set_number": "10281",
-                            "price": price, "old_price": 59.99, "retailer": retailer}]
-    c.push_update()
-    score = c.data["statuses"]["10281"]["deal_score"]
-    assert score > 0
-    item = (await c.ticker_data("en"))["items"][0]
-    assert item["price"] == price
-    assert item["score"] == (score if expected_score else None)
 
 
 @pytest.mark.parametrize("merge", [False, True])
@@ -2494,3 +2493,237 @@ async def test_catalog_deal_notification_rule(hass: HomeAssistant, entry, no_net
     await c.notifier.on_catalog_deal("76300", {"price": 70.0, "shop": "bol", "url": "https://www.bol.com/p/1", "rrp": 100.0, "deal": 30.0})
     assert len(sent) == 1 and sent[0][0] == "a" and "76300" in sent[0][1] and "70.00" in sent[0][2] and "30%" in sent[0][2]
     assert sent[0][3] == "https://www.bol.com/p/1"
+
+
+async def test_smyths_toys_built_in(hass: HomeAssistant, no_network):
+    """Smyths Toys is a built-in shop, on by default: the search for the bare set number jumps to the product
+    page, whose standard product data gives the price; a product URL in the page's own data is found too.
+    A Smyths shop you added yourself is switched off and its links go to the built-in one."""
+    from custom_components.lego_tracker import compare
+    from custom_components.lego_tracker.client import Fetcher
+    from custom_components.lego_tracker.parsers import find_search_result, parse_page, search_url
+    from custom_components.lego_tracker.shops import all_domains
+
+    product = "https://www.smythstoys.com/be/nl-be/speelgoed/lego/lego-botanicals/lego-botanicals-11504-lepelplant-set/p/253664"
+    page = ('<html><head><title>LEGO Botanicals 11504 Lepelplant Set | Smyths Toys België</title>'
+            '<meta property="og:price:amount" content="37.99"><meta property="og:price:currency" content="EUR">'
+            '<meta property="og:title" content="LEGO Botanicals 11504 Lepelplant Set | Smyths Toys België">'
+            f'<meta property="og:url" content="{product}"></head></html>')
+    assert search_url("smyths_be", "11504") == "https://www.smythstoys.com/be/nl-be/search?text=11504"
+    p = parse_page("smyths_be", page, "11504")
+    assert p.price == 37.99 and "11504" in p.title
+    f = Fetcher(None, use_impersonation=False)
+    f.final_url["smyths_be"] = product
+    assert f._landed_on_product("smyths_be", search_url("smyths_be", "11504"), page, "11504") == product
+    payload = '<script id="__NUXT_DATA__">["' + product.replace("https://www.smythstoys.com", "").replace("/", "\\/") + '"]</script>'
+    assert find_search_result("smyths_be", payload, "11504") == product
+    assert find_search_result("smyths_be", payload.replace("11504", "11505"), "11504") is None
+    assert compare.shop_retailer("Smyths Toys", None, all_domains()) == "smyths_be"
+
+    async def setup(options):
+        e = MockConfigEntry(domain=DOMAIN, data={}, options=options)
+        e.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(e.entry_id)
+        await hass.async_block_till_done()
+        enabled = list(e.options["retailers"])
+        assert await hass.config_entries.async_unload(e.entry_id)
+        return enabled
+    base = {"retailers": ["bol"], "known_shops": ["amazon_nl", "amazon_de", "amazon_be", "bol", "kruidvat_be", "lego_com", "dreamland_be"]}
+    assert "smyths_be" in await setup(dict(base))
+    own = {**base, "custom_shops": [{"id": "c_smyths", "name": "Smyths", "domain": "smythstoys.com",
+                                     "search": "https://www.smythstoys.com/be/nl-be/search?text={query}"}], "retailers": ["bol", "c_smyths"]}
+    # on by default like bol.com; a Smyths shop you added yourself is switched off and hands over its links
+    assert "smyths_be" in (r := await setup(own)) and "c_smyths" not in r
+
+
+async def test_error_stats_solved_and_new(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    """Solved and new errors are counted per day; the first count is only the starting point, a removed
+    set is not 'solved', and the websocket gives the latest of each with the set and shop."""
+    c = await _setup(hass, entry)
+    await c.add_set("10281", name="Bonsai", discover=False)
+    await c.add_set("42143", name="Ferrari", discover=False)
+    c.store["offers"]["10281"] = {"bol": {"url": "https://www.bol.com/p/1", "error": "HTTP 404"}}
+    c.store["offers"]["42143"] = {}
+    c.store.pop("err_track", None)
+    c._track_errors(1000.0)
+    tr = c.store["err_track"]
+    assert set(tr["open"]) == {"10281|bol", "42143|"} and tr["days"] == {}           # starting point, not "new"
+    c.store["offers"]["10281"]["bol"]["error"] = None                                  # a price came in
+    c.store["offers"]["42143"] = {"amazon_nl": {"url": "https://www.amazon.nl/dp/x", "link_status": "suspect"}}
+    c._track_errors(2000.0)
+    total = lambda: {k: sum(d[k] for d in tr["days"].values()) for k in ("new", "solved")}  # noqa: E731
+    assert total() == {"new": 1, "solved": 2}                                          # no links → solved; suspect → new
+    await c.add_set("60400", name="Police", discover=False)                            # a set without links: new
+    c.remove_set("60400")
+    assert total() == {"new": 2, "solved": 2} and "60400|" not in tr["open"]            # removed: gone, not solved
+    c.store["offers"]["42143"]["amazon_nl"]["ignored"] = True                          # ignored errors don't count
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/error_stats"})
+    r = (await ws.receive_json())["result"]
+    assert r["open"] == 0 and r["solved"][0]["set_number"] == "42143" and r["solved"][0]["shop"] == "Amazon.nl"
+    assert {x["set_number"] for x in r["solved"]} == {"10281", "42143"} and r["solved"][-1]["open_for"] == 1000.0
+    assert r["new"][0]["set_number"] == "60400" and r["new"][0]["kind"] == "nolinks" and r["new"][1]["kind"] == "suspect"
+
+
+async def test_sold_out_and_discontinued_are_warnings_with_a_reason(hass: HomeAssistant, entry, no_network):
+    """A shop page without a price that says it is sold out or no longer sold gives a warning with the
+    reason, once, and no open error; a price clears it again."""
+    from custom_components.lego_tracker.parsers import availability_reason
+
+    assert availability_reason("<div>Dit product is niet meer leverbaar</div>") == "discontinued"
+    ld = lambda x: f'<script type="application/ld+json">{x}</script>'  # noqa: E731
+    assert availability_reason(ld('{"@type":"Product","name":"LEGO 10281","offers":{"availability":"https://schema.org/SoldOut"}}'), "10281") == "sold_out"
+    # a sold-out recommendation does not make the page's own product sold out
+    own = '{"@type":"Product","name":"LEGO 10281 Bonsai","offers":{"availability":"https://schema.org/InStock"}}'
+    rec = '{"@type":"Product","name":"LEGO 10305","offers":{"availability":"https://schema.org/Discontinued"}}'
+    assert availability_reason(ld(f"[{own},{rec}]") + "<p>uitverkocht</p>", "10281") is None
+    assert availability_reason(ld(f"[{rec},{own.replace('InStock', 'OutOfStock')}]"), "10281") == "sold_out"
+    # the own product without any availability: words elsewhere on the page don't decide
+    assert availability_reason(ld('{"@type":"Product","name":"LEGO 10281 Bonsai","offers":{"price":""}}') + "<p>Uitverkocht</p>", "10281") is None
+    assert availability_reason("<script>var t='uitverkocht'</script><p>Bonsai</p>") is None   # words in scripts don't count
+    c = await _setup(hass, entry)
+    await c.add_set("10281", name="Bonsai", discover=False)
+    c.store["offers"]["10281"] = {"bol": {"url": "https://www.bol.com/nl/nl/p/lego-10281/1/", "history": []}}
+    page = "<html><title>LEGO Icons 10281 Bonsai</title><body>Niet meer leverbaar</body></html>"
+    from custom_components.lego_tracker.parsers import parse_page
+    no_network.return_value = (parse_page("bol", page, "10281"), None)
+    await c.refresh_set("10281", ["bol"])
+    await c.refresh_set("10281", ["bol"])
+    o = c.store["offers"]["10281"]["bol"]
+    assert o["unavailable"] == "discontinued" and o["error"] is None and "10281|bol" not in c.open_error_keys()
+    logs = [e for e in c.store["activity"] if e.get("unavailable")]
+    assert len(logs) == 1 and logs[0]["level"] == "warning"
+    check = [e for e in c.store["activity"] if e["kind"] == "check"][-1]
+    assert check["results"]["bol"]["unavailable"] == "discontinued" and check["level"] == "ok"
+    no_network.return_value = (Parsed(price=59.99, title="LEGO Icons 10281 Bonsai"), None)
+    await c.refresh_set("10281", ["bol"])
+    assert "unavailable" not in o and o["last_price"] == 59.99
+
+
+async def test_own_shop_links_move_to_the_built_in_shop(hass: HomeAssistant, entry, no_network):
+    c = await _setup(hass, entry)
+    await c.add_set("11504", discover=False)
+    await c.add_set("10281", discover=False)
+    c.store["offers"]["11504"] = {"c_smyths": {"url": "https://www.smythstoys.com/be/nl-be/p/253664", "last_price": 37.99}}
+    c.store["offers"]["10281"] = {"c_smyths": {"url": "https://www.smythstoys.com/x"}, "smyths_be": {"url": "https://www.smythstoys.com/y"}}
+    c.store["offers"]["10281"]["c_smyths"].update(history=[[86400 * 10, 50.0]], last_price=50.0, last_checked=999, manual_price={"price": 45})
+    c.store["offers"]["10281"]["smyths_be"].update(history=[[86400 * 20, 48.0]], last_price=48.0, last_checked=500)
+    assert c.move_shop("c_smyths", "smyths_be") == 2
+    assert c.store["offers"]["11504"] == {"smyths_be": {"url": "https://www.smythstoys.com/be/nl-be/p/253664", "last_price": 37.99}}
+    # both linked: the built-in link stays, the history, the hand-entered price and the newest price come along
+    b = c.store["offers"]["10281"]
+    assert "c_smyths" not in b and b["smyths_be"]["url"].endswith("/y") and b["smyths_be"]["history"] == [[864000, 50.0], [1728000, 48.0]]
+    assert b["smyths_be"]["manual_price"] == {"price": 45} and b["smyths_be"]["last_price"] == 50.0
+    assert c.move_shop("c_smyths", "smyths_be") == 0
+
+
+async def test_every_copy_has_its_own_price_date_condition_and_value(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    """Two copies of a set: each with its own price paid, date, condition and location; a sealed copy is worth
+    the new value, an opened one the used market value; the totals, analytics, CSV export and import follow."""
+    from custom_components.lego_tracker.csv_import import apply_import
+    from custom_components.lego_tracker.i18n import LocalizedError
+    from custom_components.lego_tracker.models import collection_rows, collection_summary, copies
+
+    c = await _setup(hass, entry)
+    await c.add_set("10281", name="Bonsai", rrp=50, owned={"qty": 2, "paid": 40, "condition": "Sealed"}, discover=False)
+    e = c.store["collection"]["10281"]
+    assert len(copies(e)) == 2 and copies(e)[1]["paid"] == 40          # old entries: equal copies
+    c.store["sets"]["10281"]["market"] = {"market_new": 60.0, "market_used": 35.0}
+    c.update_set("10281", {"copies": [
+        {"paid": 39.99, "added": "2024-05-01", "condition": "Sealed", "location": "Attic"},
+        {"paid": "25,50", "added": "2025-01-10", "condition": "Built", "notes": "living room"},
+        {"condition": "Opened"},
+    ]})
+    e = c.store["collection"]["10281"]
+    assert e["qty"] == 3 and e["paid"] == 32.75 and e["added"] == "2024-05-01" and e["condition"] == "Sealed"
+    assert e["items"][1] == {"paid": 25.5, "added": "2025-01-10", "condition": "Built", "notes": "living room"}
+    st = c.compute()["statuses"]
+    summ = collection_summary(c.store, st)
+    assert summ["sets"] == 3 and summ["value"] == 50 + 35 + 35 and summ["cost"] == 65.49     # sealed: RRP (no shop), built/opened: used
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/set", "set_number": "10281"})
+    card = (await ws.receive_json())["result"]
+    assert [x["value"] for x in card["collection"]["copies"]] == [50.0, 35.0, 35.0]
+    rows = [r for r in collection_rows(c.store, st) if r["Number"] == "10281"]
+    assert [(r["Qty"], r["Paid"], r["Condition"]) for r in rows] == [(1, 39.99, "Sealed"), (1, 25.5, "Built"), (1, "", "Opened")]
+    assert [(r["Location"], r["Notes"]) for r in rows] == [("Attic", ""), ("", "living room"), ("", "")]   # per copy, also on import
+
+    # a market value with only a used price: not the value of a set that still has a sealed copy
+    s = c.store["sets"]["10281"]
+    e.pop("current_value", None)
+    c._apply_market("10281", s, {"market_used": 33.0}, "market", 1.0)
+    assert not e.get("current_value")
+    c._apply_market("10281", s, {"market_new": 61.0, "market_used": 33.0}, "market", 2.0)
+    assert e["current_value"] == 61.0
+
+    # a new quantity on the set adds or removes copies at the end; set-level fields go to every copy
+    c.update_set("10281", {"qty": 4})
+    assert len(e["items"]) == 4 and e["items"][3] == {"condition": "Opened"}
+    c.update_set("10281", {"qty": 2, "location": "Shelf"})
+    assert len(e["items"]) == 2 and all(x["location"] == "Shelf" for x in e["items"])
+    c.update_set("10281", {"qty": 4, "location": "Attic"})                    # new copies get the new location too
+    assert len(e["items"]) == 4 and all(x["location"] == "Attic" for x in e["items"])
+    c.update_set("10281", {"qty": 2})
+    for bad in ([], [{"paid": -1}], [{"paid": "nan"}], [{"paid": "inf"}], [{"added": "2999-01-01"}], [{"condition": "Mint"}], ["x"]):
+        with pytest.raises(LocalizedError):
+            c.update_set("10281", {"copies": bad})
+    before = [dict(x) for x in e["items"]]
+    with pytest.raises(LocalizedError):                                       # a bad field elsewhere: nothing changes
+        c.update_set("10281", {"copies": [{"paid": 1}], "current_value": "nan"})
+    with pytest.raises(LocalizedError):
+        c.update_set("10281", {"copies": [{"paid": 1}], "rrp": -5})
+    assert e["items"] == before and e["qty"] == 2
+    # a full watchlist refuses watch=True before anything changes (the name is not cleared either)
+    c.store["sets"]["10281"].update(name="Bonsai", name_source="user")
+    with patch.object(type(c), "watch_limit", property(lambda self: 0)), \
+         patch.object(c, "is_watched", return_value=False), pytest.raises(LocalizedError):
+        c.update_set("10281", {"copies": [{"paid": 1}], "name": "", "watch": True})
+    assert c.store["sets"]["10281"]["name"] == "Bonsai" and c.store["sets"]["10281"]["name_source"] == "user" and e["items"] == before
+
+    # import: one line per copy keeps them apart; the same quantity again on one line keeps your own copies
+    rows = [{"set_number": "42143", "qty": 1, "paid": 300.0, "condition": "Sealed"},
+            {"set_number": "42143", "qty": 1, "paid": 350.0, "condition": "Built", "added": "2023-02-02"}]
+    apply_import(c.store, rows)
+    f = c.store["collection"]["42143"]
+    assert [x["paid"] for x in f["items"]] == [300.0, 350.0] and f["qty"] == 2 and f["paid"] == 325.0
+    apply_import(c.store, [{"set_number": "42143", "qty": 2, "paid": 1.0, "current_value": 400.0}])
+    assert [x["paid"] for x in f["items"]] == [300.0, 350.0] and f["current_value"] == 400.0
+    apply_import(c.store, [{"set_number": "42143", "qty": 3, "paid": 320.0}])
+    assert "items" not in f and f["qty"] == 3 and f["paid"] == 320.0
+
+
+async def test_own_shop_move_is_finished_on_a_later_start(hass: HomeAssistant, no_network):
+    """The built-in shop is already known (an earlier start was interrupted): the own shop is off, so its links
+    still move to the built-in shop at this start."""
+    e = MockConfigEntry(domain=DOMAIN, data={}, options={
+        "retailers": ["bol", "smyths_be"], "known_shops": ["amazon_nl", "amazon_de", "amazon_be", "bol", "kruidvat_be", "lego_com",
+                                                            "dreamland_be", "smyths_be"],
+        "custom_shops": [{"id": "c_smyths", "name": "Smyths", "domain": "smythstoys.com",
+                          "search": "https://www.smythstoys.com/be/nl-be/search?text={query}"}]})
+    e.add_to_hass(hass)
+    from homeassistant.helpers.storage import Store
+    from custom_components.lego_tracker.const import STORAGE_KEY, STORAGE_VERSION
+    from custom_components.lego_tracker.models import new_store
+    data = new_store()
+    data["sets"]["11504"] = {"set_number": "11504"}
+    data["offers"]["11504"] = {"c_smyths": {"url": "https://www.smythstoys.com/p/253664", "last_price": 37.99}}
+    await Store(hass, STORAGE_VERSION, STORAGE_KEY).async_save(data)
+    assert await hass.config_entries.async_setup(e.entry_id)
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][e.entry_id]
+    assert list(c.store["offers"]["11504"]) == ["smyths_be"]
+
+
+def test_series_keeps_own_imported_value_for_opened_copies():
+    """With 'imported value first' and your own imported value, an opened copy keeps that value in the chart,
+    the same as in the collection value (no used market value instead)."""
+    from custom_components.lego_tracker.models import collection_series, collection_summary, new_store
+
+    store = new_store()
+    store["value_source"] = "import_first"
+    store["sets"]["10281"] = {"set_number": "10281", "rrp": 50, "market": {"market_new": 60, "market_used": 30}}
+    store["collection"]["10281"] = {"qty": 1, "current_value": 80.0, "value_source": "import", "condition": "Built", "added": "1970-01-05"}
+    series = collection_series(store, now=1_000_000.0)
+    assert series[-1]["value"] == 80.0 == collection_summary(store, {})["value"]
+    store["collection"]["10281"]["value_source"] = "Market value"                  # value from the market: used value
+    assert collection_series(store, now=1_000_000.0)[-1]["value"] == 30.0 == collection_summary(store, {})["value"]

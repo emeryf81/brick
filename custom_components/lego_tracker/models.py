@@ -338,6 +338,59 @@ def collection_value(entry: dict[str, Any], status: dict[str, Any], lego_set: di
     return 0.0, "none"
 
 
+OPENED = ("Opened", "Built", "Incomplete")       # conditions whose value is the "used" market value
+COPY_FIELDS = ("paid", "added", "condition", "location", "notes")
+MARKET_LABEL = "Market value"
+
+
+def copies(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every copy of a set in your collection, each with its own purchase price, date, condition, location
+    and notes. Entries from before 0.9.21 (one set of fields and a quantity) are as many equal copies."""
+    items = entry.get("items")
+    if isinstance(items, list) and items:
+        return items
+    one = {k: entry[k] for k in COPY_FIELDS if entry.get(k) not in (None, "")}
+    return [dict(one) for _ in range(max(1, int(entry.get("qty", 1) or 1)))]
+
+
+def sync_copies(entry: dict[str, Any]) -> None:
+    """Keep the set-level fields in line with the copies (quantity, average price paid, first purchase date,
+    the first copy's condition and location), for exports and older views."""
+    items = entry.get("items")
+    if not isinstance(items, list) or not items:
+        entry.pop("items", None)
+        return
+    entry["qty"] = len(items)
+    paid = [float(c["paid"]) for c in items if c.get("paid") is not None]
+    if paid:
+        entry["paid"] = round(sum(paid) / len(paid), 2)
+    else:
+        entry.pop("paid", None)
+    dates = sorted(c["added"] for c in items if c.get("added"))
+    if dates:
+        entry["added"] = dates[0]
+    else:
+        entry.pop("added", None)
+    for k in ("condition", "location"):
+        if items[0].get(k):
+            entry[k] = items[0][k]
+        else:
+            entry.pop(k, None)
+
+
+def copy_value(copy: dict[str, Any], entry: dict[str, Any], status: dict[str, Any], lego_set: dict[str, Any],
+               prefer_import: bool = False) -> tuple[float, str]:
+    """Value of one copy: an opened, built or incomplete copy is worth the used market value (when known),
+    a sealed one the new value (shop price / imported value / RRP, see collection_value). A value you
+    imported yourself wins when 'imported value first' is chosen."""
+    unit, source = collection_value(entry, status, lego_set, prefer_import)
+    used = (lego_set.get("market") or {}).get("market_used")
+    own_import = prefer_import and entry.get("current_value") and entry.get("value_source") not in (None, MARKET_LABEL)
+    if copy.get("condition") in OPENED and used and not own_import:
+        return float(used), "market_used"
+    return unit, source
+
+
 def _prefer_import(store: dict[str, Any]) -> bool:
     return store.get("value_source") == "import_first"
 
@@ -376,10 +429,6 @@ def collection_series(store: dict[str, Any], now: float | None = None, points: i
         t = min(ts, now)
         value = cost = 0.0
         for num, entry in coll.items():
-            added = _added_ts(entry)
-            if added and added > t:
-                continue
-            qty = int(entry.get("qty", 1) or 1)
             hist = hists[num]
             shop = price_at(hist, t)
             imported = price_at(entry.get("value_history", []), t) or (
@@ -390,8 +439,14 @@ def collection_series(store: dict[str, Any], now: float | None = None, points: i
                 unit = shop or imported
             if unit is None:
                 unit = entry.get("current_value") or store["sets"].get(num, {}).get("rrp") or 0
-            value += qty * float(unit)
-            cost += qty * float(entry.get("paid") or 0)
+            used = (store["sets"].get(num, {}).get("market") or {}).get("market_used")
+            own_import = pref and entry.get("current_value") and entry.get("value_source") not in (None, MARKET_LABEL)
+            for c in copies(entry):               # every copy from its own purchase date (same rule as copy_value)
+                added = _added_ts(c)
+                if added and added > t:
+                    continue
+                value += float(used if used and c.get("condition") in OPENED and not own_import else unit)
+                cost += float(c.get("paid") or 0)
         out.append({"ts": t, "value": round(value, 2), "cost": round(cost, 2)})
         if t >= now:
             break
@@ -405,14 +460,14 @@ def collection_summary(store: dict[str, Any], statuses: dict[str, dict[str, Any]
     by_theme: dict[str, float] = {}
     for num, entry in store["collection"].items():
         s = store["sets"].get(num, {})
-        qty = int(entry.get("qty", 1) or 1)
-        unit, _ = collection_value(entry, statuses.get(num, {}), s, _prefer_import(store))
-        value += qty * unit
-        cost += qty * float(entry.get("paid") or 0)
-        pieces += qty * int(s.get("pieces") or 0)
-        count += qty
         theme = s.get("theme") or "Unknown"
-        by_theme[theme] = by_theme.get(theme, 0) + qty * unit
+        for c in copies(entry):
+            unit, _ = copy_value(c, entry, statuses.get(num, {}), s, _prefer_import(store))
+            value += unit
+            cost += float(c.get("paid") or 0)
+            pieces += int(s.get("pieces") or 0)
+            count += 1
+            by_theme[theme] = by_theme.get(theme, 0) + unit
     return {
         "sets": count, "pieces": pieces,
         "value": round(value, 2), "cost": round(cost, 2),
@@ -431,23 +486,27 @@ def collection_analytics(store: dict[str, Any], statuses: dict[str, dict[str, An
     paid_total = paid_pieces = 0.0
     for num, entry in store["collection"].items():
         s = store["sets"].get(num, {})
-        qty = int(entry.get("qty", 1) or 1)
-        unit, _ = collection_value(entry, statuses.get(num, {}), s, _prefer_import(store))
-        t = by_theme.setdefault(s.get("theme") or "Unknown", {"count": 0, "value": 0.0, "cost": 0.0})
-        t["count"] += qty
-        t["value"] += unit * qty
-        t["cost"] += float(entry.get("paid") or 0) * qty
-        y = by_year.setdefault(str(s.get("year") or "?"), {"count": 0, "value": 0.0})
-        y["count"] += qty
-        y["value"] += unit * qty
-        cond = entry.get("condition") or "Unknown"
-        by_condition[cond] = by_condition.get(cond, 0) + qty
-        if entry.get("paid") and unit:
-            movers.append({"set_number": num, "name": s.get("name"), "paid": entry["paid"], "value": round(unit, 2),
-                           "pct": round((unit - entry["paid"]) / entry["paid"] * 100, 1)})
-            if s.get("pieces"):
-                paid_total += entry["paid"] * qty
-                paid_pieces += s["pieces"] * qty
+        paid_set = value_set = 0.0
+        for c in copies(entry):
+            unit, _ = copy_value(c, entry, statuses.get(num, {}), s, _prefer_import(store))
+            t = by_theme.setdefault(s.get("theme") or "Unknown", {"count": 0, "value": 0.0, "cost": 0.0})
+            t["count"] += 1
+            t["value"] += unit
+            t["cost"] += float(c.get("paid") or 0)
+            y = by_year.setdefault(str(s.get("year") or "?"), {"count": 0, "value": 0.0})
+            y["count"] += 1
+            y["value"] += unit
+            cond = c.get("condition") or "Unknown"
+            by_condition[cond] = by_condition.get(cond, 0) + 1
+            if c.get("paid") and unit:
+                paid_set += float(c["paid"])
+                value_set += unit
+                if s.get("pieces"):
+                    paid_total += float(c["paid"])
+                    paid_pieces += s["pieces"]
+        if paid_set and value_set:                 # one line per set: all copies with a known price together
+            movers.append({"set_number": num, "name": s.get("name"), "paid": round(paid_set, 2), "value": round(value_set, 2),
+                           "pct": round((value_set - paid_set) / paid_set * 100, 1)})
     movers.sort(key=lambda m: -m["pct"])
     rnd = lambda d: {k: {kk: round(vv, 2) for kk, vv in v.items()} for k, v in d.items()}  # noqa: E731
     return {
@@ -586,7 +645,7 @@ def wishlist_summary(store: dict[str, Any], statuses: dict[str, dict[str, Any]])
 
 
 COLLECTION_COLUMNS = ["Number", "Name", "Theme", "Subtheme", "Year", "Pieces", "Qty", "Paid", "Value", "Purchase Date",
-                      "Condition", "Retail Price"]
+                      "Condition", "Location", "Notes", "Retail Price"]
 
 
 def collection_rows(store: dict[str, Any], statuses: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -594,14 +653,18 @@ def collection_rows(store: dict[str, Any], statuses: dict[str, dict[str, Any]]) 
     rows = []
     for num, entry in store["collection"].items():
         s = store["sets"].get(num, {})
-        unit, _ = collection_value(entry, statuses.get(num, {}), s, _prefer_import(store))
-        rows.append({
-            "Number": num, "Name": s.get("name", ""), "Theme": s.get("theme", ""), "Subtheme": s.get("subtheme", ""),
-            "Year": s.get("year", ""), "Pieces": s.get("pieces", ""), "Qty": entry.get("qty", 1),
-            "Paid": entry.get("paid", ""), "Value": round(unit, 2) if unit else "",
-            "Purchase Date": entry.get("added", ""), "Condition": entry.get("condition", ""),
-            "Retail Price": s.get("rrp", ""),
-        })
+        # one line per copy when the copies differ (import reads them back as separate copies), else one line
+        lines = copies(entry) if entry.get("items") else [dict(entry, qty=entry.get("qty", 1))]
+        for c in lines:
+            unit, _ = copy_value(c, entry, statuses.get(num, {}), s, _prefer_import(store))
+            rows.append({
+                "Number": num, "Name": s.get("name", ""), "Theme": s.get("theme", ""), "Subtheme": s.get("subtheme", ""),
+                "Year": s.get("year", ""), "Pieces": s.get("pieces", ""), "Qty": c.get("qty", 1),
+                "Paid": c.get("paid", ""), "Value": round(unit, 2) if unit else "",
+                "Purchase Date": c.get("added", ""), "Condition": c.get("condition", ""),
+                "Location": c.get("location", ""), "Notes": c.get("notes", ""),
+                "Retail Price": s.get("rrp", ""),
+            })
     return sorted(rows, key=lambda r: r["Number"])
 
 
@@ -612,8 +675,11 @@ def rows_to_csv(rows: list[dict[str, Any]], columns: list[str]) -> str:
     out = io.StringIO()
     w = csv.DictWriter(out, fieldnames=columns, lineterminator="\n")
     w.writeheader()
-    def safe(v: Any) -> Any:  # spreadsheet formula injection guard
-        return "'" + v if isinstance(v, str) and v[:1] in ("=", "+", "-", "@") else v
+    def safe(v: Any) -> Any:
+        # Spreadsheet formula injection guard. A value that already starts with an apostrophe gets one too, so
+        # the importer can always remove exactly one leading apostrophe before =, +, -, @ or ' and get the
+        # original text back.
+        return "'" + v if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "'") else v
 
     w.writerows({k: safe(v) for k, v in r.items()} for r in rows)
     return out.getvalue()

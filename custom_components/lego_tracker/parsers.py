@@ -26,6 +26,63 @@ class Parsed:
     unavailable: bool = False
     list_price: float | None = None      # LEGO.com: regular price = RRP (price may be a sale price)
     retiring: bool = False
+    reason: str | None = None            # why there is no price: "sold_out" or "discontinued" (no error, a warning)
+
+
+# Why a shop page has no price. The structured availability (JSON-LD / schema.org) counts first; the words
+# only when the page has no price at all (they can also appear in menus or translations of every page).
+GONE_WORDS_RE = re.compile(r"niet meer (?:leverbaar|verkrijgbaar|beschikbaar|in (?:het )?assortiment)|uit (?:het )?assortiment|"
+                           r"uit (?:de )?(?:handel|productie)|no longer (?:available|sold|in stock)|discontinued|"
+                           r"nicht mehr (?:lieferbar|erhältlich|verfügbar)|aus dem sortiment|plus disponible|"
+                           r"n'est plus (?:vendu|disponible|fabriqué)|ya no está disponible|descatalogado", re.I)
+SOLD_OUT_WORDS_RE = re.compile(r"(?:tijdelijk )?uitverkocht|niet (?:op voorraad|leverbaar)|out of stock|sold out|"
+                               r"currently unavailable|ausverkauft|nicht (?:vorrätig|lieferbar|auf lager)|épuisé|"
+                               r"rupture de stock|agotado|sin stock", re.I)
+
+
+def _own_product_availability(page: str, set_number: str | None) -> str | None:
+    """The schema.org availability of the page's own product: the one that names the set (when the set
+    number is known), else a top-level product. Recommendations nested in it or elsewhere don't count.
+    Returns "" when the product is there but says nothing about availability, None without a product."""
+    tops: list[dict] = []
+    for block in _jsonld_blocks(page):
+        for node in (block.get("@graph") if isinstance(block, dict) and isinstance(block.get("@graph"), list)
+                     else block if isinstance(block, list) else [block]):
+            if isinstance(node, dict):
+                types = node.get("@type")
+                if "Product" in (types if isinstance(types, list) else [types]):
+                    tops.append(node)
+    if set_number:
+        num = re.compile(rf"(?<!\d){re.escape(set_number)}(?!\d)")
+        named = [n for n in tops if num.search(" ".join(str(n.get(k) or "") for k in ("name", "sku", "mpn", "productID")))]
+        tops = named or tops[:1]
+    if not tops:
+        return None
+    offers = tops[0].get("offers")
+    offers = offers if isinstance(offers, list) else [offers] if isinstance(offers, dict) else []
+    avail = " ".join(str(o.get("availability") or "") for o in offers if isinstance(o, dict))
+    return avail or ""
+
+
+def availability_reason(page: str, set_number: str | None = None) -> str | None:
+    """'discontinued', 'sold_out' or None for a page without a price. The structured availability of the
+    page's own product decides first; without one, the words on the page."""
+    own = _own_product_availability(page, set_number)
+    if own is not None:
+        if not own:
+            return None                                 # the product is there but says nothing: no guessing from text
+        if "Discontinued" in own:
+            return "discontinued"
+        if "OutOfStock" in own or "SoldOut" in own:
+            return "sold_out"
+        return None                                     # in stock / pre-order: no reason to call it unavailable
+    text = re.sub(r"<script\b.*?</script>|<style\b.*?</style>", " ", page[:600000], flags=re.S | re.I)
+    text = re.sub(r"<[^>]+>", " ", text)
+    if GONE_WORDS_RE.search(text):
+        return "discontinued"
+    if SOLD_OUT_WORDS_RE.search(text):
+        return "sold_out"
+    return None
 
 
 AMAZON_DOMAINS = {"amazon_nl": "amazon.nl", "amazon_de": "amazon.de", "amazon_be": "amazon.com.be"}
@@ -273,7 +330,8 @@ def parse_lego(page: str, num: str | None = None) -> Parsed:
     sold_out = in_stock is False or bool(LEGO_SOLD_OUT_RE.search(win[:20000] if num else ""))
     gone = bool(LEGO_GONE_RE.search(head))
     if sold_out or (price is None and gone):
-        return Parsed(None, title, image, unavailable=True, list_price=list_price, retiring=bool(LEGO_RETIRING_RE.search(head)))
+        return Parsed(None, title, image, unavailable=True, list_price=list_price, retiring=bool(LEGO_RETIRING_RE.search(head)),
+                      reason="discontinued" if gone else "sold_out")
     return Parsed(price, title, image, list_price=list_price, retiring=bool(LEGO_RETIRING_RE.search(head)))
 
 
@@ -299,6 +357,10 @@ def parse_page(retailer: str, page: str, set_number: str | None = None) -> Parse
         fallback = parse_generic(page)
         if fallback.price is not None:
             return fallback
+    if result.price is None and not result.blocked and (result.unavailable or result.title) and not result.reason:
+        # no price: say why when the page says so (sold out / no longer sold); a warning, not an error
+        if (why := availability_reason(page, set_number)) or result.unavailable:
+            result.unavailable, result.reason = True, why or "sold_out"
     return result
 
 
@@ -481,7 +543,28 @@ def _generic_result(page: str, domain: str, set_number: str) -> str | None:
     """Any shop: links on the shop's own domain whose link text or URL passes the title check;
     otherwise the product tile around a link that mentions the set number (shops like Smyths Toys
     link to /p/<their own code> and put the set number elsewhere in the tile)."""
-    return _generic_link(page, domain, set_number) or _generic_tile(page, domain, set_number)
+    return _generic_link(page, domain, set_number) or _generic_tile(page, domain, set_number) \
+        or _generic_url_text(page, domain, set_number)
+
+
+def _generic_url_text(page: str, domain: str, set_number: str) -> str | None:
+    """A product URL of the shop anywhere in the page, also in the page's own data (JSON, with escaped
+    slashes): shops that build the page with JavaScript (e.g. Smyths Toys) often have the product's
+    address only there. The URL itself must name the set (its slug) and pass the title check."""
+    text = page.replace("\\u002F", "/").replace("\\/", "/")
+    num = re.compile(rf"(?<!\d){re.escape(set_number)}(?!\d)")
+    # the shop's own absolute URLs, or paths that start a string (not the path of a link to another site)
+    for m in re.finditer(rf'(?:https?://(?:www\.)?{re.escape(domain)}|(?<![\w.:/%-]))(/[A-Za-z0-9._~%-][A-Za-z0-9._~%/-]{{5,300}})', text):
+        url = m.group(0) if m.group(0).startswith("http") else f"https://www.{domain}{m.group(1)}"
+        path = urlparse(url).path
+        low = path.lower()
+        if not num.search(path) or NAV_PATH_RE.search(path) or any(w in low for w in ("search", "zoek", "/c/", "/cart", "/login")) \
+                or low.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg", ".css", ".js", ".pdf", ".json")):
+            continue
+        words = re.sub(r"[-/_]+", " ", path)
+        if title_check(words if "lego" in words.lower() else f"lego {words}", set_number)[0] == "ok":
+            return url
+    return None
 
 
 # links inside a product tile that are not another product (cart, wishlist, compare, reviews, account)

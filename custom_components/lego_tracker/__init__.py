@@ -19,12 +19,12 @@ from homeassistant.helpers.event import async_call_later, async_track_time_chang
 from homeassistant.util import dt as dt_util
 
 from .const import (
-    BUILTIN_RETAILERS, CONF_DIGEST_TIME, CONF_KNOWN_SHOPS, DEFAULT_DIGEST_TIME, DEFAULT_RETAILERS, DOMAIN, EVENT_DIGEST, PANEL_ELEMENT, PANEL_URL, RETAILERS,
+    BUILTIN_RETAILERS, CONF_DIGEST_TIME, CONF_KNOWN_SHOPS, DEFAULT_DIGEST_TIME, DEFAULT_RETAILERS, DOMAIN, EVENT_DIGEST, GENERIC_SHOPS, PANEL_ELEMENT, PANEL_URL, RETAILERS,
     STATIC_URL,
 )
 from .coordinator import LegoCoordinator
 from .i18n import T
-from .shops import apply_shop_options
+from .shops import apply_shop_options, domain_of
 from .csv_import import analyze_csv, apply_import, importable_rows
 from .models import normalize_set_number
 from .websocket_api import async_register_websocket
@@ -116,13 +116,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     apply_shop_options(dict(entry.options))
     # New built-in shops (e.g. Dreamland) are switched on once; afterwards the user's choice wins.
     known = set(entry.options.get(CONF_KNOWN_SHOPS) or ("amazon_nl", "amazon_de", "amazon_be", "bol", "kruidvat_be"))
+    # a shop you added yourself on the same site as a built-in one (e.g. Smyths Toys)
+    same_site = [(rid, b) for b in BUILTIN_RETAILERS for rid, g in GENERIC_SHOPS.items()
+                 if rid not in BUILTIN_RETAILERS and g.get("domain") == domain_of(b)]
     if new_shops := [r for r in BUILTIN_RETAILERS if r not in known]:
         enabled = list(entry.options.get("retailers", DEFAULT_RETAILERS))
         enabled += [r for r in new_shops if r not in enabled]
+        # ... is switched off once, when the built-in one comes
+        enabled = [r for r in enabled if r not in {old for old, b in same_site if b in new_shops}]
         hass.config_entries.async_update_entry(
             entry, options={**entry.options, "retailers": enabled, CONF_KNOWN_SHOPS: list(BUILTIN_RETAILERS)})
     coord = LegoCoordinator(hass, entry)
     await coord.async_load()
+    # ... and hands its links over to the built-in one; checked at every start, so an interrupted move is finished
+    for old, new in same_site:
+        if old not in coord.retailers:
+            coord.move_shop(old, new)
     _LOGGER.info("LEGO Price Tracker %s starting (request transport: %s)", VERSION, coord.fetcher.transport)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coord
     coord.async_set_updated_data(coord.compute())

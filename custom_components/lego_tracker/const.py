@@ -6,7 +6,7 @@ STORAGE_KEY = f"{DOMAIN}.data"
 STORAGE_VERSION = 1
 
 PANEL_URL = "lego-tracker"
-API_LEVEL = 5          # raise together with API_LEVEL in the panel when the panel needs new server commands
+API_LEVEL = 6          # raise together with API_LEVEL in the panel when the panel needs new server commands
 PANEL_ELEMENT = "lego-tracker-panel"
 STATIC_URL = f"/{DOMAIN}_static"
 
@@ -32,7 +32,8 @@ CONF_DEAL_FILTER = "deal_filter"           # Deals → Settings: themes switched
 DEAL_FILTER_DEFAULT = {"themes_off": [], "min_price": None, "max_price": None, "min_discount": None,
                        "min_pieces": None, "max_pieces": None, "skip_owned": False, "skip_retired": False}
 CONF_TICKER = "ticker"                      # bottom ticker: {"watch": bool, "deals": bool, "news": bool, "max_*": int}
-TICKER_DEFAULT = {"watch": True, "deals": True, "news": True, "max_watch": 3, "max_deals": 3, "max_news": 3}
+TICKER_GOOD_SCORE = 45                     # a watched set shows in the ticker from this deal score (🔥 good price)
+TICKER_DEFAULT = {"watch": True, "deals": True, "news": True, "max_watch": 3, "max_deals": 3, "max_news": 3, "shuffle": True}
 CONF_COMPARE_OLD = "brickwatch"             # name of that option before 0.9.10 (still read once)
 CONF_BLOCK_WORDS = "block_words"            # your own words: a product with one of these is never the set
 CONF_ALLOW_WORDS = "allow_words"            # exceptions: words/phrases that may appear in a real set's title
@@ -79,6 +80,7 @@ RETAILERS: dict[str, tuple[str, str]] = {
     "bol": ("bol.com", "EUR"),
     "kruidvat_be": ("Kruidvat.be", "EUR"),
     "dreamland_be": ("Dreamland.be", "EUR"),
+    "smyths_be": ("Smyths Toys", "EUR"),
 }
 DEFAULT_RETAILERS = list(RETAILERS)
 BUILTIN_RETAILERS = tuple(RETAILERS)
@@ -87,6 +89,8 @@ BUILTIN_RETAILERS = tuple(RETAILERS)
 # {query} is replaced by the url-encoded "LEGO <set number>". Editable in the settings panel.
 GENERIC_SHOPS: dict[str, dict[str, str]] = {
     "dreamland_be": {"domain": "dreamland.be", "search": "https://www.dreamland.be/e/nl/search?q={query}"},
+    # a search for the bare set number jumps straight to the product page (the result list is built with JavaScript)
+    "smyths_be": {"domain": "smythstoys.com", "search": "https://www.smythstoys.com/be/nl-be/search?text={number}"},
 }
 # Search URL per shop. {query} = url-encoded "LEGO <set number>", {number} = set number,
 # {locale} = LEGO.com locale (e.g. nl-be). All editable in the settings panel.
@@ -98,6 +102,7 @@ DEFAULT_SEARCH: dict[str, str] = {
     "bol": "https://www.bol.com/nl/nl/s/?searchtext={query}",
     "kruidvat_be": "https://www.kruidvat.be/nl/search?text={query}",
     "dreamland_be": "https://www.dreamland.be/e/nl/search?q={query}",
+    "smyths_be": "https://www.smythstoys.com/be/nl-be/search?text={number}",
 }
 CONF_LEGO_LOCALE = "lego_locale"
 DEFAULT_LEGO_LOCALE = "nl-be"

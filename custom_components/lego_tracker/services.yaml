@@ -21,7 +21,7 @@ set_offer:
       required: true
       selector:
         select:
-          options: [lego_com, amazon_nl, amazon_de, amazon_be, bol, kruidvat_be, dreamland_be]
+          options: [lego_com, amazon_nl, amazon_de, amazon_be, bol, kruidvat_be, dreamland_be, smyths_be]
           custom_value: true
     url: {required: true, selector: {text: {}}}
 refresh:
@@ -42,7 +42,7 @@ report_price:
     retailer:
       selector:
         select:
-          options: [lego_com, amazon_nl, amazon_de, amazon_be, bol, kruidvat_be, dreamland_be]
+          options: [lego_com, amazon_nl, amazon_de, amazon_be, bol, kruidvat_be, dreamland_be, smyths_be]
           custom_value: true
 send_digest: {}
 add_sets:
@@ -62,11 +62,11 @@ verify_links: {}
 confirm_offer:
   fields:
     set_number: {required: true, selector: {text: {}}}
-    retailer: {required: true, selector: {select: {options: [lego_com, amazon_nl, amazon_de, amazon_be, bol, kruidvat_be, dreamland_be], custom_value: true}}}
+    retailer: {required: true, selector: {select: {options: [lego_com, amazon_nl, amazon_de, amazon_be, bol, kruidvat_be, dreamland_be, smyths_be], custom_value: true}}}
 remove_offer:
   fields:
     set_number: {required: true, selector: {text: {}}}
-    retailer: {required: true, selector: {select: {options: [lego_com, amazon_nl, amazon_de, amazon_be, bol, kruidvat_be, dreamland_be], custom_value: true}}}
+    retailer: {required: true, selector: {select: {options: [lego_com, amazon_nl, amazon_de, amazon_be, bol, kruidvat_be, dreamland_be, smyths_be], custom_value: true}}}
     block: {default: true, selector: {boolean: {}}}
 cancel_job: {}
 export_collection: {}

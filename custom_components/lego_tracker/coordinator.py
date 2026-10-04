@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+import math
 import re
 import time
 from collections.abc import Awaitable, Callable
@@ -22,7 +23,7 @@ from .client import DOMAIN_GAP, SEARCH_GAP, Fetcher, lookup_metadata
 from .const import (
     CONF_COMPARE, CONF_COMPARE_OLD, CONF_BLOCK_WORDS, CYCLE_CHOICES, CONF_WATCH_CYCLE, WATCH_CYCLE_CHOICES, WATCH_LIMIT,
     FULL_REFRESH_GAP, MANUAL_GAP, CONF_DEAL_MIN_SCORE, CONF_DEAL_ATL, CONF_DEAL_TARGET, DEFAULT_DEAL_MIN_SCORE, CONF_DEV_FIXED_TIMES, CONF_DEV_FULL_REFRESH, CONF_DEV_FREE_CYCLE, CONF_DEV_WATCH_UNLIMITED, CONF_ALLOW_WORDS, CONF_COMPARE_SOURCES, COMPARE_FRESH_HOURS, COMPARE_MISSING_HOURS, COMPARE_NET_ERRORS, COMPARE_PAUSE_HOURS,
-    CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET, CONF_BOL_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS, CONF_MARKET, CONF_TICKER, TICKER_DEFAULT, CONF_DEAL_FILTER, DEAL_FILTER_DEFAULT, CONF_SCAN,
+    CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET, CONF_BOL_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS, CONF_MARKET, CONF_TICKER, TICKER_DEFAULT, TICKER_GOOD_SCORE, CONF_DEAL_FILTER, DEAL_FILTER_DEFAULT, CONF_SCAN,
     CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_LANGUAGE, CONF_REFRESH_MODE, CONF_SPREAD_HOURS, DEFAULT_REFRESH_MODE, DEFAULT_SPREAD_HOURS, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, CONF_CUSTOM_SHOPS, CONF_DIGEST_TIME, CONF_NO_AUTOPAUSE, CONF_SHOP_SEARCH, CONF_VALUE_SOURCE, DEFAULT_DIGEST_TIME, GENERIC_SHOPS, CONF_DISCOUNT_THRESHOLD, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
     DEFAULT_REFRESH_TIMES, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS, DEFAULT_RETAILERS,
     DOMAIN, EVENT_JOB_DONE, EVENT_HIGH_DISCOUNT, EVENT_NEW_LOW, EVENT_TARGET_HIT, RETAILERS, STORAGE_KEY,
@@ -30,7 +31,7 @@ from .const import (
 )
 from .models import (
     add_activity, add_event, clean_history, collection_analytics, link_check, collection_rows, collection_series, is_suspicious_price, collection_summary, COLLECTION_COLUMNS, rows_to_csv, validate_backup, wishlist_summary, is_watched, compute_set_status, new_store, normalize_set_number,
-    offer_price, query_activity, record_price, today_iso,
+    offer_price, query_activity, record_price, today_iso, COPY_FIELDS, OPENED, copies, copy_value, sync_copies,
 )
 from .i18n import DEFAULT_LANGUAGE, LANGUAGES, LocalizedError, T, resolve, set_language
 from .notifications import Notifier, default_rules
@@ -146,8 +147,101 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.store["value_source"] = self.opt(self.entry, CONF_VALUE_SOURCE, "shop_first")
         self.verify_links()   # flag wrong links from older versions right away
 
+    def move_shop(self, old: str, new: str) -> int:
+        """Links and prices of a shop you added yourself go to the built-in shop for the same site (where that
+        one has no link yet). Your own shop is switched off, not deleted. Returns the number of links moved."""
+        n = 0
+        for num, offers in self.store["offers"].items():
+            mine = offers.get(old)
+            if not mine or not mine.get("url"):
+                continue
+            ours = offers.get(new)
+            if not ours or not ours.get("url"):
+                offers[new] = offers.pop(old)
+            else:
+                # both linked: keep the built-in link, and also the price history and anything you entered by hand
+                hist = {int(ts // 86400): [ts, p] for ts, p in sorted((ours.get("history") or []) + (mine.get("history") or []))}
+                ours["history"] = sorted(hist.values())
+                for k in ("manual_price", "manual_url", "approved"):
+                    if mine.get(k) and not ours.get(k):
+                        ours[k] = mine[k]
+                if (mine.get("last_checked") or 0) > (ours.get("last_checked") or 0):
+                    for k in ("last_price", "available", "last_checked", "last_ok"):
+                        if k in mine:
+                            ours[k] = mine[k]
+                del offers[old]
+            n += 1
+        if n:
+            self.log("info", "shop", T("{n} links of your own shop {old} moved to the built-in shop {new}", n=n,
+                                       old=RETAILERS.get(old, (old,))[0], new=RETAILERS.get(new, (new,))[0]))
+            self._save()
+        return n
+
+    def open_error_keys(self) -> dict[str, str]:
+        """{"set|shop": kind} for every open error, the same list as Logbook → Open errors: a set without any
+        shop link, a shop page that failed, a suspicious link or price. Ignored errors don't count."""
+        out: dict[str, str] = {}
+        for num in self.store["sets"]:
+            offers = self.store["offers"].get(num) or {}
+            if not offers:
+                out[f"{num}|"] = "nolinks"
+            for rid, o in offers.items():
+                if o.get("ignored") or not (o.get("error") or o.get("link_status") == "suspect"):
+                    continue
+                out[f"{num}|{rid}"] = "suspect" if o.get("link_status") == "suspect" else "error"
+        return out
+
+    def _track_errors(self, now: float | None = None) -> None:
+        """Keep count of the errors that are solved and the ones that come in, per day (Logbook → Open errors).
+        The first time, today's open errors are only the starting point (not counted as new)."""
+        now = now or time.time()
+        tr = self.store.setdefault("err_track", {})
+        cur = self.open_error_keys()
+        day = dt_util.as_local(dt_util.utc_from_timestamp(now)).date().isoformat()
+        if "open" not in tr:
+            tr.update(open={k: now for k in cur}, days={}, solved=[], new=[], since=now)
+            return
+        was: dict[str, float] = tr["open"]
+        for k in [k for k in was if k not in cur and k.partition("|")[0] not in self.store["sets"]]:
+            was.pop(k)                                     # the set was removed: not solved, just gone
+        gone = [k for k in was if k not in cur]
+        came = [k for k in cur if k not in was]
+        if not gone and not came:
+            return
+        d = tr["days"].setdefault(day, {"new": 0, "solved": 0})
+        d["solved"] += len(gone)
+        d["new"] += len(came)
+        for k in gone:
+            tr["solved"].append([now, k, was.pop(k)])
+        for k in came:
+            was[k] = now
+            tr["new"].append([now, k, cur[k]])
+        del tr["solved"][:-500], tr["new"][:-500]
+        for old in sorted(tr["days"])[:-400]:              # a little more than a year of days
+            del tr["days"][old]
+
+    def error_stats(self) -> dict[str, Any]:
+        """Solved and new errors per day (for charts per day, week and month) and the latest of each, with
+        the set, the shop and how long the error was open."""
+        self._track_errors()
+        tr = self.store.get("err_track") or {}
+
+        def row(e: list[Any], solved: bool) -> dict[str, Any]:
+            num, _, rid = e[1].partition("|")
+            s = self.store["sets"].get(num) or {}
+            return {"ts": e[0], "set_number": num, "name": s.get("name") or "", "retailer": rid or None,
+                    "shop": RETAILERS.get(rid, (rid,))[0] if rid else None,
+                    **({"open_for": max(0, e[0] - e[2])} if solved else {"kind": e[2]})}
+        return {"open": len(tr.get("open") or {}), "since": tr.get("since"), "days": tr.get("days") or {},
+                "solved": [row(e, True) for e in reversed(tr.get("solved") or [])][:200],
+                "new": [row(e, False) for e in reversed(tr.get("new") or [])][:200]}
+
     def _save(self) -> None:
         # pauses survive restarts/reloads, otherwise a reload would hammer a shop that just blocked us
+        try:
+            self._track_errors()
+        except Exception:  # noqa: BLE001 - statistics must never stop a save
+            _LOGGER.exception("error statistics failed")
         self.store["cooldowns"] = {"until": dict(self.fetcher.blocked_until), "blocks": dict(self.fetcher.blocks)}
         self._store.async_delay_save(lambda: self.store, 5)
 
@@ -637,44 +731,36 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return {**TICKER_DEFAULT, **(self.opt(self.entry, CONF_TICKER, None) or {})}
 
     async def ticker_data(self, lang: str) -> dict[str, Any]:
-        """The ticker at the bottom of the panel: latest prices of watched sets, deal notifications and news,
-        each as configured under Settings (on/off and how many)."""
+        """The ticker at the bottom of the panel, each part as configured under Settings (on/off and how many):
+        the current deals (deal score at least the minimum of Deals → Settings, best first), watched sets at
+        a good price at least (deal score 45) that are not a deal yet, and news. Sets left out under
+        Deals → Settings never show; a discount is only shown when the price is below the RRP."""
         from .news import NewsFeed, for_language
 
         cfg, now, out = self.ticker, time.time(), []
         statuses = (self.data or self.compute())["statuses"]
+
+        def item(kind: str, num: str, st: dict[str, Any]) -> dict[str, Any]:
+            """One set at its current lowest price; the discount only when there is one."""
+            disc = st.get("discount_rrp")
+            return {"kind": kind, "ts": self.store["sets"][num].get("last_deal") or now, "set_number": num,
+                    "name": self.store["sets"][num].get("name") or "", "price": st["best_price"],
+                    "discount": disc if disc is not None and disc > 0 else None, "score": st.get("deal_score"),
+                    "shop": RETAILERS.get(st.get("best_retailer"), ("",))[0], "url": st.get("best_url")}
+        by_score = lambda n: (-(statuses[n].get("deal_score") or 0), n)  # noqa: E731
+        priced = [n for n in self.store["sets"] if statuses.get(n, {}).get("best_price") is not None]
+        # deals: sets whose deal score reaches the minimum of Deals → Settings (not "lowest ever" at -1 % alone)
+        min_score = self.deal_rules["min_score"]
+        deals = sorted((n for n in priced if (statuses[n].get("deal_score") or 0) >= min_score
+                        and not self.deal_blocked(n, statuses[n])), key=by_score) if cfg["deals"] else []
+        shown = set(deals) if cfg["max_deals"] else set()     # every deal, also beyond the shown ones, stays out of W
+        # watchlist: watched sets at a good price at least (deal score 45, one flame) that are not a deal above
         if cfg["watch"] and cfg["max_watch"]:
-            seen: set[str] = set()
-            for e in reversed(self.store.get("activity", [])):
-                if now - e["ts"] > 14 * 86400 or len(seen) >= cfg["max_watch"]:
-                    break
-                num = e.get("set_number")
-                if e.get("kind") != "price" or e.get("price") is None or not num or num in seen \
-                        or num not in self.store["sets"] or not self.is_watched(num):
-                    continue
-                seen.add(num)
-                old, price = e.get("old_price"), e["price"]
-                st = statuses.get(num, {})
-                out.append({"kind": "price", "ts": e["ts"], "set_number": num, "name": self.store["sets"][num].get("name") or "",
-                            "price": price, "old": old, "pct": round((price - old) / old * 100, 1) if old else None,
-                            "score": st.get("deal_score") if price == st.get("best_price")
-                            and e.get("retailer") == st.get("best_retailer") else None,
-                            "shop": RETAILERS.get(e.get("retailer"), ("",))[0], "url": e.get("url")})
-            # no recent changes: the current lowest price of the watched sets that were checked last
-            rest = sorted((n for n in self.store["sets"] if n not in seen and self.is_watched(n)
-                           and statuses.get(n, {}).get("best_price") is not None),
-                          key=lambda n: -max([o.get("last_checked") or 0 for o in self.store["offers"].get(n, {}).values()] or [0]))
-            for num in rest[: max(0, cfg["max_watch"] - len(seen))]:
-                st = statuses[num]
-                out.append({"kind": "price", "ts": now, "set_number": num, "name": self.store["sets"][num].get("name") or "",
-                            "price": st["best_price"], "old": None, "pct": None, "score": st.get("deal_score"),
-                            "shop": RETAILERS.get(st.get("best_retailer"), ("",))[0], "url": st.get("best_url")})
+            good = sorted((n for n in priced if n not in shown and self.is_watched(n) and not self.deal_blocked(n, statuses[n])
+                           and (statuses[n].get("deal_score") or 0) >= TICKER_GOOD_SCORE), key=by_score)
+            out += [item("price", n, statuses[n]) for n in good[: cfg["max_watch"]]]
         if cfg["deals"] and cfg["max_deals"]:
-            for ev in list(reversed(self.store.get("events", [])))[: cfg["max_deals"]]:
-                num = ev.get("set_number")
-                out.append({"kind": "deal", "ts": ev["ts"], "set_number": num, "name": ev.get("name") or "",
-                            "price": ev.get("price"), "discount": ev.get("discount"), "score": ev.get("score"),
-                            "deal": ev.get("kind"), "shop": RETAILERS.get(ev.get("retailer"), ("",))[0], "url": ev.get("url")})
+            out += [item("deal", n, statuses[n]) for n in deals[: cfg["max_deals"]]]
         news: list[dict[str, Any]] = []
         if cfg["news"] and cfg["max_news"]:
             if not hasattr(self, "news"):
@@ -940,8 +1026,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             s["exit_date"], s["exit_date_source"] = when, name
         entry = self.store["collection"].get(num)
         if entry is not None:
-            opened = entry.get("condition") in ("Opened", "Built", "Incomplete")
-            value = (d.get("market_used") if opened else None) or d.get("market_new")
+            # the new value; opened, built or incomplete copies take the used value themselves (models.copy_value).
+            # The used value only stands in when no copy is sealed.
+            opened = all(c.get("condition") in OPENED for c in copies(entry))
+            value = d.get("market_new") or (d.get("market_used") if opened else None)
             if value:
                 hist = list(entry.get("value_history") or [])
                 if not hist or abs(hist[-1][1] - value) > 0.005:
@@ -1129,6 +1217,17 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             shop_results[rid] = {"ok": not error, "price": price, "error": error, "manual": bool(manual)}
             if via:
                 shop_results[rid]["via"] = via
+            # the page says it is sold out / no longer sold: a warning with the reason, not an error to solve
+            why = parsed.reason if parsed and parsed.unavailable and price is None and not error else None
+            if why:
+                shop_results[rid]["unavailable"] = why
+                if offer.get("unavailable") != why:
+                    self.log("warning", "price", T("no price: sold out") if why == "sold_out"
+                             else T("no price: no longer sold (out of the range)"), set_number=num,
+                             retailer=rid, url=offer.get("url"), source=source, unavailable=why)
+                offer["unavailable"] = why
+            elif price is not None or error:
+                offer.pop("unavailable", None)
             if self.job and self.job.get("running"):
                 st = self.job["shops"].setdefault(rid, {"ok": 0, "err": 0})
                 st["err" if error else "ok"] += 1
@@ -2455,14 +2554,14 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.hass.async_create_task(self.notifier.on_catalog_deal(num, dict(e)))
 
     def catalog(self, q: str = "", theme: str = "", status: str = "", sort: str = "deal", offset: int = 0,
-                limit: int = 120) -> dict[str, Any]:
+                limit: int = 120, year: int = 0) -> dict[str, Any]:
         """Deals → All LEGO sets: the whole set database with what is known about each set: followed by you,
         a deal, for sale, retired or not looked up yet."""
         statuses = (self.data or self.compute())["statuses"]
         words = q.strip().lower().split()
         rows = []
         for num, row in self.setdb.items():
-            if theme and row[setdb.THEME] != theme:
+            if (theme and row[setdb.THEME] != theme) or (year and row[setdb.YEAR] != year):
                 continue
             if words and not all(w in f"{num} {row[setdb.NAME]} {row[setdb.THEME]} {row[setdb.SUB]}".lower() for w in words):
                 continue
@@ -2495,6 +2594,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             k = scan.status(e)
             counts[k] = counts.get(k, 0) + 1
         return {"items": items, "total": len(rows), "count": len(self.setdb), "themes": sorted({r[setdb.THEME] for r in self.setdb.values() if r[setdb.THEME]}),
+                "years": sorted({r[setdb.YEAR] for r in self.setdb.values() if r[setdb.YEAR]}, reverse=True),
                 "scan": {"per_day": self.scan_per_day, "candidates": len(self.scan_candidates()), "looked_up": sum(1 for e in self.scan.values() if e.get("ts")),
                          "counts": counts, "today": self.scan_info["today"] if self.scan_info["day"] == dt_util.now().date().isoformat() else 0,
                          "error": self.scan_info["error"], "compare": self.compare_enabled, "market": self.market_enabled,
@@ -2553,8 +2653,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return bool(value)
         try:
             num = typ(value)
-        except (TypeError, ValueError) as err:
+        except (TypeError, ValueError, OverflowError) as err:
             raise LocalizedError("{field}: {value} is not a number", field=key, value=value) from err
+        if not math.isfinite(num):                       # nan / inf compare false with every limit
+            raise LocalizedError("{field}: {value} is not a number", field=key, value=value)
         limits = {"rrp": 10000, "paid": 10000, "current_value": 10000, "target_price": 10000, "pieces": 12000,
                   "qty": 999, "priority": 3, "year": 2100}
         if num < 0 or num > limits.get(key, 1e9):
@@ -2563,10 +2665,56 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise LocalizedError("quantity must be at least 1")
         return num
 
+    def _clean_copies(self, items: Any) -> list[dict[str, Any]]:
+        """Validate the copies of a set (1–999), each with its own price paid, purchase date, condition,
+        location and notes. Raises LocalizedError."""
+        from .csv_import import CONDITIONS as CONDITION_NAMES
+
+        if not isinstance(items, list) or not 1 <= len(items) <= 999:
+            raise LocalizedError("A set in your collection has between 1 and 999 copies.")
+        allowed = set(CONDITION_NAMES.values())
+        out = []
+        for i, raw in enumerate(items, 1):
+            if not isinstance(raw, dict):
+                raise LocalizedError("Copy {n}: invalid data", n=i)
+            c: dict[str, Any] = {}
+            for key, typ in (("paid", float), ("added", str), ("location", str), ("notes", str)):
+                v = raw.get(key)
+                if key == "paid" and isinstance(v, str):
+                    v = v.strip().replace("€", "").replace(",", ".")      # 25,50 as well as 25.50
+                if v not in (None, ""):
+                    try:
+                        c[key] = self._coerce(key, typ, v)
+                    except LocalizedError as err:
+                        raise LocalizedError("Copy {n}: {error}", n=i, error=str(err)) from err
+            if (cond := str(raw.get("condition") or "").strip()):
+                if cond not in allowed:
+                    raise LocalizedError("Copy {n}: unknown condition {value}", n=i, value=cond)
+                c["condition"] = cond
+            for key in ("location", "notes"):
+                if key in c:
+                    c[key] = c[key][:80 if key == "location" else 200]
+                    if not c[key]:
+                        del c[key]
+            out.append(c)
+        return out
+
     def update_set(self, set_number: str, fields: dict[str, Any]) -> None:
         num = normalize_set_number(set_number)
         s = self.store["sets"][num]
         refill = False
+        copies_new = None
+        if "copies" in fields:                         # every copy with its own price, date, condition, ...
+            copies_new = self._clean_copies(fields["copies"])   # validated now, stored once the whole edit is valid
+            fields = {k: v for k, v in fields.items() if k not in ("copies", "owned", *self.COLL_FIELDS) or k == "current_value"}
+        # the whole edit is checked before anything changes: a rejected edit leaves the set as it was
+        for key, value in fields.items():
+            if (typ := self.SET_FIELDS.get(key) or self.COLL_FIELDS.get(key)) and value not in ("", None) \
+                    and not (key == "watch" and value is False) and not (value == 0 and key in self.CLEARABLE):
+                self._coerce(key, typ, value)
+        if fields.get("watch") not in (None, False, "", 0) and not self.is_watched(num) \
+                and (limit := self.watch_limit) is not None and len(self.watched_sets()) >= limit:
+            raise LocalizedError("The watchlist is full ({n} sets): remove a set or move one to your collection first.", n=limit)
         clean_set: dict[str, Any] = {}
         clean_coll: dict[str, Any] = {}
         for key, value in fields.items():
@@ -2586,9 +2734,11 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 continue
             target = clean_set if key in self.SET_FIELDS else clean_coll
             target[key] = self._coerce(key, typ, value)
-        if clean_set.get("watch") and not self.is_watched(num) and (limit := self.watch_limit) is not None \
-                and len(self.watched_sets()) >= limit:
-            raise LocalizedError("The watchlist is full ({n} sets): remove a set or move one to your collection first.", n=limit)
+        if copies_new is not None:
+            entry = self.store["collection"].setdefault(num, {"qty": 1})
+            entry["items"] = copies_new
+            sync_copies(entry)
+            self.log("info", "user", T("copies edited: {n}", n=len(copies_new)), set_number=num, source="panel")
         s.update(clean_set)
         if clean_set or clean_coll or "owned" in fields:
             self.log("info", "user", T("details edited: {fields}", fields=", ".join(sorted(set(clean_set) | set(clean_coll) | ({"owned"} if "owned" in fields else set())))),
@@ -2607,7 +2757,21 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if fields.get("owned") is False:
             self.store["collection"].pop(num, None)
         elif clean_coll or fields.get("owned"):
-            self.store["collection"].setdefault(num, {"qty": 1}).update(clean_coll)
+            entry = self.store["collection"].setdefault(num, {"qty": 1})
+            if entry.get("items"):
+                # the set-level fields apply to every copy; a new quantity adds or removes copies at the end
+                items = entry["items"]
+                if (q := clean_coll.get("qty")) and q != len(items):      # first the new number of copies ...
+                    last = {k: v for k, v in items[-1].items() if k in ("condition", "location")}
+                    items = entry["items"] = items[:q] + [dict(last) for _ in range(q - len(items))]
+                for k in COPY_FIELDS:                                       # ... then the fields for all of them
+                    if k in clean_coll:
+                        for c in items:
+                            c[k] = clean_coll[k]
+                entry.update({k: v for k, v in clean_coll.items() if k not in COPY_FIELDS and k != "qty"})
+                sync_copies(entry)
+            else:
+                entry.update(clean_coll)
         self.push_update()
 
     async def _refill(self, num: str) -> None:
