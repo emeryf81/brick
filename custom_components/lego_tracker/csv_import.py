@@ -140,6 +140,8 @@ def analyze_csv(text: str, store: dict[str, Any] | None = None, *, replace: bool
         for f in ("name", "theme", "subtheme", "location", "notes"):
             if row.get(f):
                 val = re.sub(r"[\x00-\x1f]", " ", row[f])
+                if len(val) > 1 and val[0] == "'" and val[1] in "=+-@":
+                    val = val[1:]          # undo the spreadsheet-safety apostrophe our own export puts there
                 if len(val) > MAX_TEXT:
                     issues.append(("warning", T("{field} shortened to {max} characters", field=FIELD_LABELS[f], max=MAX_TEXT)))
                 item[f] = val[:MAX_TEXT]

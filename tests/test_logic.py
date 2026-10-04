@@ -566,3 +566,11 @@ def test_custom_shop_search_must_be_on_the_shop_host():
     with pytest.raises(ValueError):
         shops.validate_custom_shop({"name": "x", "domain": "shop.be", "search": "https://shop.be.evil.example/?q={query}"})
     assert shops.validate_custom_shop({"name": "x", "domain": "shop.be", "search": "https://www.shop.be/zoek?q={query}"})["domain"] == "shop.be"
+
+
+def test_export_safety_apostrophe_is_removed_on_import():
+    """Our export puts an apostrophe before =, +, - and @ (spreadsheet safety); importing the file again gives
+    the original text back. Other leading apostrophes stay."""
+    res = csv_import.analyze_csv("Number;Name;Location;Notes\n10281;'=Bonsai;'-shelf 2;'quoted\n")
+    item = res["rows"][0]
+    assert item["name"] == "=Bonsai" and item["location"] == "-shelf 2" and item["notes"] == "'quoted"
