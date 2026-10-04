@@ -15,7 +15,7 @@ import aiohttp
 from .models import normalize_set_number
 from .i18n import T
 from .shops import domain_of
-from .parsers import Parsed, find_search_result, is_search_url, lego_number, title_check, lego_product_url, parse_brickset_page, parse_page, search_url
+from .parsers import Parsed, find_search_result, is_search_url, lego_number, title_check, lego_product_url, parse_brickset_page, parse_page, search_url, url_key
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -371,11 +371,13 @@ class Fetcher:
         self._trace(retailer, "sitemap", url, t0, status, len(body), None, error)
         return status, bytes(body), error
 
-    async def discover(self, retailer: str, set_number: str, force: bool = False, url: str | None = None) -> str | None:
-        """Search the shop for the set; every attempt is kept in the shop's trace (Shops → click a shop)."""
+    async def discover(self, retailer: str, set_number: str, force: bool = False, url: str | None = None,
+                       skip: set[str] | frozenset[str] = frozenset()) -> str | None:
+        """Search the shop for the set; every attempt is kept in the shop's trace (Shops → click a shop).
+        skip: url_keys of links blocked for this set (the next good search hit is taken)."""
         t0 = time.time()
         self._search_meta[retailer] = (None, 0)
-        found = await self._discover(retailer, set_number, force, url)
+        found = await self._discover(retailer, set_number, force, url, skip)
         err = self.discover_error.get(retailer)
         if not (err or "").startswith("paused"):
             status, size = self._search_meta.get(retailer, (None, 0))
@@ -383,7 +385,8 @@ class Fetcher:
                         found, err, set_number)
         return found
 
-    async def _discover(self, retailer: str, set_number: str, force: bool = False, url: str | None = None) -> str | None:
+    async def _discover(self, retailer: str, set_number: str, force: bool = False, url: str | None = None,
+                        skip: set[str] | frozenset[str] = frozenset()) -> str | None:
         """Search the shop for the set (url: a search page to use instead of the shop's search URL).
         On failure the reason is kept in self.discover_error[retailer] (blocked, HTTP error, results
         loaded by JavaScript, or really nothing matching), so the panel can say what happened."""
@@ -409,7 +412,9 @@ class Fetcher:
         if status >= 400:
             self.discover_error[retailer] = T("search page: HTTP error {status}", status=status)
             return None
-        found = find_search_result(retailer, page, set_number) or self._landed_on_product(retailer, url, page, set_number)
+        found = find_search_result(retailer, page, set_number, skip) or self._landed_on_product(retailer, url, page, set_number)
+        if found and url_key(retailer, found) in skip:
+            found = None                                   # the search jumped to a page you blocked: look elsewhere
         if found or retailer != "lego_com":
             if not found:
                 self.discover_error[retailer] = T("no matching product found") if set_number in page else \
@@ -417,6 +422,9 @@ class Fetcher:
             return found
         # LEGO.com search is partly rendered in the browser: try the product URL directly (its own trace entry)
         t0, purl = time.time(), lego_product_url(set_number)
+        if url_key(retailer, purl) in skip:                # you blocked this page: never visit it again
+            self.discover_error[retailer] = T("no matching product found")
+            return None
         try:
             status, page = await self._get(retailer, purl)
         except Exception as err:  # noqa: BLE001 - also Aborted

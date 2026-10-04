@@ -64,6 +64,11 @@ const money = (v) => {
   return s;
 };
 /** "Approve" for a price that was held back as suspicious (shop table, shops & jobs, logbook). */
+/** A doubtful link (not clearly another product): approve it, or never visit it again (the shop is searched for another link). */
+const doubtBtns = (num, rid) => `<button class="btn sm ldb" type="button" data-stop data-lact="ok" data-lnum="${esc(num)}" data-lrid="${esc(rid)}" title="${esc(t("This is the right product: use this link and its price"))}">✓ ${esc(t("Approve link"))}</button> <button class="btn ghost sm ldb" type="button" data-stop data-lact="rej" data-lnum="${esc(num)}" data-lrid="${esc(rid)}" title="${esc(t("Block only this link; the shop is searched again for the right page"))}">🚫 ${esc(t("Never visit this link again"))}</button>`;
+/** Your own price counts, the shop now says another: approve the new price or keep yours. */
+const choiceBtns = (num, rid, c) => `<button class="btn sm pcb" type="button" data-stop data-pacc="1" data-pnum="${esc(num)}" data-prid="${esc(rid)}" title="${esc(t("Your own price goes away; the shop's price counts from now on"))}">✓ ${esc(t("Approve new price {price}", { price: EUR(c.price) }))}</button> <button class="btn ghost sm pcb" type="button" data-stop data-pacc="0" data-pnum="${esc(num)}" data-prid="${esc(rid)}" title="${esc(t("Your own price stays; you are not asked again for this price"))}">${esc(t("Keep old price {price}", { price: EUR(c.manual) }))}</button>`;
+const TICKER_RELOAD = 600000;                       // the ticker content is reloaded every 10 minutes
 const approveBtn = (num, rid, price) => `<button class="btn sm apprb" type="button" data-stop data-anum="${esc(num)}" data-arid="${esc(rid)}" title="${esc(t("The price is right after all: count it, and accept prices like it for this link from now on"))}">✓ ${esc(t("Approve {price}", { price: EUR(price) }))}</button>`;
 const EUR = (v) => (v == null || isNaN(v) ? "–" : NF.format(v));
 const EUR0 = (v) => (v == null || isNaN(v) ? "–" : NF0.format(v));
@@ -73,7 +78,7 @@ const signPct = (v) => (v == null ? "–" : `${v > 0 ? "+" : ""}${v.toLocaleStri
 const DATE = (ts, o = { day: "2-digit", month: "short" }) => new Date(ts * 1000).toLocaleDateString(LOC, o);
 const TIME = (ts) => new Date(ts * 1000).toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" });
 /** What this panel needs from the server (API_LEVEL in const.py). Different = Home Assistant still runs older code. */
-const API_LEVEL = 6;
+const API_LEVEL = 7;
 const SRC = { kieskeurig: "Kieskeurig", shoparize: "Shoparize", channable: "Channable Shopping", producthero: "Producthero", brickeconomy: "Market value" };
 /** How a price was read, as one letter: ⓤ your own browser (userscript), ⓢ ⓚ ⓒ ⓟ ⓑ a comparison site, ⌂ the shop's own site. */
 const VIA_MARK = { relay: "ⓤ", userscript: "ⓤ", shoparize: "ⓢ", kieskeurig: "ⓚ", channable: "ⓒ", producthero: "ⓟ", brickeconomy: "ⓜ" };
@@ -374,13 +379,15 @@ fieldset{border:1px solid var(--lt-line);border-radius:14px;padding:12px 14px 4p
 .dhead>div:last-child{position:absolute;top:12px;right:12px}.dhead .ring{display:none}.dbody{padding:12px 14px 16px}.axis{font-size:22px}}
 /* toast */
 .ticker{position:fixed;left:0;right:0;bottom:0;height:30px;overflow:hidden;z-index:15;background:var(--lt-card);border-top:1px solid var(--lt-line);font-size:13px;display:flex;align-items:center}
-.ticker:empty{display:none}.ticker .tk{display:inline-flex;gap:28px;white-space:nowrap;padding-left:100%;animation:tick var(--tk-dur,60s) linear infinite}
-.ticker:hover .tk,.ticker:focus-within .tk{animation-play-state:paused}@keyframes tick{to{transform:translateX(-100%)}}
+.ticker:empty{display:none}.ticker .tkv{flex:1;overflow:hidden;height:100%;display:flex;align-items:center;min-width:0}.ticker .tk{display:inline-flex;gap:28px;white-space:nowrap;will-change:transform}
+.ticker .fixed{color:var(--lt-ok,#1a7f37)}
+details[open] .dfhint{display:none}.wsg{display:grid;grid-template-columns:max-content 1fr;gap:10px 16px;align-items:center;font-size:14px}.wsg .rng{display:flex;gap:8px;align-items:center;flex-wrap:wrap;color:var(--lt-muted)}.wsg input{width:110px}
+@media(max-width:560px){.wsg{grid-template-columns:1fr;gap:4px}.wsg .rng{margin-bottom:8px}}
 .ticker .ti{cursor:pointer;display:inline-flex;gap:6px;align-items:center;border:0;background:none;color:inherit;font:inherit;padding:0}.ticker .ti:hover b{text-decoration:underline}
 .ticker .big{color:var(--lt-ok,#1a7f37);font-weight:700}.ticker .small{color:var(--lt-ok,#1a7f37)}.ticker .up{color:var(--lt-muted,#888)}
 .ticker .deal{color:var(--lt-accent)}.ticker .tktag{display:inline-grid;place-items:center;width:18px;height:18px;border-radius:50%;background:var(--lt-accent);color:var(--lt-on-accent,#fff);font-size:10px;font-weight:800;flex:none}.ticker .fire{letter-spacing:-2px}.ticker .news{font-weight:600}.ticker .news .dot{color:var(--lt-accent)}
 .ticker .lbl{flex:none;padding:0 10px;font-weight:700;height:100%;display:flex;align-items:center;background:var(--lt-soft);border-right:1px solid var(--lt-line);z-index:1}
-@media(prefers-reduced-motion:reduce){.ticker .tk{animation:none;padding-left:10px;overflow-x:auto}}
+@media(prefers-reduced-motion:reduce){.ticker .tkv{overflow-x:auto}.ticker .tk{padding-left:10px}}
 .toasts{position:fixed;right:18px;bottom:40px;display:flex;flex-direction:column;gap:8px;z-index:20}
 .toast{background:#23252c;color:#fff;padding:11px 16px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.3);font-size:14px;max-width:380px;animation:toast .35s cubic-bezier(.3,1.3,.5,1);display:flex;gap:8px;align-items:flex-start}
 .toast.err{background:#8e0b0c}.toast.ok{background:#0b5d22}.toast.out{animation:toastout .25s forwards}
@@ -441,6 +448,33 @@ class LegoTrackerPanel extends HTMLElement {
         this.toast(t("Price {price} approved", { price: EUR(r.price) }), "ok");
         await this.load();
         const d = this.shadowRoot.getElementById("dlg"); if (d && d.open && d.querySelector(".orow")) this.openSet(b.dataset.anum);
+      });
+    }, true);
+    // your own price or the newly fetched one: the same two choices everywhere
+    this.shadowRoot.addEventListener("click", (e) => {
+      const b = e.target.closest && e.target.closest(".pcb"); if (!b) return;
+      e.stopPropagation(); e.preventDefault();
+      const num = b.dataset.pnum, accept = b.dataset.pacc === "1";
+      this.busy(b, "…", async () => {
+        const r = await this._hass.callWS({ type: "lego_tracker/offer/price_choice", set_number: num, retailer: b.dataset.prid, accept });
+        this.toast(accept ? t("Price {price} approved", { price: EUR(r.price) }) : t("Your own price {price} stays", { price: EUR(r.price) }), "ok");
+        await this.load();
+        if (this.state.section === "log") this.loadLog();
+        const d = this.shadowRoot.getElementById("dlg"); if (d && d.open && d.querySelector(".orow")) this.openSet(num);
+      });
+    }, true);
+    // a doubtful link: the same two choices everywhere (set dialog, shops & jobs, logbook)
+    this.shadowRoot.addEventListener("click", (e) => {
+      const b = e.target.closest && e.target.closest(".ldb"); if (!b) return;
+      e.stopPropagation(); e.preventDefault();
+      const num = b.dataset.lnum, rid = b.dataset.lrid, ok = b.dataset.lact === "ok";
+      this.busy(b, "…", async () => {
+        if (ok) await this.svc("confirm_offer", { set_number: num, retailer: rid });
+        else await this._hass.callWS({ type: "lego_tracker/offer/reject", set_number: num, retailer: rid });
+        this.toast(ok ? t("Link of {number} approved", { number: num }) : t("Link blocked; the shop is searched again"), "ok");
+        await this.load();
+        if (this.state.section === "log") this.loadLog();
+        const d = this.shadowRoot.getElementById("dlg"); if (d && d.open && d.querySelector(".orow")) this.openSet(num);
       });
     }, true);
     // browser relay: progress messages from the userscript running in this browser
@@ -532,21 +566,32 @@ class LegoTrackerPanel extends HTMLElement {
       if (this.state.threshold == null) this.state.threshold = d.threshold;
       this.state.job = d.job; if (d.job && d.job.running) this.pollJob();
       if ((d.first_checks || []).length) this.followFirstChecks();
-      if (!this._tickerAt || Date.now() - this._tickerAt > 300000) this.loadTicker();
+      if (!this._tickerAt || Date.now() - this._tickerAt > TICKER_RELOAD) this.loadTicker();
     } catch (e) { this.state.err = e.message || String(e); }
     this.render(animate || !this._rendered);
   }
   // ---------------------------------------------------------------- ticker (latest prices, deals, news)
+  /** The content (deals, watchlist, news, solved errors) is reloaded every 10 minutes; in between it keeps scrolling. */
   async loadTicker() {
     this._tickerAt = Date.now();
-    clearTimeout(this._tickerTimer); this._tickerTimer = setTimeout(() => { if (this.isConnected) this.loadTicker(); }, 300000);
-    try { this.state.ticker = await this._hass.callWS({ type: "lego_tracker/ticker", lang: LANG }); } catch (e) { return; }
+    clearTimeout(this._tickerTimer); this._tickerTimer = setTimeout(() => { if (this.isConnected) this.loadTicker(); }, TICKER_RELOAD);
+    let tk;
+    try { tk = await this._hass.callWS({ type: "lego_tracker/ticker", lang: LANG, ...(this._tkSince ? { since: this._tkSince } : {}) }); } catch (e) { return; }
+    this._tkSince = tk.cursor ?? tk.now; this.state.ticker = tk;      // more solved errors waiting: they come next time
+    // solved errors wait in a queue until a round has really shown them (the server sends each one once)
+    const q = this._tkFixed || (this._tkFixed = []);
+    for (const f of tk.fixed || []) if (!q.some((x) => x.ts === f.ts && x.set_number === f.set_number && x.shop === f.shop)) q.push(f);
     this.renderTicker();
   }
-  renderTicker() {
-    const el = this._tickerEl, tk = this.state.ticker; if (!el || !tk) return;
-    let seen = []; try { seen = JSON.parse(localStorage.getItem("lt_news_seen") || "[]"); } catch (e) { /* private mode */ }
-    const parts = (tk.news || []).map((n, i) => `<button class="ti news" type="button" data-tnews="${i}">${seen.includes(n.id) ? "📰" : `<span class="dot">●</span> 📰`} <b>${esc(n.title)}</b></button>`);
+  /** News you closed ("read"): hidden until a new news file is put online. */
+  newsClosed() {
+    const tk = this.state.ticker || {};
+    try { const c = JSON.parse(localStorage.getItem("lt_news_closed") || "{}"); return c.hash === tk.news_hash ? c.ids || [] : []; } catch (e) { return []; }
+  }
+  tickerHtml() {
+    const tk = this.state.ticker; if (!tk) return "";
+    const closed = this.newsClosed();
+    const parts = (tk.news || []).map((n, i) => closed.includes(n.id) ? "" : `<button class="ti news" type="button" data-tnews="${i}"><span class="dot" title="${esc(t("Unread"))}">●</span> 📰 <b>${esc(n.title)}</b></button>`).filter(Boolean);
     // 🔥 good price (deal score ≥ 45), 🔥🔥 super price (≥ 70), 🔥🔥🔥 amazing price (≥ 85)
     const fire = (sc) => { const n = sc >= 85 ? 3 : sc >= 70 ? 2 : sc >= 45 ? 1 : 0; return n ? ` <span class="fire" title="${esc(n === 3 ? t("Amazing price") : n === 2 ? t("Super price") : t("Good price"))}">${"🔥".repeat(n)}</span>` : ""; };
     const tag = (l, title) => `<span class="tktag" title="${esc(title)}">${l}</span>`;
@@ -560,32 +605,99 @@ class LegoTrackerPanel extends HTMLElement {
         parts.push(`<button class="ti" type="button" data-tset="${esc(it.set_number)}">${tag("W", t("Watchlist"))}${fire(it.score)} ${who} ${EUR(it.price)}${off}${it.shop ? ` · ${esc(it.shop)}` : ""}</button>`);
       }
     }
+    // errors solved since the previous ticker: shown this once (gone at the next reload)
+    for (const f of this._tkFixed || []) parts.push(`<button class="ti fixed" type="button" data-tset="${esc(f.set_number)}">✅ ${esc(t("Error fixed"))}: <b>${esc(f.set_number)}</b> ${esc((f.name || "").slice(0, 40))}${f.shop ? ` · ${esc(f.shop)}` : ""}</button>`);
     const cfg = tk.config || {};
     if (cfg.shuffle !== false) for (let i = parts.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [parts[i], parts[j]] = [parts[j], parts[i]]; }   // mixed
-    if (!parts.length && (cfg.watch || cfg.deals || cfg.news)) parts.push(`<span class="ti muted">${esc(t("No prices or news yet: they appear here as soon as the first prices come in."))}</span>`);
-    if (!parts.length) { el.innerHTML = ""; return; }
-    const place = () => { const r = this.getBoundingClientRect(); el.style.left = Math.max(0, r.left) + "px"; el.style.right = Math.max(0, window.innerWidth - r.right) + "px"; };
-    place(); if (!this._tickerResize) { this._tickerResize = true; window.addEventListener("resize", () => this._tickerEl && place()); }
-    el.innerHTML = `<span class="lbl">📈</span><div class="tk" style="--tk-dur:${Math.max(30, parts.length * 7)}s">${parts.join("")}</div>`;
-    el.querySelectorAll("[data-tset]").forEach((b) => b.onclick = () => this.openSet(b.dataset.tset));
-    el.querySelectorAll("[data-tnews]").forEach((b) => b.onclick = () => this.openNews(tk.news[+b.dataset.tnews]));
+    if (!parts.length && (cfg.watch || cfg.deals || cfg.news)) return `<span class="ti muted" data-ph="1">${esc(t("No prices or news yet: they appear here as soon as the first prices come in."))}</span>`;
+    return parts.join("");
   }
-  /** One news item in a popup: plain text (escaped), links only https:// or inside Home Assistant. */
-  openNews(n) {
+  /** New content waits for the end of the current round, so the ticker never jumps or starts over. */
+  renderTicker(now = false) {
+    const el = this._tickerEl; if (!el || !this.state.ticker) return;
+    const html = this.tickerHtml();
+    const track = el.querySelector(".tk");
+    if (!html) { el.innerHTML = ""; this._tkPending = null; return; }
+    if (!track) {
+      el.innerHTML = `<span class="lbl">📈</span><div class="tkv"><div class="tk"></div></div>`;
+      el.addEventListener("mouseenter", () => { this._tkHold = true; }); el.addEventListener("mouseleave", () => { this._tkHold = false; });
+      el.addEventListener("focusin", () => { this._tkHold = true; }); el.addEventListener("focusout", () => { this._tkHold = false; });
+      el.addEventListener("click", (e) => {
+        const b = e.target.closest("[data-tset],[data-tnews]"); if (!b) return;
+        if (b.dataset.tset) this.openSet(b.dataset.tset); else this.openNews(+b.dataset.tnews);
+      });
+      this._tkPlace = () => { const r = this.getBoundingClientRect(); el.style.left = Math.max(0, r.left) + "px"; el.style.right = Math.max(0, window.innerWidth - r.right) + "px"; };
+      window.addEventListener("resize", () => this._tickerEl && this._tkPlace());
+    }
+    this._tkPlace();
+    const tr = el.querySelector(".tk");
+    if (now || !tr.innerHTML || tr.querySelector("[data-ph]")) { this.applyTicker(tr, html); this._tkPos = 0; } else this._tkPending = { html, fixed: (this._tkFixed || []).slice() };
+    this.tickerLoop();
+  }
+  /** Put content on the running track; the solved errors in it have been shown and leave the queue. */
+  applyTicker(tr, html, fixed = (this._tkFixed || []).slice()) {
+    tr.innerHTML = html; this._tkPending = null;
+    if (this._tkFixed) this._tkFixed = this._tkFixed.filter((f) => !fixed.includes(f));
+  }
+  /** Scrolls the ticker at an even speed from a position that survives re-renders, tab switches and popups. */
+  tickerLoop() {
+    if (this._tkRaf) return;
+    const SPEED = 70;                                   // pixels per second
+    let last = 0;
+    const step = (ts) => {
+      const el = this._tickerEl, tr = el && el.querySelector(".tk");
+      if (!this.isConnected || !tr) { this._tkRaf = null; return; }
+      const dt = last ? Math.min(ts - last, 100) : 0; last = ts;
+      const view = tr.parentElement.clientWidth;
+      if (REDUCED) { tr.style.transform = ""; if (this._tkPending) this.applyTicker(tr, this._tkPending.html, this._tkPending.fixed); this._tkRaf = requestAnimationFrame(step); return; }
+      if (!this._tkHold) this._tkPos = (this._tkPos || 0) + dt * SPEED / 1000;
+      if (this._tkPos > tr.scrollWidth + view) {         // one round done: start again from the right, with new content
+        this._tkPos = 0;
+        if (this._tkPending) this.applyTicker(tr, this._tkPending.html, this._tkPending.fixed);
+      }
+      tr.style.transform = `translateX(${view - this._tkPos}px)`;
+      this._tkRaf = requestAnimationFrame(step);
+    };
+    this._tkRaf = requestAnimationFrame(step);
+  }
+  /** Take one news item out of the running ticker without a jump. */
+  dropNews(i) {
+    const tr = this._tickerEl && this._tickerEl.querySelector(".tk"); if (!tr) return;
+    const b = tr.querySelector(`[data-tnews="${i}"]`);
+    if (b) {
+      const view = tr.parentElement.clientWidth, w = b.offsetWidth + 28;
+      if (view - (this._tkPos || 0) + b.offsetLeft + b.offsetWidth < 0) this._tkPos -= w;   // already passed: keep the rest in place
+      b.remove();
+    }
+    if (this._tkPending) this._tkPending = { html: this.tickerHtml(), fixed: (this._tkFixed || []).slice() };
+  }
+  /** One news item in a popup: plain text (escaped), links only https:// or inside Home Assistant.
+   *  Close = read: hidden until a new news file is online. Keep unread = it stays in the ticker with ●. */
+  openNews(i) {
+    const tk = this.state.ticker || {}, n = (tk.news || [])[i];
     if (!n) return;
-    try { const seen = JSON.parse(localStorage.getItem("lt_news_seen") || "[]"); if (!seen.includes(n.id)) { seen.push(n.id); localStorage.setItem("lt_news_seen", JSON.stringify(seen.slice(-100))); } } catch (e) { /* private mode */ }
     const linkify = (txt) => esc(txt).replace(/https:\/\/[^\s<]+[^\s<.,;:!?)]/g, (u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`);
     const body = !(n.body || "").trim() ? `<p class="muted">${esc(t("This news item has no text."))}</p>` : (n.body || "").split(/\n\s*\n/).map((p) => `<p>${linkify(p).replace(/\n/g, "<br>")}</p>`).join("");
     const link = n.link ? (n.link.startsWith("/") ? `<a class="btn" href="${esc(n.link)}" target="_top">${t("Open")} →</a>` : `<a class="btn" href="${esc(n.link)}" target="_blank" rel="noopener noreferrer">${t("Open")} ↗</a>`) : "";
     const dlg = this.shadowRoot.getElementById("dlg");
     this._dlgGen = (this._dlgGen || 0) + 1; clearInterval(this._shopTimer);
-    dlg.innerHTML = `<div class="dhead" style="grid-template-columns:1fr auto"><div><h2>📰 ${esc(n.title)}</h2><div class="muted">${esc(n.date || "")}</div></div><div><button class="x" id="x" aria-label="${t("Close")}">✕</button></div></div>
-      <div class="dbody">${body}${link ? `<div style="margin-top:12px">${link}</div>` : ""}</div>`;
+    dlg.innerHTML = `<div class="dhead" style="grid-template-columns:1fr auto"><div><h2>📰 ${esc(n.title)}</h2><div class="muted">${esc(n.date || "")}</div></div><div><button class="x" id="x" aria-label="${t("Keep unread")}" title="${t("Keep unread")}">✕</button></div></div>
+      <div class="dbody">${body}${link ? `<div style="margin-top:12px">${link}</div>` : ""}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;border-top:1px solid var(--lt-line);padding-top:12px">
+        <button class="btn" id="nw_close" title="${esc(t("Read: this news item leaves the ticker until new news is put online"))}">✓ ${t("Close")}</button>
+        <button class="btn ghost" id="nw_keep" title="${esc(t("It stays in the ticker, marked as unread"))}">● ${t("Keep unread")}</button></div></div>`;
     if (!dlg.open) dlg.showModal();
     dlg.querySelector("#x").onclick = () => this.closeDialog();
+    dlg.querySelector("#nw_keep").onclick = () => this.closeDialog();
+    dlg.querySelector("#nw_close").onclick = () => {
+      try {
+        const ids = this.newsClosed(); if (!ids.includes(n.id)) ids.push(n.id);
+        localStorage.setItem("lt_news_closed", JSON.stringify({ hash: tk.news_hash || "", ids: ids.slice(-100) }));
+      } catch (e) { /* private mode: it shows again next time */ }
+      this.closeDialog(); this.dropNews(i);
+    };
     const inner = dlg.querySelector('a[target="_top"]');
     if (inner) inner.onclick = (e) => { e.preventDefault(); this.closeDialog(true); history.pushState(null, "", n.link); window.dispatchEvent(new CustomEvent("location-changed", { detail: { replace: false } })); };
-    this.renderTicker();
   }
   /** Manual fetches and searches are possible once every 2 minutes (per set action, per shop site): seconds to wait. */
   mLeft(key) {
@@ -695,7 +807,7 @@ class LegoTrackerPanel extends HTMLElement {
       <nav class="seg" role="tablist">${Object.entries(SECTIONS).map(([k, v]) => `<button role="tab" data-sec="${k}" class="${k === s.section ? "on" : ""}">${t(v.label)}<small>${t(v.hint)}</small></button>`).join("")}<span class="ind"></span></nav>
       <div class="sub">${sec.subs.map(([k, l]) => `<button data-sub="${k}" class="${k === sub ? "on" : ""}">${t(l)}${this.subCount(s.section, k)}</button>`).join("")}${s.section === "manage" ? `<button data-sub="secret" class="secretlink" tabindex="-1" aria-hidden="true"></button>` : ""}</div>
       <div id="content"></div></div><div class="ticker" id="ticker" role="marquee" aria-label="${t("Latest prices and news")}"></div><div class="toasts"></div><dialog id="dlg"></dialog>`;
-    if (this._tickerEl) root.getElementById("ticker").replaceWith(this._tickerEl); else this._tickerEl = root.getElementById("ticker");
+    if (this._tickerEl) { root.getElementById("ticker").replaceWith(this._tickerEl); this.tickerLoop(); } else this._tickerEl = root.getElementById("ticker");
     // keep notifications and an open set dialog alive across re-renders (e.g. when a job finishes)
     if (keepToasts) root.querySelector(".toasts").replaceWith(keepToasts);
     if (keepDlg) {
@@ -1126,22 +1238,38 @@ class LegoTrackerPanel extends HTMLElement {
     const off = new Set(f.themes_off.map(kk)), q = (this.state.dfq || "").toLowerCase();
     const chips = all.filter((x) => !q || x.toLowerCase().includes(q)).map((x) => `<label class="chip sm ${off.has(kk(x)) ? "" : "on"}" style="cursor:pointer;display:inline-flex;gap:6px;align-items:center"><input type="checkbox" class="df_th" data-th="${esc(x)}" ${off.has(kk(x)) ? "" : "checked"} style="margin:0"> ${esc(x)}${mine[x] ? ` <span class="muted">${mine[x]}</span>` : ""}</label>`).join("");
     const num = (id, v, ph) => `<input id="${id}" type="text" inputmode="decimal" autocomplete="off" value="${v == null ? "" : esc(v)}" placeholder="${esc(ph)}">`;
-    const blocked = Object.keys(this.state.data.deal_blocked || {}).length;
+    const bl = this.state.data.deal_blocked || {}, blocked = Object.keys(bl).length, always = this.state.data.deal_always || [];
+    const WHY = { theme: t("Theme switched off"), min_price: t("Price below the minimum"), max_price: t("Price above the maximum"), min_discount: t("Discount below the minimum"),
+      min_pieces: t("Fewer pieces than the minimum"), max_pieces: t("More pieces than the maximum"), owned: t("You own it"), retired: t("Retired") };
+    const setRow = (num, btn) => { const x = this.sets.find((y) => y.set_number === num) || { set_number: num };
+      return `<div class="lorow" style="display:flex;gap:10px;align-items:center;padding:4px 0;border-bottom:1px solid var(--lt-line)">${x.image ? `<img src="${esc(x.image)}" alt="" loading="lazy" style="width:36px;height:36px;object-fit:contain">` : `<span style="width:36px;text-align:center">🧱</span>`}
+        <a class="setlink" data-set="${esc(num)}" style="flex:1;min-width:0"><b>${esc(num)}</b> <span class="muted">${esc(x.name || "")}</span></a>${btn}</div>`; };
+    const groups = {}; for (const [n, why] of Object.entries(bl)) (groups[why] = groups[why] || []).push(n);
+    const list = Object.entries(groups).map(([why, nums]) => `<h4 style="margin:12px 0 4px">${esc(WHY[why] || why)} <span class="muted" style="font-weight:400">${nums.length}</span></h4>`
+      + nums.sort().map((n) => setRow(n, `<button class="btn ghost sm dfx" type="button" data-dfx="${esc(n)}" data-show="1" title="${esc(t("An exception for this set: it shows in Deals, the ticker and notifications again; the settings keep applying to all other sets"))}">↺ ${t("Show anyway")}</button>`)).join("")).join("");
+    const exc = always.length ? `<h4 style="margin:14px 0 4px">${t("Shown anyway (exceptions)")} <span class="muted" style="font-weight:400">${always.length}</span></h4>`
+      + always.map((n) => setRow(n, `<button class="btn ghost sm dfx" type="button" data-dfx="${esc(n)}" data-show="0" title="${esc(t("The deal settings apply to this set again"))}">✕ ${t("Leave out again")}</button>`)).join("") : "";
     return `<div class="panel" style="border-left:4px solid var(--lt-accent)"><b>🔕 ${t("Left out = also no notifications")}</b>
         <p style="margin:6px 0 0;font-size:13px">${t("Sets that fall outside these settings don't appear under Today and All prices, don't count as a deal, and you get no deal or price notifications for them (also not in the daily digest or the ticker). Notification rules for sets you picked one by one keep working. Your watchlist still shows them.")}</p>
-        <p class="muted" style="margin:6px 0 0;font-size:12px">${t("Left out now: {n} sets", { n: blocked })}</p></div>
+        <details id="df_list" ${this.state.dfOpen ? "open" : ""} style="margin-top:8px"><summary style="cursor:pointer;font-size:13px"><b>${t("Left out now: {n} sets", { n: blocked })}</b>${always.length ? ` · ${t("{n} shown anyway", { n: always.length })}` : ""} <span class="muted dfhint">(${t("click to show")})</span></summary>
+          ${blocked || always.length ? list + exc : `<p class="muted" style="font-size:13px">${t("No set is left out with these settings.")}</p>`}</details></div>
       <div class="panel"><h3>🏷️ ${t("What counts as a deal")}</h3><p class="muted" style="font-size:13px">${t("A set is a deal when one of these is true. The deal score (0–100) weighs the discount on the RRP, the distance to the lowest price ever, the discount on the 90-day median and a reached target price.")}</p>
         <div class="form"><label title="${t("Discount on the RRP (or, without RRP, on the 90-day median) from which a set counts as a deal")}">${t("Discount threshold (%)")} ⓘ<input id="o_thr" type="number" min="1" max="90" value="${st.discount_threshold}"></label>
         <label title="${t("A set with at least this deal score counts as a deal (70 = top deal)")}">${t("Deal score at least")} ⓘ<input id="o_dscore" type="number" min="1" max="100" value="${st.deal_min_score ?? 70}"></label>
         <label title="${t("How long prices must be followed before “lowest ever” means something")}">${t("Min. days of history for “lowest ever”")} ⓘ<input id="o_hist" type="number" min="0" max="90" value="${st.min_history_days}"></label>
         <label class="chk" style="align-self:end" title="${t("The lowest price since you follow the set counts as a deal")}"><input type="checkbox" id="o_datl" ${st.deal_atl !== false ? "checked" : ""}> ${t("Lowest ever = deal")}</label>
         <label class="chk" style="align-self:end" title="${t("A price at or below your target price counts as a deal")}"><input type="checkbox" id="o_dtgt" ${st.deal_target !== false ? "checked" : ""}> ${t("Target price reached = deal")}</label></div></div>
-      <div class="panel"><h3>🎯 ${t("Which sets")}</h3><p class="muted" style="font-size:13px">${t("Leave a field empty for no limit.")}</p>
-        <div class="form"><label>${t("Lowest price at least (€)")}${num("df_minp", f.min_price, "–")}</label><label>${t("Lowest price at most (€)")}${num("df_maxp", f.max_price, "–")}</label>
-        <label>${t("Discount on the RRP at least (%)")}${num("df_mind", f.min_discount, "–")}</label>
-        <label>${t("Pieces at least")}${num("df_minpc", f.min_pieces, "–")}</label><label>${t("Pieces at most")}${num("df_maxpc", f.max_pieces, "–")}</label>
-        <label class="chk" style="align-self:end"><input type="checkbox" id="df_owned" ${f.skip_owned ? "checked" : ""}> ${t("Leave out sets I own")}</label>
-        <label class="chk" style="align-self:end"><input type="checkbox" id="df_ret" ${f.skip_retired ? "checked" : ""}> ${t("Leave out retired sets")}</label></div></div>
+      <div class="panel"><h3>🎯 ${t("Which sets")}</h3>
+        <p style="font-size:13px;margin:0 0 4px">${t("Only sets within these limits count as a deal and show under Deals, in the ticker and in deal and price notifications. Your watchlist keeps showing every set.")}</p>
+        <p class="muted" style="font-size:12px;margin:0 0 10px">${t("Example: price from 20 to 200 and discount at least 30 = only sets between €20 and €200 with at least 30 % off the RRP. Leave a field empty for no limit.")}</p>
+        <div class="wsg">
+          <span>${t("Lowest price now")}</span><span class="rng">${t("from")} ${num("df_minp", f.min_price, t("no limit"))} ${t("to")} ${num("df_maxp", f.max_price, t("no limit"))} €</span>
+          <span>${t("Discount on the RRP")}</span><span class="rng">${t("at least")} ${num("df_mind", f.min_discount, t("no limit"))} %</span>
+          <span>${t("Pieces")}</span><span class="rng">${t("from")} ${num("df_minpc", f.min_pieces, t("no limit"))} ${t("to")} ${num("df_maxpc", f.max_pieces, t("no limit"))}</span>
+        </div>
+        <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:12px">
+          <label class="chk" style="display:flex;gap:8px;align-items:center;font-size:14px"><input type="checkbox" id="df_owned" ${f.skip_owned ? "checked" : ""}> ${t("Leave out sets I own")}</label>
+          <label class="chk" style="display:flex;gap:8px;align-items:center;font-size:14px"><input type="checkbox" id="df_ret" ${f.skip_retired ? "checked" : ""}> ${t("Leave out retired sets")}</label></div></div>
       <div class="panel"><h3>🔎 ${t("Deals on every LEGO set")}</h3><p class="muted" style="font-size:13px">${t("Also sets you don't follow are looked up for deals on a comparison site, spread over the day (Deals → All LEGO sets). Retired sets are left out; whether a set is retired is checked every month. The themes, prices and pieces above and below apply too. A notification rule with “Deal on a set you don't follow” tells you about them.")}</p>
         <div class="form"><label>${t("Sets looked up per day")}<select id="df_scan">${(st.scan_choices || [0, 100, 300, 600, 1000]).map((v) => `<option value="${v}" ${v === (this.state.dfScan ?? st.catalog_scan) ? "selected" : ""}>${v ? t("{n} sets a day", { n: v }) : t("Off")}</option>`).join("")}</select></label></div></div>
       <div class="panel"><h3>🧱 ${t("Themes")} <span class="muted" style="font-weight:400;font-size:13px">${t("{n} switched off", { n: f.themes_off.length })}</span></h3>
@@ -1153,6 +1281,13 @@ class LegoTrackerPanel extends HTMLElement {
   }
   bindDealSettings(root, $) {
     const f = this.state.dfDraft, kk = (x) => String(x || "").toLowerCase().replace(/^lego /, "").replace(/[^a-z0-9]/g, "");
+    const dl = $("df_list"); if (dl) dl.ontoggle = () => { this.state.dfOpen = dl.open; };
+    root.querySelectorAll(".dfx").forEach((b) => b.onclick = () => this.busy(b, "…", async () => {
+      const show = b.dataset.show === "1";
+      await this._hass.callWS({ type: "lego_tracker/deal_exception", set_number: b.dataset.dfx, show });
+      this.toast(show ? t("Set {number} shows in Deals again", { number: b.dataset.dfx }) : t("Set {number} is left out again", { number: b.dataset.dfx }), "ok");
+      keep(); const y = window.scrollY; await this.load(); window.scrollTo(0, y);
+    }));
     const keep = () => { for (const [id, k] of [["df_minp", "min_price"], ["df_maxp", "max_price"], ["df_mind", "min_discount"], ["df_minpc", "min_pieces"], ["df_maxpc", "max_pieces"]]) f[k] = $(id).value.trim() === "" ? null : money($(id).value);
       f.skip_owned = $("df_owned").checked; f.skip_retired = $("df_ret").checked; if ($("df_scan")) this.state.dfScan = +$("df_scan").value; };
     const redraw = () => { keep(); const y = window.scrollY; this.renderContent(); window.scrollTo(0, y); };
@@ -1372,7 +1507,7 @@ class LegoTrackerPanel extends HTMLElement {
     const trs = rows.slice(0, 300).map((r) => {
       const key = `${r.s.set_number}|${r.rid || ""}`, open = E.open === key;
       const head = `<tr class="click erow${open ? " on" : ""}" data-ekey="${esc(key)}"><td style="width:28px">${open ? "▾" : "▸"}</td><td><a class="setlink" data-set="${esc(r.s.set_number)}"><b>${esc(r.s.set_number)}</b> ${esc(r.s.name || "")}</a><div class="muted" style="font-size:12px">${esc(r.s.theme || "")}${r.s.owned ? " · 📦 " + t("owned") : ""}</div></td>
-        <td>${r.rid ? esc(retailers[r.rid] || r.rid) : "–"}</td><td><span class="lk ${r.type === "suspect" || r.type === "price" ? "suspect" : "unknown"}">${esc(r.label)}</span>${r.o && r.o.ignored ? ` <span class="muted" style="font-size:11px">(${t("ignored")})</span>` : ""}<div class="err" style="font-size:12px;margin-top:2px">${esc(r.msg || "")}</div>${r.o && r.o.suspect ? `<div style="margin-top:4px">${approveBtn(r.s.set_number, r.rid, r.o.suspect.price)}</div>` : ""}</td>
+        <td>${r.rid ? esc(retailers[r.rid] || r.rid) : "–"}</td><td><span class="lk ${r.type === "suspect" || r.type === "price" ? "suspect" : "unknown"}">${esc(r.label)}</span>${r.o && r.o.ignored ? ` <span class="muted" style="font-size:11px">(${t("ignored")})</span>` : ""}<div class="err" style="font-size:12px;margin-top:2px">${esc(r.msg || "")}</div>${r.o && r.o.suspect ? `<div style="margin-top:4px">${approveBtn(r.s.set_number, r.rid, r.o.suspect.price)}</div>` : ""}${r.o && r.o.link_status === "suspect" ? `<div style="margin-top:4px">${doubtBtns(r.s.set_number, r.rid)}</div>` : ""}</td>
         <td class="num">${r.o && r.o.price != null ? EUR(r.o.price) : "–"}</td></tr>`;
       if (!open) return head;
       return head + `<tr class="efix"><td colspan="5">${this.itemEditorHtml(r.s, r.rid)}</td></tr>`;
@@ -1456,7 +1591,11 @@ class LegoTrackerPanel extends HTMLElement {
       const pend = s ? Object.entries(s.offers || {}).filter(([r, o]) => o.suspect && (e.retailer ? r === e.retailer : !!(e.results && e.results[r] && /suspicious price/i.test(e.results[r].error || "")))) : [];
       const how = e.kind === "userscript" || e.source === "relay" || e.source === "userscript" ? viaMark("userscript") + " " : "";
       const msg = (e.kind === "check" && e.results ? `<div class="resrow">${this.shopResults(e)}</div>` : `${how}${esc(tx(e.message))}`)
-        + pend.map(([r, o]) => ` ${approveBtn(e.set_number, r, o.suspect.price)}`).join("");
+        + pend.map(([r, o]) => ` ${approveBtn(e.set_number, r, o.suspect.price)}`).join("")
+        + (s && e.kind === "link" && e.retailer && (s.offers || {})[e.retailer] && s.offers[e.retailer].link_status === "suspect" && e.url === s.offers[e.retailer].url
+          ? `<div style="margin-top:4px">${doubtBtns(e.set_number, e.retailer)}</div>` : "")
+        + (s && e.choice && e.retailer && ((s.offers || {})[e.retailer] || {}).price_choice && s.offers[e.retailer].price_choice.price === e.price
+          ? `<div style="margin-top:4px">${choiceBtns(e.set_number, e.retailer, s.offers[e.retailer].price_choice)}</div>` : "");
       const head = `<tr class="click lrow lv-${esc(e.level)}${open ? " on" : ""}" data-lid="${esc(e.id)}"><td style="white-space:nowrap" class="muted">${DATE(e.ts, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
         <td>${icon[e.level] || ""}</td><td><span class="tag">${esc(t(d.kinds[e.kind] || e.kind))}</span></td>
         <td>${setCell}</td><td>${e.retailer ? esc(retailers[e.retailer] || e.retailer) : ""}</td>
@@ -2425,7 +2564,7 @@ class LegoTrackerPanel extends HTMLElement {
       if (!o) return `<tr class="orow${focus === rid ? " focus" : ""}" data-rid="${rid}"><td><b>${esc(retailers[rid])}</b>${p}<div class="muted" style="font-size:12px">${t("no link yet")}</div></td>
         <td><input class="ou" data-orig="" placeholder="${t("product URL, ASIN or search URL")}" title="${t("Paste the product page (or an Amazon ASIN) and save, or paste a search page of this shop and press 🔎 Find: the set is then looked for on that page.")}"></td><td class="num"><input class="op" type="text" inputmode="decimal" autocomplete="off" data-money data-orig="" placeholder="€" disabled title="${t("Add a link first")}"></td><td class="oact">${fetchBtn(rid, false)}</td></tr>`;
       const autoP = o.manual_price != null ? o.auto_price : o.price;
-      return `<tr class="orow${focus === rid ? " focus" : ""}" data-rid="${rid}"><td><b>${esc(o.label)}</b>${p} ${lk(o)}${o.title ? `<div class="muted" style="font-size:12px;max-width:240px">${esc(o.title.slice(0, 90))}</div>` : ""}${o.link_status === "suspect" ? `<div class="err">${esc(tx(o.link_reason || ""))}</div>` : ""}${o.unavailable ? `<div class="warn" style="font-size:12px">⚠ ${esc(unavailableText(o.unavailable))}</div>` : ""}${o.error ? `<div class="err">${esc(tx(o.error))}${o.ignored ? ` <span class="muted">(${t("ignored")})</span>` : ""}</div>` : ""}${o.suspect ? `<div style="margin-top:4px">${approveBtn(s.set_number, rid, o.suspect.price)}</div>` : ""}${o.approved ? `<div class="muted" style="font-size:11px">✓ ${esc(t("approved around {price}", { price: EUR(o.approved) }))}</div>` : ""}</td>
+      return `<tr class="orow${focus === rid ? " focus" : ""}" data-rid="${rid}"><td><b>${esc(o.label)}</b>${p} ${lk(o)}${o.title ? `<div class="muted" style="font-size:12px;max-width:240px">${esc(o.title.slice(0, 90))}</div>` : ""}${o.link_status === "suspect" ? `<div class="err">${esc(tx(o.link_reason || ""))}</div><div style="margin:4px 0">${doubtBtns(s.set_number, rid)}</div>` : ""}${o.unavailable ? `<div class="warn" style="font-size:12px">⚠ ${esc(unavailableText(o.unavailable))}</div>` : ""}${o.held ? `<div class="warn" style="font-size:12px">⚠ ${esc(t("temporarily unavailable: the last price is kept"))}</div>` : ""}${o.error ? `<div class="err">${esc(tx(o.error))}${o.ignored ? ` <span class="muted">(${t("ignored")})</span>` : ""}</div>` : ""}${o.suspect ? `<div style="margin-top:4px">${approveBtn(s.set_number, rid, o.suspect.price)}</div>` : ""}${o.price_choice ? `<div class="warn" style="font-size:12px;margin-top:4px">⚠ ${esc(t("The shop now says {price}", { price: EUR(o.price_choice.price) }))}</div><div style="margin-top:4px">${choiceBtns(s.set_number, rid, o.price_choice)}</div>` : ""}${o.approved ? `<div class="muted" style="font-size:11px">✓ ${esc(t("approved around {price}", { price: EUR(o.approved) }))}</div>` : ""}</td>
         <td><div style="display:flex;gap:6px;align-items:center">${o.manual_url ? man : auto}${o.found_via === "sitemap" ? `<span class="abadge" title="${esc(t("Found in the shop's sitemap"))}">🗺</span>` : ""}${o.url ? `<a href="${esc(o.url)}" target="_blank" rel="noopener noreferrer" data-stop style="font-size:12px;white-space:nowrap">${t("open")} ↗</a>` : ""}</div><input class="ou" value="${esc(o.url || "")}" data-orig="${esc(o.url || "")}" placeholder="${t("empty = search automatically")}" style="margin-top:4px"></td>
         <td class="num"><div>${o.manual_price != null ? man : auto} ${o.price != null ? `<b class="${o.price === cheapest ? "ok" : ""}">${EUR(o.price)}</b>${viaBadge(o.via)}` : "–"}</div>
           <input class="op" type="text" inputmode="decimal" autocomplete="off" data-money value="${o.manual_price ?? ""}" data-orig="${o.manual_price ?? ""}" placeholder="${autoP != null ? EUR(autoP) : t("auto")}" title="${t("empty = automatic price")}" style="margin-top:4px">

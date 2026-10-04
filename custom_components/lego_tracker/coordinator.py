@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
+import json
 import logging
 import math
 import re
@@ -23,7 +25,7 @@ from .client import DOMAIN_GAP, SEARCH_GAP, Fetcher, lookup_metadata
 from .const import (
     CONF_COMPARE, CONF_COMPARE_OLD, CONF_BLOCK_WORDS, CYCLE_CHOICES, CONF_WATCH_CYCLE, WATCH_CYCLE_CHOICES, WATCH_LIMIT,
     FULL_REFRESH_GAP, MANUAL_GAP, CONF_DEAL_MIN_SCORE, CONF_DEAL_ATL, CONF_DEAL_TARGET, DEFAULT_DEAL_MIN_SCORE, CONF_DEV_FIXED_TIMES, CONF_DEV_FULL_REFRESH, CONF_DEV_FREE_CYCLE, CONF_DEV_WATCH_UNLIMITED, CONF_ALLOW_WORDS, CONF_COMPARE_SOURCES, COMPARE_FRESH_HOURS, COMPARE_MISSING_HOURS, COMPARE_NET_ERRORS, COMPARE_PAUSE_HOURS,
-    CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET, CONF_BOL_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS, CONF_MARKET, CONF_TICKER, TICKER_DEFAULT, TICKER_GOOD_SCORE, CONF_DEAL_FILTER, DEAL_FILTER_DEFAULT, CONF_SCAN,
+    CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET, CONF_BOL_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS, CONF_MARKET, CONF_TICKER, TICKER_DEFAULT, TICKER_GOOD_SCORE, TICKER_RELOAD, CONF_DEAL_FILTER, DEAL_FILTER_DEFAULT, CONF_SCAN,
     CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_LANGUAGE, CONF_REFRESH_MODE, CONF_SPREAD_HOURS, DEFAULT_REFRESH_MODE, DEFAULT_SPREAD_HOURS, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, CONF_CUSTOM_SHOPS, CONF_DIGEST_TIME, CONF_NO_AUTOPAUSE, CONF_SHOP_SEARCH, CONF_VALUE_SOURCE, DEFAULT_DIGEST_TIME, GENERIC_SHOPS, CONF_DISCOUNT_THRESHOLD, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
     DEFAULT_REFRESH_TIMES, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS, DEFAULT_RETAILERS,
     DOMAIN, EVENT_JOB_DONE, EVENT_HIGH_DISCOUNT, EVENT_NEW_LOW, EVENT_TARGET_HIT, RETAILERS, STORAGE_KEY,
@@ -38,7 +40,7 @@ from .notifications import Notifier, default_rules
 from .bol_api import BolApi, BolApiError
 from . import catalog, sitemaps, compare, setdb, scan
 from .shops import all_domains, domain_of
-from .parsers import Parsed, title_check
+from .parsers import Parsed, title_check, wrong_product
 from .shops import SEARCH, valid_search
 from .parsers import BUILTIN_WORDS, KNOCKOFF_RE, find_search_result, is_search_url, search_url, accessory_word, set_custom_words, clean_title, normalize_url, retailer_from_url, url_key
 
@@ -81,6 +83,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._compare_retry_unsub: Callable[[], None] | None = None
         self._first_checks: list[str] = []                         # sets just added, waiting for their first prices
         self._first_busy = False
+        self._rediscover: list[tuple[str, str]] = []               # (set, shop) to search again after a blocked link
         self._first_current: str | None = None
         def _paused(rid: str, hours: float) -> None:
             if rid in compare.SOURCES:
@@ -347,6 +350,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Why a set is left out of Deals and price notifications (Deals → Settings), or None."""
         from .themes import key as theme_key
 
+        if num in (self.store.get("deal_always") or []):
+            return None                                    # put back by hand: the filters don't apply to it
         f, s = self.deal_filter, self.store["sets"].get(num, {})
         if status is None:
             status = ((self.data or {}).get("statuses") or {}).get(num) or self.compute()["statuses"].get(num, {})
@@ -370,6 +375,22 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if f["skip_retired"] and st.get("retired"):
             return "retired"
         return None
+
+    def set_deal_exception(self, set_number: str, show: bool) -> None:
+        """Deals → Settings → left-out sets: 'show anyway' makes one set an exception to the filters (it shows in
+        Deals, the ticker and notifications again); undoing it lets the filters decide again."""
+        num = normalize_set_number(set_number)
+        if num not in self.store["sets"]:
+            raise LocalizedError("Set {number} is not tracked.", number=num)
+        always = self.store.setdefault("deal_always", [])
+        if show and num not in always:
+            always.append(num)
+        elif not show and num in always:
+            always.remove(num)
+        self.log("info", "user", T("set shown in Deals again despite the deal settings") if show else T("deal settings apply to this set again"),
+                 set_number=num, source="panel")
+        self.async_set_updated_data(self.compute())
+        self._save()
 
     def is_watched(self, num: str) -> bool:
         """On the watchlist: every set you don't own, plus owned sets you also watch (e.g. for a second copy)."""
@@ -522,6 +543,46 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         now = time.time()
         for rid in rids:
             self._manual["site:" + self._site(rid)] = now
+
+    def _price_choice(self, num: str, rid: str, offer: dict[str, Any], price: float | None, source: str) -> None:
+        """Your own price counts, but the shop now says something else: ask once (logbook, set) whether the
+        new price should count from now on or your price stays. A price you declined is not asked again."""
+        manual = float((offer.get("manual_price") or {}).get("price") or 0)
+        if price is None or not manual or abs(price - manual) < 0.01:
+            offer.pop("price_choice", None)
+            return
+        if offer.get("declined_price") is not None and abs(offer["declined_price"] - price) < 0.01:
+            return
+        if (offer.get("price_choice") or {}).get("price") == price:
+            return
+        offer["price_choice"] = {"price": price, "manual": manual, "ts": time.time()}
+        self.log("warning", "price", T("the shop now says €{new}; your own price €{manual} still counts: choose which one", new=f"{price:.2f}", manual=f"{manual:.2f}"),
+                 set_number=num, retailer=rid, url=offer.get("url"), price=price, old_price=manual, source=source, choice=True)
+
+    def resolve_price_choice(self, set_number: str, retailer: str, accept: bool) -> float:
+        """Logbook choice for a shop with your own price: accept the fetched price (your price goes away, the
+        shop's price counts from now on) or keep your price (this fetched price is not asked again)."""
+        num = normalize_set_number(set_number)
+        offer = (self.store["offers"].get(num) or {}).get(retailer)
+        if not offer or not offer.get("price_choice"):
+            raise LocalizedError("There is no new price to choose for this shop.")
+        choice = offer.pop("price_choice")
+        before = self.compute()["statuses"].get(num, {})
+        if accept:
+            offer.pop("manual_price", None)
+            offer.pop("declined_price", None)
+            record_price(offer, float(choice["price"]))
+            offer["last_ok"] = time.time()
+            self.log("ok", "price", T("new price €{price} approved; your own price is gone", price=f"{choice['price']:.2f}"),
+                     set_number=num, retailer=retailer, url=offer.get("url"), price=choice["price"], source="panel")
+        else:
+            offer["declined_price"] = float(choice["price"])
+            self.log("info", "price", T("your own price €{price} kept", price=f"{choice['manual']:.2f}"),
+                     set_number=num, retailer=retailer, url=offer.get("url"), price=choice["manual"], source="panel")
+        self._fire_events(num, before, self.compute()["statuses"].get(num, {}))
+        self._save()
+        self.push_update()
+        return float(choice["price"] if accept else choice["manual"])
 
     def approve_price(self, num: str, rid: str) -> float:
         """A price held back as suspicious is right after all: store it, and accept prices like it (±25 %)
@@ -691,7 +752,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return None
             self._bol_found[num] = match
             return match.get("url") or f"https://www.bol.com/{'be' if self.bol_country == 'BE' else 'nl'}/nl/s/?searchtext={match['ean']}"
-        return await self.fetcher.discover(rid, num, force=force, url=url)
+        skip = set(self.store.get("rejected", {}).get(num, []))
+        return await self.fetcher.discover(rid, num, force=force, url=url, skip=skip)
 
     async def _fetch(self, rid: str, offer: dict[str, Any], num: str, force: bool = False) -> tuple[Any, str | None]:
         if compare.is_compare_url(offer.get("url")):
@@ -730,7 +792,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Return ticker defaults merged with the configured overrides."""
         return {**TICKER_DEFAULT, **(self.opt(self.entry, CONF_TICKER, None) or {})}
 
-    async def ticker_data(self, lang: str) -> dict[str, Any]:
+    async def ticker_data(self, lang: str, since: float | None = None) -> dict[str, Any]:
         """The ticker at the bottom of the panel, each part as configured under Settings (on/off and how many):
         the current deals (deal score at least the minimum of Deals → Settings, best first), watched sets at
         a good price at least (deal score 45) that are not a deal yet, and news. Sets left out under
@@ -762,11 +824,29 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if cfg["deals"] and cfg["max_deals"]:
             out += [item("deal", n, statuses[n]) for n in deals[: cfg["max_deals"]]]
         news: list[dict[str, Any]] = []
+        news_hash = ""
         if cfg["news"] and cfg["max_news"]:
             if not hasattr(self, "news"):
                 self.news = NewsFeed(lambda: async_get_clientsession(self.hass))
-            news = for_language(await self.news.get(), lang)[: cfg["max_news"]]
-        return {"items": out, "news": news, "config": cfg}
+            every = await self.news.get()
+            # changes when a new news file is put online: news you closed shows again then
+            news_hash = hashlib.sha1(json.dumps(every, sort_keys=True).encode()).hexdigest()[:16] if every else ""
+            news = for_language(every, lang)[: cfg["max_news"]]
+        # errors solved since the previous ticker (shown once; gone at the next ticker load)
+        self._track_errors(now)
+        since = now - TICKER_RELOAD if since is None else max(float(since), now - 86400)
+        # oldest first, at most 10 per load; when more are waiting, the cursor stops at the last one sent,
+        # so the rest come with the next load instead of being skipped
+        waiting = [(ts, key) for ts, key, _opened in (self.store.get("err_track") or {}).get("solved") or []
+                   if ts > since and key.partition("|")[0] in self.store["sets"]]
+        fixed = []
+        for ts, key in waiting[:10]:
+            num, _, rid = key.partition("|")
+            fixed.append({"kind": "fixed", "ts": ts, "set_number": num, "name": self.store["sets"][num].get("name") or "",
+                          "shop": RETAILERS.get(rid, (rid,))[0] if rid else None})
+        cursor = fixed[-1]["ts"] if len(waiting) > 10 else now
+        return {"items": out, "news": news, "news_hash": news_hash, "fixed": fixed, "config": cfg, "now": now,
+                "cursor": cursor, "reload": TICKER_RELOAD}
 
     @callback
     def market_tick(self, _now: Any = None) -> None:
@@ -1182,7 +1262,9 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                  if o.get("available") and o.get("last_price")}
         for (rid, offer), (parsed, error) in zip(offers, results):
             via = None
-            if (bwp := bw_prices.get(rid)) and (error or not parsed or parsed.price is None):
+            # LEGO.com says "temporarily unavailable": no new LEGO price, the one we had stays
+            held = self._lego_hold(num, offer, parsed) if rid == "lego_com" and not error else None
+            if held is None and (bwp := bw_prices.get(rid)) and (error or not parsed or parsed.price is None):
                 parsed, error, via = Parsed(price=bwp["price"], title=offer.get("title")), None, bwp["source"]
             if error and error.startswith("paused"):
                 counts["skipped"] += 1        # keep the last known price, just skip
@@ -1192,7 +1274,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 offer["title"] = parsed.title[:300]
             status, reason = link_check(offer, s, num)
             offer["link_status"], offer["link_reason"] = status, reason
-            price = parsed.price if parsed else None
+            if status == "suspect" and (why_wrong := self._auto_reject(num, rid, offer, source)):
+                shop_results[rid] = {"ok": None, "error": why_wrong}
+                continue
+            price = held[0] if held else parsed.price if parsed else None
             others = [p for r, p in {**known, **round_prices}.items() if r != rid]
             if price is not None and (warn := is_suspicious_price(price, s, offer, others)):
                 offer["suspect"] = {"price": price, "reason": warn, "ts": time.time()}   # kept: you can approve it
@@ -1202,6 +1287,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             manual = offer.get("manual_price")
             if manual:                        # manual price has priority: only remember what the shop said
                 offer["auto_price"], offer["last_checked"], offer["error"] = price, time.time(), error
+                self._price_choice(num, rid, offer, price, source)
             else:
                 old_price = offer.get("last_price") if offer.get("available") else None
                 record_price(offer, price, error=error)
@@ -1218,13 +1304,16 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if via:
                 shop_results[rid]["via"] = via
             # the page says it is sold out / no longer sold: a warning with the reason, not an error to solve
-            why = parsed.reason if parsed and parsed.unavailable and price is None and not error else None
+            why = parsed.reason if parsed and parsed.unavailable and (price is None or held) and not error else None
             if why:
                 shop_results[rid]["unavailable"] = why
                 if offer.get("unavailable") != why:
-                    self.log("warning", "price", T("no price: sold out") if why == "sold_out"
-                             else T("no price: no longer sold (out of the range)"), set_number=num,
-                             retailer=rid, url=offer.get("url"), source=source, unavailable=why)
+                    if held:
+                        msg = T("temporarily unavailable: last price €{price} kept", price=f"{held[0]:.2f}") if held[1] == "kept" \
+                            else T("temporarily unavailable: regular price €{price} used", price=f"{held[0]:.2f}")
+                    else:
+                        msg = T("no price: sold out") if why == "sold_out" else T("no price: no longer sold (out of the range)")
+                    self.log("warning", "price", msg, set_number=num, retailer=rid, url=offer.get("url"), source=source, unavailable=why)
                 offer["unavailable"] = why
             elif price is not None or error:
                 offer.pop("unavailable", None)
@@ -1589,7 +1678,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         readable = bool(html) and 0 < status < 400
         if readable:              # blocked / failed searches are tried again, only real answers wait a week
             self.store.setdefault("relay_searched", {})[f"{num}|{rid}"] = time.time()
-        found = find_search_result(rid, html, num) if readable else None
+        found = find_search_result(rid, html, num, set(self.store.get("rejected", {}).get(num, []))) if readable else None
         offers = self.store["offers"].setdefault(num, {})
         if found and url_key(rid, found) not in set(self.store.setdefault("rejected", {}).get(num, [])) \
                 and not (offers.get(rid) or {}).get("url"):
@@ -1696,6 +1785,19 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         lego_due = lego_missing and time.time() - s.get("lego_checked", 0) > 7 * 86400
         return lego_due or self._name_replaceable(s) or not all(s.get(k) for k in ("theme", "year", "pieces", "image"))
 
+    def _lego_hold(self, num: str, offer: dict[str, Any], parsed: Any) -> tuple[float, str] | None:
+        """LEGO.com shows the set as temporarily unavailable (sold out, not retired): no new price is taken.
+        The LEGO price you had stays ('kept'); without one, the regular price (RRP) of the set is used: the
+        one the page itself shows, else the RRP from another source ('rrp'). None: nothing to hold."""
+        if not (parsed and parsed.unavailable and parsed.reason == "sold_out" and parsed.price is None):
+            return None
+        if offer.get("manual_price"):
+            return None
+        if (last := offer.get("last_price")) is not None:
+            return float(last), "kept"
+        rrp = parsed.list_price or self.store["sets"][num].get("rrp")
+        return (round(float(rrp), 2), "rrp") if rrp else None
+
     def _apply_lego(self, num: str, parsed: Any) -> bool:
         """LEGO.com is the first source for RRP, image and name. Values the user typed win."""
         s = self.store["sets"][num]
@@ -1745,8 +1847,18 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         offer["link_status"], offer["link_reason"] = link_check(offer, s, num)
         if parsed and parsed.title:
             offer["title"] = parsed.title[:300]
-        record_price(offer, parsed.price if parsed else None, error=error)
-        if parsed and parsed.price:
+        held = self._lego_hold(num, offer, parsed) if not error else None
+        fetched = held[0] if held else parsed.price if parsed else None
+        if offer.get("manual_price"):                     # your own price wins: only remember what LEGO.com said
+            offer["auto_price"], offer["last_checked"], offer["error"] = fetched, time.time(), error
+            self._price_choice(num, "lego_com", offer, fetched, "server")
+        else:
+            record_price(offer, fetched, error=error)
+        if held:
+            offer["unavailable"] = "sold_out"
+        elif parsed and parsed.price:
+            offer.pop("unavailable", None)
+        if parsed and (parsed.price or held):
             offer["last_ok"] = offer["last_checked"]
         if error:
             self.log("error", "fetch", error, set_number=num, retailer="lego_com", url=url)
@@ -2079,6 +2191,54 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         offer["link_status"], offer["link_reason"] = "confirmed", T("confirmed by hand")
         self.push_update()
 
+    def _auto_reject(self, num: str, rid: str, offer: dict[str, Any], source: str) -> str | None:
+        """A link that is clearly another product (other brand, accessory, another set) goes away by itself:
+        only this link is blocked, and the same shop is searched again for the right page. A link or price
+        you set yourself is never touched; a mere doubt stays (you choose in the logbook)."""
+        if offer.get("manual_url") or offer.get("manual_price") or offer.get("link_status") == "confirmed":
+            return None
+        why = wrong_product(offer.get("title"), num)
+        if not why:
+            return None
+        rej = self.store.setdefault("rejected", {}).setdefault(num, [])
+        if (key := url_key(rid, offer["url"])) not in rej:
+            rej.append(key)
+        self.store["offers"][num].pop(rid, None)
+        self.log("warning", "link", T("wrong product ({reason}): this link is blocked, the shop is searched again", reason=why),
+                 set_number=num, retailer=rid, url=offer.get("url"), source=source)
+        self.queue_rediscover(num, rid)
+        return why
+
+    def queue_rediscover(self, num: str, rid: str) -> None:
+        """Search one shop again for a set, in the background (after a link was blocked)."""
+        if (num, rid) in self._rediscover:
+            return
+        self._rediscover.append((num, rid))
+        if len(self._rediscover) == 1 and self.hass and self.entry:
+            self.entry.async_create_background_task(self.hass, self._run_rediscover(), f"{DOMAIN}_rediscover")
+
+    async def _run_rediscover(self) -> None:
+        try:
+            while self._rediscover:
+                num, rid = self._rediscover[0]
+                if num in self.store["sets"] and not (self.store["offers"].get(num) or {}).get(rid):
+                    try:
+                        if (await self.discover_set(num, [rid]))["found"]:
+                            await self.refresh_set(num, [rid], source="rediscover")
+                        self._save()
+                        self.push_update()
+                    except Exception:  # noqa: BLE001 - the regular rounds try again
+                        _LOGGER.exception("searching %s again for %s failed", rid, num)
+                self._rediscover.pop(0)
+        finally:
+            self._rediscover = []
+
+    def reject_link(self, set_number: str, retailer: str) -> None:
+        """Logbook choice 'never visit this link again': block only this link and search the shop again."""
+        num = normalize_set_number(set_number)
+        self.remove_offer(num, retailer, block=True)
+        self.queue_rediscover(num, retailer)
+
     def remove_offer(self, set_number: str, retailer: str, block: bool = True) -> None:
         num = normalize_set_number(set_number)
         offer = self._offer(num, retailer)
@@ -2151,6 +2311,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             offer = offers.get(retailer)
             if offer is None:
                 raise LocalizedError("This shop has no link yet: enter the link as well.")
+            offer.pop("price_choice", None)          # a new own price (or none): earlier choices no longer apply
+            offer.pop("declined_price", None)
             if manual_price in ("", None):
                 if offer.pop("manual_price", None):
                     auto = offer.pop("auto_price", None)
