@@ -1893,7 +1893,18 @@ async def test_ticker_market_tick_and_shop_link(hass: HomeAssistant, entry, no_n
     with patch.object(cls, "ticker", property(lambda self: {**TICKER_DEFAULT, "deals": False, "news": False})):
         tk = await c.ticker_data("nl")            # deals off: the watched set at a good price shows as a watchlist item
         assert [(i["kind"], i["set_number"]) for i in tk["items"]] == [("price", "10281")] and tk["news"] == []
-    with patch.object(cls, "deal_filter", property(lambda self: {**DEAL_FILTER_DEFAULT, "max_price": 30})):
+    with patch.object(cls, "ticker", property(lambda self: {**TICKER_DEFAULT, "max_deals": 0, "news": False})):
+        tk = await c.ticker_data("nl")            # no deals shown at all: the watched deal is a watchlist item
+        assert [(i["kind"], i["set_number"]) for i in tk["items"]] == [("price", "10281")]
+    await c.add_set("21342", name="Insects", rrp=100, discover=False)
+    c.store["offers"]["21342"] = {"bol": {"url": "https://www.bol.com/p/9", "available": True, "last_price": 30.0,
+                                          "last_checked": now, "history": [[now - 86400 * 30, 100.0], [now, 30.0]]}}
+    c.push_update()
+    assert c.data["statuses"]["21342"]["deal_score"] >= 70
+    with patch.object(cls, "ticker", property(lambda self: {**TICKER_DEFAULT, "max_deals": 1, "news": False})):
+        tk = await c.ticker_data("nl")            # two watched deals, one shown: the other is not a watchlist item
+        assert [i["kind"] for i in tk["items"]] == ["deal"]
+    with patch.object(cls, "deal_filter", property(lambda self: {**DEAL_FILTER_DEFAULT, "max_price": 20})):
         assert (await c.ticker_data("nl"))["items"] == []                     # left out under Deals → Settings
 
     # market value: one set per tick, never more often than the spread allows
@@ -2560,7 +2571,13 @@ async def test_sold_out_and_discontinued_are_warnings_with_a_reason(hass: HomeAs
     from custom_components.lego_tracker.parsers import availability_reason
 
     assert availability_reason("<div>Dit product is niet meer leverbaar</div>") == "discontinued"
-    assert availability_reason('{"availability":"https://schema.org/SoldOut"}') == "sold_out"
+    ld = lambda x: f'<script type="application/ld+json">{x}</script>'  # noqa: E731
+    assert availability_reason(ld('{"@type":"Product","name":"LEGO 10281","offers":{"availability":"https://schema.org/SoldOut"}}'), "10281") == "sold_out"
+    # a sold-out recommendation does not make the page's own product sold out
+    own = '{"@type":"Product","name":"LEGO 10281 Bonsai","offers":{"availability":"https://schema.org/InStock"}}'
+    rec = '{"@type":"Product","name":"LEGO 10305","offers":{"availability":"https://schema.org/Discontinued"}}'
+    assert availability_reason(ld(f"[{own},{rec}]") + "<p>uitverkocht</p>", "10281") is None
+    assert availability_reason(ld(f"[{rec},{own.replace('InStock', 'OutOfStock')}]"), "10281") == "sold_out"
     assert availability_reason("<script>var t='uitverkocht'</script><p>Bonsai</p>") is None   # words in scripts don't count
     c = await _setup(hass, entry)
     await c.add_set("10281", name="Bonsai", discover=False)
@@ -2587,9 +2604,15 @@ async def test_own_shop_links_move_to_the_built_in_shop(hass: HomeAssistant, ent
     await c.add_set("10281", discover=False)
     c.store["offers"]["11504"] = {"c_smyths": {"url": "https://www.smythstoys.com/be/nl-be/p/253664", "last_price": 37.99}}
     c.store["offers"]["10281"] = {"c_smyths": {"url": "https://www.smythstoys.com/x"}, "smyths_be": {"url": "https://www.smythstoys.com/y"}}
-    assert c.move_shop("c_smyths", "smyths_be") == 1
+    c.store["offers"]["10281"]["c_smyths"].update(history=[[86400 * 10, 50.0]], last_price=50.0, last_checked=999, manual_price={"price": 45})
+    c.store["offers"]["10281"]["smyths_be"].update(history=[[86400 * 20, 48.0]], last_price=48.0, last_checked=500)
+    assert c.move_shop("c_smyths", "smyths_be") == 2
     assert c.store["offers"]["11504"] == {"smyths_be": {"url": "https://www.smythstoys.com/be/nl-be/p/253664", "last_price": 37.99}}
-    assert c.store["offers"]["10281"]["smyths_be"]["url"].endswith("/y") and "c_smyths" in c.store["offers"]["10281"]
+    # both linked: the built-in link stays, the history, the hand-entered price and the newest price come along
+    b = c.store["offers"]["10281"]
+    assert "c_smyths" not in b and b["smyths_be"]["url"].endswith("/y") and b["smyths_be"]["history"] == [[864000, 50.0], [1728000, 48.0]]
+    assert b["smyths_be"]["manual_price"] == {"price": 45} and b["smyths_be"]["last_price"] == 50.0
+    assert c.move_shop("c_smyths", "smyths_be") == 0
 
 
 async def test_every_copy_has_its_own_price_date_condition_and_value(hass: HomeAssistant, entry, no_network, hass_ws_client):
@@ -2641,3 +2664,25 @@ async def test_every_copy_has_its_own_price_date_condition_and_value(hass: HomeA
     assert [x["paid"] for x in f["items"]] == [300.0, 350.0] and f["current_value"] == 400.0
     apply_import(c.store, [{"set_number": "42143", "qty": 3, "paid": 320.0}])
     assert "items" not in f and f["qty"] == 3 and f["paid"] == 320.0
+
+
+async def test_own_shop_move_is_finished_on_a_later_start(hass: HomeAssistant, no_network):
+    """The built-in shop is already known (an earlier start was interrupted): the own shop is off, so its links
+    still move to the built-in shop at this start."""
+    e = MockConfigEntry(domain=DOMAIN, data={}, options={
+        "retailers": ["bol", "smyths_be"], "known_shops": ["amazon_nl", "amazon_de", "amazon_be", "bol", "kruidvat_be", "lego_com",
+                                                            "dreamland_be", "smyths_be"],
+        "custom_shops": [{"id": "c_smyths", "name": "Smyths", "domain": "smythstoys.com",
+                          "search": "https://www.smythstoys.com/be/nl-be/search?text={query}"}]})
+    e.add_to_hass(hass)
+    from homeassistant.helpers.storage import Store
+    from custom_components.lego_tracker.const import STORAGE_KEY, STORAGE_VERSION
+    from custom_components.lego_tracker.models import new_store
+    data = new_store()
+    data["sets"]["11504"] = {"set_number": "11504"}
+    data["offers"]["11504"] = {"c_smyths": {"url": "https://www.smythstoys.com/p/253664", "last_price": 37.99}}
+    await Store(hass, STORAGE_VERSION, STORAGE_KEY).async_save(data)
+    assert await hass.config_entries.async_setup(e.entry_id)
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][e.entry_id]
+    assert list(c.store["offers"]["11504"]) == ["smyths_be"]

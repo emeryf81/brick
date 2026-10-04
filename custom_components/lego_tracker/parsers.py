@@ -31,8 +31,6 @@ class Parsed:
 
 # Why a shop page has no price. The structured availability (JSON-LD / schema.org) counts first; the words
 # only when the page has no price at all (they can also appear in menus or translations of every page).
-LD_GONE_RE = re.compile(r'"availability"\s*:\s*"(?:https?://schema\.org/)?Discontinued"', re.I)
-LD_SOLD_OUT_RE = re.compile(r'"availability"\s*:\s*"(?:https?://schema\.org/)?(?:OutOfStock|SoldOut)"', re.I)
 GONE_WORDS_RE = re.compile(r"niet meer (?:leverbaar|verkrijgbaar|beschikbaar|in (?:het )?assortiment)|uit (?:het )?assortiment|"
                            r"uit (?:de )?(?:handel|productie)|no longer (?:available|sold|in stock)|discontinued|"
                            r"nicht mehr (?:lieferbar|erhältlich|verfügbar)|aus dem sortiment|plus disponible|"
@@ -42,12 +40,40 @@ SOLD_OUT_WORDS_RE = re.compile(r"(?:tijdelijk )?uitverkocht|niet (?:op voorraad|
                                r"rupture de stock|agotado|sin stock", re.I)
 
 
-def availability_reason(page: str) -> str | None:
-    """'discontinued', 'sold_out' or None for a page without a price."""
-    if LD_GONE_RE.search(page):
-        return "discontinued"
-    if LD_SOLD_OUT_RE.search(page):
-        return "sold_out"
+def _own_product_availability(page: str, set_number: str | None) -> str | None:
+    """The schema.org availability of the page's own product: the one that names the set (when the set
+    number is known), else a top-level product. Recommendations nested in it or elsewhere don't count.
+    Returns "" when the product is there but says nothing about availability, None without a product."""
+    tops: list[dict] = []
+    for block in _jsonld_blocks(page):
+        for node in (block.get("@graph") if isinstance(block, dict) and isinstance(block.get("@graph"), list)
+                     else block if isinstance(block, list) else [block]):
+            if isinstance(node, dict):
+                types = node.get("@type")
+                if "Product" in (types if isinstance(types, list) else [types]):
+                    tops.append(node)
+    if set_number:
+        num = re.compile(rf"(?<!\d){re.escape(set_number)}(?!\d)")
+        named = [n for n in tops if num.search(" ".join(str(n.get(k) or "") for k in ("name", "sku", "mpn", "productID")))]
+        tops = named or tops[:1]
+    if not tops:
+        return None
+    offers = tops[0].get("offers")
+    offers = offers if isinstance(offers, list) else [offers] if isinstance(offers, dict) else []
+    avail = " ".join(str(o.get("availability") or "") for o in offers if isinstance(o, dict))
+    return avail or ""
+
+
+def availability_reason(page: str, set_number: str | None = None) -> str | None:
+    """'discontinued', 'sold_out' or None for a page without a price. The structured availability of the
+    page's own product decides first; without one, the words on the page."""
+    own = _own_product_availability(page, set_number)
+    if own:
+        if "Discontinued" in own:
+            return "discontinued"
+        if "OutOfStock" in own or "SoldOut" in own:
+            return "sold_out"
+        return None                                     # in stock / pre-order: no reason to call it unavailable
     text = re.sub(r"<script\b.*?</script>|<style\b.*?</style>", " ", page[:600000], flags=re.S | re.I)
     text = re.sub(r"<[^>]+>", " ", text)
     if GONE_WORDS_RE.search(text):
@@ -331,7 +357,7 @@ def parse_page(retailer: str, page: str, set_number: str | None = None) -> Parse
             return fallback
     if result.price is None and not result.blocked and (result.unavailable or result.title) and not result.reason:
         # no price: say why when the page says so (sold out / no longer sold); a warning, not an error
-        if (why := availability_reason(page)) or result.unavailable:
+        if (why := availability_reason(page, set_number)) or result.unavailable:
             result.unavailable, result.reason = True, why or "sold_out"
     return result
 

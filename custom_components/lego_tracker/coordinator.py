@@ -151,9 +151,25 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         one has no link yet). Your own shop is switched off, not deleted. Returns the number of links moved."""
         n = 0
         for num, offers in self.store["offers"].items():
-            if old in offers and offers[old].get("url") and not (offers.get(new) or {}).get("url"):
+            mine = offers.get(old)
+            if not mine or not mine.get("url"):
+                continue
+            ours = offers.get(new)
+            if not ours or not ours.get("url"):
                 offers[new] = offers.pop(old)
-                n += 1
+            else:
+                # both linked: keep the built-in link, and also the price history and anything you entered by hand
+                hist = {int(ts // 86400): [ts, p] for ts, p in sorted((ours.get("history") or []) + (mine.get("history") or []))}
+                ours["history"] = sorted(hist.values())
+                for k in ("manual_price", "manual_url", "approved"):
+                    if mine.get(k) and not ours.get(k):
+                        ours[k] = mine[k]
+                if (mine.get("last_checked") or 0) > (ours.get("last_checked") or 0):
+                    for k in ("last_price", "available", "last_checked", "last_ok"):
+                        if k in mine:
+                            ours[k] = mine[k]
+                del offers[old]
+            n += 1
         if n:
             self.log("info", "shop", T("{n} links of your own shop {old} moved to the built-in shop {new}", n=n,
                                        old=RETAILERS.get(old, (old,))[0], new=RETAILERS.get(new, (new,))[0]))
@@ -736,7 +752,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         min_score = self.deal_rules["min_score"]
         deals = sorted((n for n in priced if (statuses[n].get("deal_score") or 0) >= min_score
                         and not self.deal_blocked(n, statuses[n])), key=by_score) if cfg["deals"] else []
-        shown = set(deals[: cfg["max_deals"]])
+        shown = set(deals) if cfg["max_deals"] else set()     # every deal, also beyond the shown ones, stays out of W
         # watchlist: watched sets at a good price at least (deal score 45, one flame) that are not a deal above
         if cfg["watch"] and cfg["max_watch"]:
             good = sorted((n for n in priced if n not in shown and self.is_watched(n) and not self.deal_blocked(n, statuses[n])

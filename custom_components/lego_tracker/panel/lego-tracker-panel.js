@@ -1090,7 +1090,10 @@ class LegoTrackerPanel extends HTMLElement {
         const dl = this.shadowRoot.getElementById("cg_sugg"); if (!dl || id !== this._cgSid) return;
         dl.innerHTML = (r.items || []).map((x) => `<option value="${esc(x.set_number)}">${esc(`${x.set_number} ${x.name || ""} (${x.theme || "?"}, ${x.year || "?"})`)}</option>`).join("");
       }, 200);
-      clearTimeout(this._cgT); this._cgT = setTimeout(() => { C.q = qi.value.trim(); C.limit = 120; C.partial = true; this.vCatalog(); }, 400);
+      clearTimeout(this._cgT); this._cgT = setTimeout(() => {
+        C.q = qi.value.trim(); C.limit = 120; C.partial = true; this.vCatalog();
+        if (!C.loading && C.r) this.catalogRefresh();       // answer already cached: no request, show it now
+      }, 400);
     };
     for (const [id, k] of [["cg_th", "theme"], ["cg_st", "status"], ["cg_so", "sort"], ["cg_yr", "year"]]) { const el = $(id); if (el) el.onchange = () => { C[k] = el.value; C.limit = 120; this.renderContent(); }; }
     this.bindCatalogCards(root, false);
