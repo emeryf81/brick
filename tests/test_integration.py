@@ -2526,6 +2526,15 @@ async def test_smyths_toys_built_in(hass: HomeAssistant, no_network):
     f = Fetcher(None, use_impersonation=False)
     f.final_url["smyths_be"] = product
     assert f._landed_on_product("smyths_be", search_url("smyths_be", "11504"), page, "11504") == product
+    # a search that jumps to a page you blocked for this set is no result: other ways may find another link
+    from custom_components.lego_tracker.parsers import url_key
+
+    async def landed(retailer, url, search=False):
+        f.final_url["smyths_be"] = product
+        return 200, page
+    with patch.object(f, "_get", landed):
+        assert await f._discover("smyths_be", "11504") == product
+        assert await f._discover("smyths_be", "11504", skip={url_key("smyths_be", product)}) is None
     payload = '<script id="__NUXT_DATA__">["' + product.replace("https://www.smythstoys.com", "").replace("/", "\\/") + '"]</script>'
     assert find_search_result("smyths_be", payload, "11504") == product
     assert find_search_result("smyths_be", payload.replace("11504", "11505"), "11504") is None
@@ -2829,3 +2838,17 @@ async def test_left_out_set_can_be_shown_anyway(hass: HomeAssistant, entry, no_n
         assert ov["deal_always"] == ["10281"] and "10281" not in ov["deal_blocked"]
         await ws.send_json({"id": 3, "type": "lego_tracker/deal_exception", "set_number": "10281", "show": False})
         assert (await ws.receive_json())["success"] and c.deal_blocked("10281", {}) == "owned"
+
+
+
+async def test_lego_lookup_with_your_own_price_asks_instead_of_overwriting(hass: HomeAssistant, entry, no_network):
+    """Filling in set data reads LEGO.com too: with your own LEGO price that is a choice, not an overwrite."""
+    c = await _setup(hass, entry)
+    await c.add_set("10281", name="Bonsai", rrp=49.99, discover=False)
+    c.store["offers"]["10281"] = {"lego_com": {"url": "https://www.lego.com/nl-be/product/bonsai-tree-10281", "history": []}}
+    c.update_offer("10281", "lego_com", manual_price="45")
+    o = c.store["offers"]["10281"]["lego_com"]
+    with patch.object(c.fetcher, "fetch_offer", AsyncMock(return_value=(Parsed(price=39.99, title="Bonsai", list_price=49.99), None))):
+        await c.lego_lookup("10281", force=True)
+    assert o["manual_price"]["price"] == 45 and o["auto_price"] == 39.99 and o["price_choice"]["price"] == 39.99
+    assert c.compute()["statuses"]["10281"]["best_price"] == 45

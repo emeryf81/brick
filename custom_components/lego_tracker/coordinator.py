@@ -1846,7 +1846,12 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if parsed and parsed.title:
             offer["title"] = parsed.title[:300]
         held = self._lego_hold(num, offer, parsed) if not error else None
-        record_price(offer, held[0] if held else parsed.price if parsed else None, error=error)
+        fetched = held[0] if held else parsed.price if parsed else None
+        if offer.get("manual_price"):                     # your own price wins: only remember what LEGO.com said
+            offer["auto_price"], offer["last_checked"], offer["error"] = fetched, time.time(), error
+            self._price_choice(num, "lego_com", offer, fetched, "server")
+        else:
+            record_price(offer, fetched, error=error)
         if held:
             offer["unavailable"] = "sold_out"
         elif parsed and parsed.price:

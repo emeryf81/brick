@@ -15,7 +15,7 @@ import aiohttp
 from .models import normalize_set_number
 from .i18n import T
 from .shops import domain_of
-from .parsers import Parsed, find_search_result, is_search_url, lego_number, title_check, lego_product_url, parse_brickset_page, parse_page, search_url
+from .parsers import Parsed, find_search_result, is_search_url, lego_number, title_check, lego_product_url, parse_brickset_page, parse_page, search_url, url_key
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -413,6 +413,8 @@ class Fetcher:
             self.discover_error[retailer] = T("search page: HTTP error {status}", status=status)
             return None
         found = find_search_result(retailer, page, set_number, skip) or self._landed_on_product(retailer, url, page, set_number)
+        if found and url_key(retailer, found) in skip:
+            found = None                                   # the search jumped to a page you blocked: look elsewhere
         if found or retailer != "lego_com":
             if not found:
                 self.discover_error[retailer] = T("no matching product found") if set_number in page else \

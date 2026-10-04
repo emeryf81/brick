@@ -578,6 +578,9 @@ class LegoTrackerPanel extends HTMLElement {
     let tk;
     try { tk = await this._hass.callWS({ type: "lego_tracker/ticker", lang: LANG, ...(this._tkSince ? { since: this._tkSince } : {}) }); } catch (e) { return; }
     this._tkSince = tk.now; this.state.ticker = tk;
+    // solved errors wait in a queue until a round has really shown them (the server sends each one once)
+    const q = this._tkFixed || (this._tkFixed = []);
+    for (const f of tk.fixed || []) if (!q.some((x) => x.ts === f.ts && x.set_number === f.set_number && x.shop === f.shop)) q.push(f);
     this.renderTicker();
   }
   /** News you closed ("read"): hidden until a new news file is put online. */
@@ -603,7 +606,7 @@ class LegoTrackerPanel extends HTMLElement {
       }
     }
     // errors solved since the previous ticker: shown this once (gone at the next reload)
-    for (const f of tk.fixed || []) parts.push(`<button class="ti fixed" type="button" data-tset="${esc(f.set_number)}">✅ ${esc(t("Error fixed"))}: <b>${esc(f.set_number)}</b> ${esc((f.name || "").slice(0, 40))}${f.shop ? ` · ${esc(f.shop)}` : ""}</button>`);
+    for (const f of this._tkFixed || []) parts.push(`<button class="ti fixed" type="button" data-tset="${esc(f.set_number)}">✅ ${esc(t("Error fixed"))}: <b>${esc(f.set_number)}</b> ${esc((f.name || "").slice(0, 40))}${f.shop ? ` · ${esc(f.shop)}` : ""}</button>`);
     const cfg = tk.config || {};
     if (cfg.shuffle !== false) for (let i = parts.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [parts[i], parts[j]] = [parts[j], parts[i]]; }   // mixed
     if (!parts.length && (cfg.watch || cfg.deals || cfg.news)) return `<span class="ti muted" data-ph="1">${esc(t("No prices or news yet: they appear here as soon as the first prices come in."))}</span>`;
@@ -628,8 +631,13 @@ class LegoTrackerPanel extends HTMLElement {
     }
     this._tkPlace();
     const tr = el.querySelector(".tk");
-    if (now || !tr.innerHTML || tr.querySelector("[data-ph]")) { tr.innerHTML = html; this._tkPos = 0; this._tkPending = null; } else this._tkPending = html;
+    if (now || !tr.innerHTML || tr.querySelector("[data-ph]")) { this.applyTicker(tr, html); this._tkPos = 0; } else this._tkPending = { html, fixed: (this._tkFixed || []).slice() };
     this.tickerLoop();
+  }
+  /** Put content on the running track; the solved errors in it have been shown and leave the queue. */
+  applyTicker(tr, html, fixed = (this._tkFixed || []).slice()) {
+    tr.innerHTML = html; this._tkPending = null;
+    if (this._tkFixed) this._tkFixed = this._tkFixed.filter((f) => !fixed.includes(f));
   }
   /** Scrolls the ticker at an even speed from a position that survives re-renders, tab switches and popups. */
   tickerLoop() {
@@ -641,11 +649,11 @@ class LegoTrackerPanel extends HTMLElement {
       if (!this.isConnected || !tr) { this._tkRaf = null; return; }
       const dt = last ? Math.min(ts - last, 100) : 0; last = ts;
       const view = tr.parentElement.clientWidth;
-      if (REDUCED) { tr.style.transform = ""; if (this._tkPending) { tr.innerHTML = this._tkPending; this._tkPending = null; } this._tkRaf = requestAnimationFrame(step); return; }
+      if (REDUCED) { tr.style.transform = ""; if (this._tkPending) this.applyTicker(tr, this._tkPending.html, this._tkPending.fixed); this._tkRaf = requestAnimationFrame(step); return; }
       if (!this._tkHold) this._tkPos = (this._tkPos || 0) + dt * SPEED / 1000;
       if (this._tkPos > tr.scrollWidth + view) {         // one round done: start again from the right, with new content
         this._tkPos = 0;
-        if (this._tkPending) { tr.innerHTML = this._tkPending; this._tkPending = null; }
+        if (this._tkPending) this.applyTicker(tr, this._tkPending.html, this._tkPending.fixed);
       }
       tr.style.transform = `translateX(${view - this._tkPos}px)`;
       this._tkRaf = requestAnimationFrame(step);
@@ -661,7 +669,7 @@ class LegoTrackerPanel extends HTMLElement {
       if (view - (this._tkPos || 0) + b.offsetLeft + b.offsetWidth < 0) this._tkPos -= w;   // already passed: keep the rest in place
       b.remove();
     }
-    if (this._tkPending) this._tkPending = this.tickerHtml();
+    if (this._tkPending) this._tkPending = { html: this.tickerHtml(), fixed: (this._tkFixed || []).slice() };
   }
   /** One news item in a popup: plain text (escaped), links only https:// or inside Home Assistant.
    *  Close = read: hidden until a new news file is online. Keep unread = it stays in the ticker with ●. */
