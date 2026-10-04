@@ -622,6 +622,16 @@ class LegoTrackerPanel extends HTMLElement {
   }
 
   // value of one unit, honouring the "value based on" setting
+  /** Your copies of a set together: how many, their value (each by its own condition), what you paid for the
+   * copies with a known price (and their value, for the gain), and their conditions. */
+  own(s) {
+    const c = s.collection || {}, list = c.copies && c.copies.length ? c.copies : null;
+    if (!list) { const n = c.qty || 1, u = this.unitValue(s); return { n, value: u == null ? null : u * n, paid: c.paid ? c.paid * n : null, paidValue: c.paid && u != null ? u * n : null, conds: c.condition ? [c.condition] : [], copies: [] }; }
+    const known = list.filter((x) => x.paid != null);
+    return { n: list.length, value: list.reduce((a, x) => a + (x.value || 0), 0), paid: known.length ? known.reduce((a, x) => a + x.paid, 0) : null,
+             paidValue: known.length ? known.reduce((a, x) => a + (x.value || 0), 0) : null, conds: [...new Set(list.map((x) => x.condition).filter(Boolean))], copies: list };
+  }
+  ownGain(o) { return o.paid && o.paidValue != null ? ((o.paidValue - o.paid) / o.paid) * 100 : null; }
   unitValue(s) {
     const c = s.collection || {};
     return this.state.data && this.state.data.value_source === "import_first" ? (c.current_value ?? s.best_price ?? s.rrp) : (s.best_price ?? c.current_value ?? s.rrp);
@@ -882,12 +892,12 @@ class LegoTrackerPanel extends HTMLElement {
     const trd = s.change_30d == null ? "" : `<span class="trend ${s.change_30d <= 0 ? "up" : "down"}">${s.change_30d <= 0 ? "▼" : "▲"} ${Math.abs(s.change_30d)}%</span>`;
     const stars = s.priority ? `<span class="stars">${"★".repeat(s.priority)}</span>` : "";
     if (mode === "coll") {
-      const c = s.collection || {}, now = this.unitValue(s), g = c.paid && now ? ((now - c.paid) / c.paid) * 100 : null;
-      return `<div class="card" tabindex="0" data-set="${esc(s.set_number)}" style="--i:${i}"><div class="badges">${c.condition ? `<span class="badge grey">${esc(t(c.condition))}</span>` : ""}${s.retiring_soon ? `<span class="badge yellow">⏳</span>` : ""}</div>
+      const c = s.collection || {}, o = this.own(s), now = o.value, g = this.ownGain(o);
+      return `<div class="card" tabindex="0" data-set="${esc(s.set_number)}" style="--i:${i}"><div class="badges">${o.conds.map((x) => `<span class="badge grey">${esc(t(x))}</span>`).join("")}${s.retiring_soon ? `<span class="badge yellow">⏳</span>` : ""}</div>
         <div class="img">${this.img(s)}${this.cornerBtns(s)}</div><div class="n">${esc(s.name || "Set " + s.set_number)}</div>
-        <div class="m">${esc(s.set_number)} · ${esc(s.theme || "?")}${s.year ? ` · ${s.year}` : ""}${c.qty > 1 ? ` · ×${c.qty}` : ""}</div>
+        <div class="m">${esc(s.set_number)} · ${esc(s.theme || "?")}${s.year ? ` · ${s.year}` : ""}${o.n > 1 ? ` · ×${o.n}` : ""}</div>
         <div class="row"><span class="p">${EUR(now)}</span>${g != null ? `<span class="trend ${g >= 0 ? "up" : "down"}">${signPct(Math.round(g))}</span>` : ""}</div>
-        <div class="m">${c.paid ? t("paid {price}", { price: EUR(c.paid) }) : t("purchase price unknown")}${c.location ? ` · 📍 ${esc(c.location)}` : ""}</div></div>`;
+        <div class="m">${o.paid ? t("paid {price}", { price: EUR(o.paid) }) : t("purchase price unknown")}${c.location ? ` · 📍 ${esc(c.location)}` : ""}</div></div>`;
     }
     return `<div class="card" tabindex="0" data-set="${esc(s.set_number)}" style="--i:${i}"><div class="badges">${this.badges(s)}</div>${s.best_price != null ? ring(s.deal_score, 40) : ""}
       <div class="img">${this.img(s)}${this.cornerBtns(s)}</div><div class="n">${esc(s.name || "Set " + s.set_number)}</div>
@@ -1205,7 +1215,11 @@ class LegoTrackerPanel extends HTMLElement {
     const peak = vPts.reduce((a, p) => (p[1] > a[1] ? p : a), vPts[0]), low = vPts.reduce((a, p) => (p[1] < a[1] ? p : a), vPts[0]);
     const f = new Date(from * 1000).toISOString().slice(0, 10), tt = new Date(to * 1000).toISOString().slice(0, 10);
     let bought = 0, spent = 0;
-    for (const x of this.sets) { const c = x.collection; if (x.owned && c && c.added && c.added >= f && c.added <= tt) { bought += c.qty || 1; spent += (c.paid || 0) * (c.qty || 1); } }
+    for (const x of this.sets) {
+      if (!x.owned || !x.collection) continue;
+      const c = x.collection, list = c.copies && c.copies.length ? c.copies : Array.from({ length: c.qty || 1 }, () => c);
+      for (const k of list) if (k.added && k.added >= f && k.added <= tt) { bought += 1; spent += k.paid || 0; }
+    }
     const own = v1 - v0 - (c1 - c0), stat = (l, v, cls = "") => `<div class="stat"><small>${l}</small><b class="${cls}">${v}</b></div>`;
     return `<div class="pstats">${stat(t("Value change"), `${v1 - v0 >= 0 ? "+" : ""}${EUR0(v1 - v0)}`, v1 >= v0 ? "up" : "down")}${stat(t("Value change %"), v0 ? signPct(Math.round(((v1 - v0) / v0) * 1000) / 10) : "–", v1 >= v0 ? "up" : "down")}
       ${stat(t("Growth without purchases"), `${own >= 0 ? "+" : ""}${EUR0(own)}`, own >= 0 ? "up" : "down")}${stat(t("Highest value"), `${EUR0(peak[1])} <span class="muted" style="font-size:11px">${DATE(peak[0])}</span>`)}
@@ -1214,7 +1228,7 @@ class LegoTrackerPanel extends HTMLElement {
   /** Many more numbers about the collection, all worked out from the sets you own. */
   collStats() {
     const own = this.sets.filter((x) => x.owned); if (!own.length) return "";
-    const rows = own.map((x) => { const c = x.collection || {}, q = c.qty || 1, u = this.unitValue(x); return { s: x, c, q, u, v: (u || 0) * q, paid: c.paid ? c.paid * q : null, rrp: x.rrp ? x.rrp * q : null }; });
+    const rows = own.map((x) => { const c = x.collection || {}, o = this.own(x), q = o.n; return { s: x, c, q, u: o.value != null ? o.value / q : null, v: o.value || 0, paid: o.paid, rrp: x.rrp ? x.rrp * q : null }; });
     const sum = (f) => rows.reduce((a, r) => a + (f(r) || 0), 0), copies = sum((r) => r.q), value = sum((r) => r.v);
     const paidRows = rows.filter((r) => r.paid), paid = sum((r) => r.paid), paidValue = paidRows.reduce((a, r) => a + r.v, 0);
     const rrpRows = rows.filter((r) => r.rrp), rrp = sum((r) => r.rrp), rrpValue = rrpRows.reduce((a, r) => a + r.v, 0);
@@ -1262,8 +1276,8 @@ class LegoTrackerPanel extends HTMLElement {
       <div class="fbar" style="justify-content:flex-end">${this.state.cview === "table" ? `<button class="btn sm" data-addtile="own">＋ ${t("Add to my collection")}</button>` : ""}<button class="btn ghost sm" id="expcsv">⬇ ${t("Export CSV")}</button></div><div id="results" data-fn="rColl">${this.rColl()}</div>`;
   }
   collSort(list) {
-    const v = (s) => { const c = s.collection || {}; return (this.unitValue(s) ?? 0) * (c.qty || 1); };
-    const g = (s) => { const c = s.collection || {}, now = this.unitValue(s); return c.paid && now ? (now - c.paid) / c.paid : -1e9; };
+    const v = (s) => this.own(s).value ?? 0;
+    const g = (s) => this.ownGain(this.own(s)) ?? -1e9;
     const key = { value: (s) => -v(s), gain: (s) => -g(s), name: (s) => (s.name || "").toLowerCase(), number: (s) => +s.set_number, year: (s) => -(s.year || 0), score: (s) => -v(s) }[this.state.f.sort] || ((s) => -v(s));
     return [...list].sort((a, b) => { const x = key(a), y = key(b); return x < y ? -1 : x > y ? 1 : 0; });
   }
@@ -1272,8 +1286,8 @@ class LegoTrackerPanel extends HTMLElement {
     if (!list.length) return this.emptyState("🔍", t("Nothing found with these filters."));
     if (this.state.cview === "grid") return this.gridOf(list, "coll", "own");
     const rows = list.map((s) => {
-      const c = s.collection || {}, now = this.unitValue(s), g = c.paid && now ? ((now - c.paid) / c.paid) * 100 : null;
-      return `<tr class="click" data-set="${esc(s.set_number)}"><td>${esc(s.set_number)}</td><td>${esc(s.name || "")}</td><td>${esc(s.theme || "")}</td><td>${s.year || ""}</td><td class="num">${c.qty || 1}</td><td class="num">${EUR(c.paid)}</td><td class="num">${EUR(c.current_value)}</td><td class="num">${s.best_price != null ? EUR(s.best_price) : "–"}</td><td class="num"><b>${EUR(now)}</b></td><td class="num ${g == null ? "" : g >= 0 ? "up" : "down"}">${g == null ? "–" : signPct(Math.round(g))}</td><td>${esc(c.condition ? t(c.condition) : "")}</td><td>${esc(c.location || "")}</td></tr>`;
+      const c = s.collection || {}, o = this.own(s), now = o.value, g = this.ownGain(o);
+      return `<tr class="click" data-set="${esc(s.set_number)}"><td>${esc(s.set_number)}</td><td>${esc(s.name || "")}</td><td>${esc(s.theme || "")}</td><td>${s.year || ""}</td><td class="num">${o.n}</td><td class="num">${EUR(o.paid)}</td><td class="num">${EUR(c.current_value)}</td><td class="num">${s.best_price != null ? EUR(s.best_price) : "–"}</td><td class="num"><b>${EUR(now)}</b></td><td class="num ${g == null ? "" : g >= 0 ? "up" : "down"}">${g == null ? "–" : signPct(Math.round(g))}</td><td>${esc(o.conds.map((x) => t(x)).join(", "))}</td><td>${esc([...new Set((o.copies.length ? o.copies : [c]).map((x) => x.location).filter(Boolean))].join(", "))}</td></tr>`;
     }).join("");
     return `<div class="panel tscroll"><table class="tbl"><tr><th>#</th><th>${t("Name")}</th><th>${t("Theme")}</th><th>${t("Year")}</th><th class="num">${t("Qty")}</th><th class="num">${t("Paid")}</th><th class="num" title="${t("Current value from your import")}">${t("Value (import)")}</th><th class="num" title="${t("Cheapest shop price now")}">${t("Shop now")}</th><th class="num" title="${t("Used for the collection value")}">${t("Value")}</th><th class="num">+/−</th><th>${t("Condition")}</th><th>${t("Location")}</th></tr>${rows}</table>
       <p class="muted" style="font-size:12px;margin-top:8px">${this.state.data.value_source === "import_first" ? t("“Value” uses the imported value first, else the shop price") : t("“Value” uses the lowest shop price first, else the imported value")} (${t("configurable under Manage → Settings")}). ${t("Import your CSV again to refresh the values.")}</p></div>`;
@@ -2561,6 +2575,15 @@ class LegoTrackerPanel extends HTMLElement {
   }
   // ---------------------------------------------------------------- set dialog
   closeDialog(instant = false) { this._dlgGen = (this._dlgGen || 0) + 1; clearInterval(this._shopTimer); const d = this.shadowRoot.getElementById("dlg"); if (!d || !d.open) return; if (instant || REDUCED) { d.close(); return; } d.classList.add("closing"); setTimeout(() => { d.classList.remove("closing"); d.close(); }, 170); }
+  /** One copy in the set window's collection table. */
+  copyRowHtml(x, i) {
+    const today = new Date().toISOString().slice(0, 10);
+    return `<tr><td class="cp_i muted">${i + 1}</td><td><input data-ck="paid" type="text" inputmode="decimal" autocomplete="off" data-money style="width:80px" value="${x.paid ?? ""}"></td>
+      <td><input data-ck="added" type="date" max="${today}" value="${esc(x.added || "")}"></td>
+      <td><select data-ck="condition"><option value="">–</option>${CONDITIONS.map((c) => `<option value="${c}" ${x.condition === c ? "selected" : ""}>${t(c)}</option>`).join("")}</select></td>
+      <td><input data-ck="location" maxlength="80" style="width:110px" value="${esc(x.location || "")}"></td><td><input data-ck="notes" maxlength="200" style="width:130px" value="${esc(x.notes || "")}"></td>
+      <td class="num">${x.value != null ? EUR(x.value) : "–"}</td><td><button class="btn ghost sm cp_rm" type="button" title="${esc(t("Remove this copy"))}">✕</button></td></tr>`;
+  }
   async openSet(num, focusShop = null) {
     const gen = (this._dlgGen = (this._dlgGen || 0) + 1);
     this._dlgNum = num;
@@ -2603,8 +2626,12 @@ class LegoTrackerPanel extends HTMLElement {
           <label>${t("RRP")} (€)${src("rrp")}<input name="rrp" type="text" inputmode="decimal" autocomplete="off" data-money value="${s.rrp ?? ""}"></label><label>${t("Pieces")}<input name="pieces" type="number" min="0" value="${s.pieces ?? ""}"></label><label>${t("Year")}<input name="year" type="number" min="1949" max="2100" value="${s.year ?? ""}"></label>
           <label style="grid-column:span 2">${t("Image (https URL)")}${src("image")}<input name="image" value="${esc(s.image || "")}" placeholder="https://…"></label></div></fieldset>
         <fieldset><legend>📦 ${t("Collection")}</legend><div class="form"><label class="chk"><input name="owned" type="checkbox" ${s.owned ? "checked" : ""}> ${t("I own this set")}</label></div>
-          <div class="form" id="collf" style="${s.owned ? "" : "opacity:.45;pointer-events:none"}"><label>${t("Quantity")}<input name="qty" type="number" min="1" value="${c.qty ?? 1}"></label><label>${t("Paid (€ each)")}<input name="paid" type="text" inputmode="decimal" autocomplete="off" data-money value="${c.paid ?? ""}"></label>
-          <label>${t("Purchase date")}<input name="added" type="date" max="${new Date().toISOString().slice(0, 10)}" value="${esc(c.added || "")}"></label><label>${t("Condition")}<select name="condition"><option value="">–</option>${CONDITIONS.map((x) => `<option value="${x}" ${c.condition === x ? "selected" : ""}>${t(x)}</option>`).join("")}</select></label><label>${t("Current value (€, import)")}<input name="current_value" type="text" inputmode="decimal" autocomplete="off" data-money value="${c.current_value ?? ""}"></label><label>${t("Location")}<input name="location" value="${esc(c.location || "")}"></label></div></fieldset>
+          <div id="collf" style="${s.owned ? "" : "opacity:.45;pointer-events:none"}">
+          <p class="muted" style="font-size:12px;margin:0 0 6px">${t("Every copy has its own price paid, purchase date, condition and location; its value follows its condition (sealed: the new value, opened or built: the used market value).")}</p>
+          <div class="tscroll"><table class="tbl copies"><tr><th>#</th><th>${t("Paid (€)")}</th><th>${t("Purchase date")}</th><th>${t("Condition")}</th><th>${t("Location")}</th><th>${t("Notes")}</th><th class="num">${t("Value")}</th><th></th></tr>
+          <tbody id="cp_rows">${(c.copies && c.copies.length ? c.copies : [{}]).map((x, i) => this.copyRowHtml(x, i)).join("")}</tbody></table></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px"><button class="btn ghost sm" type="button" id="cp_add">＋ ${t("Add a copy")}</button><span class="muted" style="font-size:12px" id="cp_sum"></span></div>
+          <div class="form" style="margin-top:8px"><label>${t("Current value (€, import)")}<input name="current_value" type="text" inputmode="decimal" autocomplete="off" data-money value="${c.current_value ?? ""}"></label></div></div></fieldset>
         <datalist id="dthemes">${this.state.data.themes.map((th) => `<option value="${esc(th)}">`).join("")}</datalist>
         <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="save" type="submit">${t("Save")}</button><button class="btn ghost" id="find" type="button" ${this.mAttr("find")}>🔎 ${t("Find shops")}</button><button class="btn ghost" id="rf" type="button" ${this.mAttr("prices")}>↻ ${t("Fetch prices")}</button><button class="btn ghost" id="enr" type="button" title="${t("Get the image, RRP and name from LEGO.com, then theme, year and pieces from Brickset / Rebrickable")}">🖼 ${t("Set data from LEGO.com")}</button><span class="hsp" style="flex:1"></span><button class="btn danger" id="rm" type="button">${t("Delete")}</button></div></form></div>`;
     const q = (id) => dlg.querySelector("#" + id);
@@ -2622,14 +2649,43 @@ class LegoTrackerPanel extends HTMLElement {
     const ef = q("ef");
     const snapshot = () => { const fd = new FormData(ef), o = {}; for (const [k, v] of fd.entries()) o[k] = ef.querySelector(`[name="${k}"][data-money]`) ? money(v) : v.toString().trim(); o.retiring = ef.retiring.checked; o.owned = ef.owned.checked; return o; };
     const orig = snapshot();
+    // ---- copies: one row per copy (price paid, purchase date, condition, location, notes)
+    const cpRows = q("cp_rows");
+    const readCopies = () => [...cpRows.querySelectorAll("tr")].map((tr) => {
+      const g = (k) => (tr.querySelector(`[data-ck="${k}"]`) || {}).value?.trim?.() || "", o = {};
+      const paid = g("paid"); if (paid) o.paid = money(paid);
+      for (const k of ["added", "condition", "location", "notes"]) if (g(k)) o[k] = g(k);
+      return o;
+    });
+    const origCopies = JSON.stringify(readCopies());
+    const cpSum = () => {
+      const list = readCopies(), paid = list.filter((x) => x.paid != null && !isNaN(x.paid)).reduce((a, x) => a + +x.paid, 0);
+      q("cp_sum").textContent = t("{n} copies", { n: list.length }) + (paid ? " · " + t("paid {price} in total", { price: EUR(paid) }) : "");
+      cpRows.querySelectorAll("tr").forEach((tr, i) => { tr.querySelector(".cp_i").textContent = i + 1; });
+    };
+    const bindCopyRows = () => cpRows.querySelectorAll(".cp_rm").forEach((b) => b.onclick = () => {
+      if (cpRows.querySelectorAll("tr").length <= 1) return this.toast(t("A set in your collection has at least one copy. Untick “I own this set” to remove it."), "err");
+      b.closest("tr").remove(); cpSum();
+    });
+    q("cp_add").onclick = () => {
+      const last = readCopies().slice(-1)[0] || {};
+      cpRows.insertAdjacentHTML("beforeend", this.copyRowHtml({ condition: last.condition, location: last.location }, cpRows.children.length));
+      bindCopyRows(); cpSum();
+    };
+    cpRows.addEventListener("input", cpSum); bindCopyRows(); cpSum();
     ef.owned.addEventListener("change", () => { const cf = q("collf"); cf.style.opacity = ef.owned.checked ? "" : ".45"; cf.style.pointerEvents = ef.owned.checked ? "" : "none"; });
     ef.addEventListener("submit", (e) => {
       e.preventDefault();
       const now = snapshot(), f = {};
       for (const k of Object.keys(now)) if (now[k] !== orig[k]) f[k] = k === "priority" ? +now[k] : now[k];
-      if (now.owned && !s.owned) for (const k of ["qty", "paid", "added", "condition", "location", "current_value"]) if (now[k] !== "") f[k] = now[k];
+      if (now.owned && !s.owned && now.current_value !== "") f.current_value = now.current_value;
+      const cps = readCopies();
+      if (now.owned && (!s.owned || JSON.stringify(cps) !== origCopies)) {
+        if (cps.some((x) => x.paid != null && !(x.paid >= 0))) return this.toast(t("{field}: invalid number", { field: t("Paid (€)") }), "err");
+        if (cps.some((x) => x.paid > 2000) && !confirm(t("A price paid above € 2000: that is very high for a LEGO set. Did the decimal comma get lost? Save anyway?"))) return;
+        f.copies = cps;
+      }
       if (!Object.keys(f).length && !changes().length) { this.closeDialog(); return; }
-      if (f.qty !== undefined && f.qty !== "" && !(+f.qty >= 1)) return this.toast(t("Quantity must be at least 1"), "err");
       if (s.owned && !now.owned && !confirm(t("Remove this set from your collection? (it stays on your watchlist)"))) return;
       if (changes().length && !confirm(t("You also changed shop links or prices. Save those too?"))) return;
       this.busy(q("save"), t("Saving…"), async () => {

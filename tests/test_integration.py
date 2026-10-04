@@ -2590,3 +2590,54 @@ async def test_own_shop_links_move_to_the_built_in_shop(hass: HomeAssistant, ent
     assert c.move_shop("c_smyths", "smyths_be") == 1
     assert c.store["offers"]["11504"] == {"smyths_be": {"url": "https://www.smythstoys.com/be/nl-be/p/253664", "last_price": 37.99}}
     assert c.store["offers"]["10281"]["smyths_be"]["url"].endswith("/y") and "c_smyths" in c.store["offers"]["10281"]
+
+
+async def test_every_copy_has_its_own_price_date_condition_and_value(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    """Two copies of a set: each with its own price paid, date, condition and location; a sealed copy is worth
+    the new value, an opened one the used market value; the totals, analytics, CSV export and import follow."""
+    from custom_components.lego_tracker.csv_import import apply_import
+    from custom_components.lego_tracker.i18n import LocalizedError
+    from custom_components.lego_tracker.models import collection_rows, collection_summary, copies
+
+    c = await _setup(hass, entry)
+    await c.add_set("10281", name="Bonsai", rrp=50, owned={"qty": 2, "paid": 40, "condition": "Sealed"}, discover=False)
+    e = c.store["collection"]["10281"]
+    assert len(copies(e)) == 2 and copies(e)[1]["paid"] == 40          # old entries: equal copies
+    c.store["sets"]["10281"]["market"] = {"market_new": 60.0, "market_used": 35.0}
+    c.update_set("10281", {"copies": [
+        {"paid": 39.99, "added": "2024-05-01", "condition": "Sealed", "location": "Attic"},
+        {"paid": "25,50", "added": "2025-01-10", "condition": "Built", "notes": "living room"},
+        {"condition": "Opened"},
+    ]})
+    e = c.store["collection"]["10281"]
+    assert e["qty"] == 3 and e["paid"] == 32.75 and e["added"] == "2024-05-01" and e["condition"] == "Sealed"
+    assert e["items"][1] == {"paid": 25.5, "added": "2025-01-10", "condition": "Built", "notes": "living room"}
+    st = c.compute()["statuses"]
+    summ = collection_summary(c.store, st)
+    assert summ["sets"] == 3 and summ["value"] == 50 + 35 + 35 and summ["cost"] == 65.49     # sealed: RRP (no shop), built/opened: used
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/set", "set_number": "10281"})
+    card = (await ws.receive_json())["result"]
+    assert [x["value"] for x in card["collection"]["copies"]] == [50.0, 35.0, 35.0]
+    rows = [r for r in collection_rows(c.store, st) if r["Number"] == "10281"]
+    assert [(r["Qty"], r["Paid"], r["Condition"]) for r in rows] == [(1, 39.99, "Sealed"), (1, 25.5, "Built"), (1, "", "Opened")]
+
+    # a new quantity on the set adds or removes copies at the end; set-level fields go to every copy
+    c.update_set("10281", {"qty": 4})
+    assert len(e["items"]) == 4 and e["items"][3] == {"condition": "Opened"}
+    c.update_set("10281", {"qty": 2, "location": "Shelf"})
+    assert len(e["items"]) == 2 and all(x["location"] == "Shelf" for x in e["items"])
+    for bad in ([], [{"paid": -1}], [{"added": "2999-01-01"}], [{"condition": "Mint"}], ["x"]):
+        with pytest.raises(LocalizedError):
+            c.update_set("10281", {"copies": bad})
+
+    # import: one line per copy keeps them apart; the same quantity again on one line keeps your own copies
+    rows = [{"set_number": "42143", "qty": 1, "paid": 300.0, "condition": "Sealed"},
+            {"set_number": "42143", "qty": 1, "paid": 350.0, "condition": "Built", "added": "2023-02-02"}]
+    apply_import(c.store, rows)
+    f = c.store["collection"]["42143"]
+    assert [x["paid"] for x in f["items"]] == [300.0, 350.0] and f["qty"] == 2 and f["paid"] == 325.0
+    apply_import(c.store, [{"set_number": "42143", "qty": 2, "paid": 1.0, "current_value": 400.0}])
+    assert [x["paid"] for x in f["items"]] == [300.0, 350.0] and f["current_value"] == 400.0
+    apply_import(c.store, [{"set_number": "42143", "qty": 3, "paid": 320.0}])
+    assert "items" not in f and f["qty"] == 3 and f["paid"] == 320.0

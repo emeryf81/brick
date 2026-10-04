@@ -30,7 +30,7 @@ from .const import (
 )
 from .models import (
     add_activity, add_event, clean_history, collection_analytics, link_check, collection_rows, collection_series, is_suspicious_price, collection_summary, COLLECTION_COLUMNS, rows_to_csv, validate_backup, wishlist_summary, is_watched, compute_set_status, new_store, normalize_set_number,
-    offer_price, query_activity, record_price, today_iso,
+    offer_price, query_activity, record_price, today_iso, COPY_FIELDS, copies, copy_value, sync_copies,
 )
 from .i18n import DEFAULT_LANGUAGE, LANGUAGES, LocalizedError, T, resolve, set_language
 from .notifications import Notifier, default_rules
@@ -1009,8 +1009,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             s["exit_date"], s["exit_date_source"] = when, name
         entry = self.store["collection"].get(num)
         if entry is not None:
-            opened = entry.get("condition") in ("Opened", "Built", "Incomplete")
-            value = (d.get("market_used") if opened else None) or d.get("market_new")
+            # the new value; opened, built or incomplete copies take the used value themselves (models.copy_value)
+            value = d.get("market_new") or d.get("market_used")
             if value:
                 hist = list(entry.get("value_history") or [])
                 if not hist or abs(hist[-1][1] - value) > 0.005:
@@ -2644,10 +2644,54 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise LocalizedError("quantity must be at least 1")
         return num
 
+    def _clean_copies(self, items: Any) -> list[dict[str, Any]]:
+        """Validate the copies of a set (1–999), each with its own price paid, purchase date, condition,
+        location and notes. Raises LocalizedError."""
+        from .csv_import import CONDITIONS as CONDITION_NAMES
+
+        if not isinstance(items, list) or not 1 <= len(items) <= 999:
+            raise LocalizedError("A set in your collection has between 1 and 999 copies.")
+        allowed = set(CONDITION_NAMES.values())
+        out = []
+        for i, raw in enumerate(items, 1):
+            if not isinstance(raw, dict):
+                raise LocalizedError("Copy {n}: invalid data", n=i)
+            c: dict[str, Any] = {}
+            for key, typ in (("paid", float), ("added", str), ("location", str), ("notes", str)):
+                v = raw.get(key)
+                if key == "paid" and isinstance(v, str):
+                    v = v.strip().replace("€", "").replace(",", ".")      # 25,50 as well as 25.50
+                if v not in (None, ""):
+                    try:
+                        c[key] = self._coerce(key, typ, v)
+                    except LocalizedError as err:
+                        raise LocalizedError("Copy {n}: {error}", n=i, error=str(err)) from err
+            if (cond := str(raw.get("condition") or "").strip()):
+                if cond not in allowed:
+                    raise LocalizedError("Copy {n}: unknown condition {value}", n=i, value=cond)
+                c["condition"] = cond
+            for key in ("location", "notes"):
+                if key in c:
+                    c[key] = c[key][:80 if key == "location" else 200]
+                    if not c[key]:
+                        del c[key]
+            out.append(c)
+        return out
+
     def update_set(self, set_number: str, fields: dict[str, Any]) -> None:
         num = normalize_set_number(set_number)
         s = self.store["sets"][num]
         refill = False
+        if "copies" in fields:                         # every copy with its own price, date, condition, ...
+            items = self._clean_copies(fields["copies"])
+            entry = self.store["collection"].setdefault(num, {"qty": 1})
+            entry["items"] = items
+            sync_copies(entry)
+            self.log("info", "user", T("copies edited: {n}", n=len(items)), set_number=num, source="panel")
+            fields = {k: v for k, v in fields.items() if k not in ("copies", "owned", *self.COLL_FIELDS) or k == "current_value"}
+            if not fields:
+                self.push_update()
+                return
         clean_set: dict[str, Any] = {}
         clean_coll: dict[str, Any] = {}
         for key, value in fields.items():
@@ -2688,7 +2732,21 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if fields.get("owned") is False:
             self.store["collection"].pop(num, None)
         elif clean_coll or fields.get("owned"):
-            self.store["collection"].setdefault(num, {"qty": 1}).update(clean_coll)
+            entry = self.store["collection"].setdefault(num, {"qty": 1})
+            if entry.get("items"):
+                # the set-level fields apply to every copy; a new quantity adds or removes copies at the end
+                items = entry["items"]
+                for k in COPY_FIELDS:
+                    if k in clean_coll:
+                        for c in items:
+                            c[k] = clean_coll[k]
+                if (q := clean_coll.get("qty")) and q != len(items):
+                    last = {k: v for k, v in items[-1].items() if k in ("condition", "location")}
+                    entry["items"] = items[:q] + [dict(last) for _ in range(q - len(items))]
+                entry.update({k: v for k, v in clean_coll.items() if k not in COPY_FIELDS and k != "qty"})
+                sync_copies(entry)
+            else:
+                entry.update(clean_coll)
         self.push_update()
 
     async def _refill(self, num: str) -> None:

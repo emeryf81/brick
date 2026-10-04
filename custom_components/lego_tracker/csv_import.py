@@ -241,9 +241,14 @@ def apply_import(store: dict[str, Any], rows: list[dict[str, Any]], replace: boo
     old_hist = {n: e.get("value_history") for n, e in store["collection"].items() if e.get("value_history")}
     if replace:
         store["collection"] = {}
+    from .models import COPY_FIELDS, sync_copies
+
     added = updated = 0
     merged: dict[str, dict[str, Any]] = {}
-    for r in rows:  # same set on several lines = several copies
+    lines: dict[str, list[dict[str, Any]]] = {}       # every copy as it was on its own line
+    for r in rows:  # same set on several lines = several copies, each with its own price, date, condition, ...
+        one = {k: r[k] for k in COPY_FIELDS if r.get(k) not in (None, "")}
+        lines.setdefault(r["set_number"], []).extend(dict(one) for _ in range(max(1, int(r.get("qty", 1) or 1))))
         m = merged.get(r["set_number"])
         if m is None:
             merged[r["set_number"]] = dict(r)
@@ -270,10 +275,20 @@ def apply_import(store: dict[str, Any], rows: list[dict[str, Any]], replace: boo
             if not hist or abs(hist[-1][1] - new["current_value"]) > 0.005:
                 hist.append([now or time.time(), new["current_value"]])
             new["value_history"] = hist[-500:]
+        copies = lines.get(num, [])
+        if len({tuple(sorted(c.items())) for c in copies}) > 1:
+            new["items"] = copies                      # copies that differ: each its own
+        elif entry is not None and entry.get("items"):
+            if len(entry["items"]) != len(copies) or len(copies) == 1:
+                entry.pop("items")                     # another quantity or one copy: the line's fields count again
+            else:
+                new = {k: v for k, v in new.items() if k not in COPY_FIELDS and k != "qty"}   # keep your own copies
         if entry is None:
             store["collection"][num] = new
+            sync_copies(new)
             added += 1
         else:
             entry.update(new)
+            sync_copies(entry)
             updated += 1
     return {"added": added, "updated": updated}

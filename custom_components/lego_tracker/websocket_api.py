@@ -17,7 +17,7 @@ from .const import API_LEVEL, CONF_DEV_FULL_REFRESH, DOMAIN, PANEL_URL, RETAILER
 from .csv_import import analyze_csv
 from .themes import THEMES as LEGO_THEMES
 from .i18n import tr
-from .models import combined_history, normalize_set_number, offer_price
+from .models import combined_history, copies, copy_value, normalize_set_number, offer_price
 
 
 def _languages() -> dict[str, str]:
@@ -62,7 +62,9 @@ def _card(coord, num: str, with_history: bool = False) -> dict[str, Any]:
         **s, **st,
         "watched": coord.is_watched(num),
         "owned": coll is not None,
-        "collection": coll,
+        "collection": coll and {**coll, "copies": [
+            {**c, "value": round(copy_value(c, coll, st, s, coord.store.get("value_source") == "import_first")[0], 2)}
+            for c in copies(coll)]},
         "spark": [p for _, p in series][-60:],
         "offers": {
             rid: {"label": RETAILERS[rid][0], "url": o.get("url"), "price": offer_price(o), "auto_price": o.get("auto_price") if o.get("manual_price") else None,

@@ -314,7 +314,8 @@ def test_analyze_fatal_cases():
 def test_paid_average_ignores_missing_prices():
     store = models.new_store()
     csv_import.apply_import(store, [{"set_number": "1", "qty": 1, "paid": 40.0}, {"set_number": "1", "qty": 1}])
-    assert store["collection"]["1"] == {"qty": 2, "paid": 40.0}
+    # two lines = two copies, each its own price; the set-level average only counts the known price
+    assert store["collection"]["1"] == {"qty": 2, "paid": 40.0, "items": [{"paid": 40.0}, {}]}
 
 
 def test_csv_export_neutralises_formulas():
