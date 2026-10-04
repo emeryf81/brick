@@ -262,7 +262,7 @@ def parse_kruidvat(page: str) -> Parsed:
 LEGO_RETIRING_RE = re.compile(r'"(?:availabilityStatus|availability|productStatus|stockStatus)"\s*:\s*"[^"]*RETIRING[^"]*"', re.I)
 LEGO_GONE_RE = re.compile(r'"(?:availabilityStatus|availability|productStatus)"\s*:\s*"[^"]*(?:RETIRED|Discontinued)[^"]*"', re.I)
 LEGO_SOLD_OUT_RE = re.compile(r'"(?:availabilityStatus|availability|productStatus|stockStatus)"\s*:\s*"[^"]*'
-                              r'(?:SOLD_?OUT|OUT_?OF_?STOCK|OutOfStock|SoldOut)[^"]*"', re.I)
+                              r'(?:SOLD_?OUT|OUT_?OF_?STOCK|OutOfStock|SoldOut|TEMPORARILY_?(?:UNAVAILABLE|OUT))[^"]*"', re.I)
 LEGO_CENTS_RE = {k: re.compile(rf'"{k}"\s*:\s*\{{[^{{}}]*?"centAmount"\s*:\s*(\d+)') for k in ("price", "listPrice", "originalPrice")}
 
 
@@ -476,6 +476,25 @@ def title_check(title: str | None, set_number: str) -> tuple[str | None, str]:
     return "ok", T("title contains the set number")
 
 
+def wrong_product(title: str | None, set_number: str) -> str | None:
+    """Why a page is clearly another product (other brand, an accessory, another set's number and not
+    this one), or None. Only these reasons make a link go away by itself; anything else is a doubt."""
+    if not title:
+        return None
+    t = htmllib.unescape(title)
+    if (m := KNOCKOFF_RE.search(t)):
+        return T("other brand: {brand}", brand=m.group(0))
+    if (word := accessory_word(t)):
+        return T("looks like an accessory ({word})", word=word)
+    if not re.search(rf"(?<!\d){re.escape(set_number)}(?!\d)", t) and re.search(r"lego", t, re.I):
+        pieces = r"\s*(?:-?\s*(?:pcs|pc|pieces|piece|stukjes|stuks|stenen|delig|onderdelen|teile|teilig|pièces|piezas|pezzi|elements?))\b"
+        other = [n for n in re.findall(rf"(?<![\d.,€$])\d{{4,6}}(?![\d.,%])(?!{pieces})", t, re.I)
+                 if n != set_number and not 1900 < int(n) < 2100]
+        if other:
+            return T("another set ({number})", number=other[0])
+    return None
+
+
 def is_search_url(url: str | None) -> bool:
     """A shop's search results page (not a product page)."""
     if not url or not url.startswith("http"):
@@ -514,28 +533,32 @@ def _amazon_results(page: str) -> list[tuple[str, str]]:
     return out
 
 
-def find_search_result(retailer: str, page: str, set_number: str) -> str | None:
-    """First search hit whose *title* passes title_check (set number, LEGO, no accessory/knock-off)."""
+def find_search_result(retailer: str, page: str, set_number: str, skip: set[str] | frozenset[str] = frozenset()) -> str | None:
+    """First search hit whose *title* passes title_check (set number, LEGO, no accessory/knock-off).
+    skip: url_keys of links you blocked for this set; the next good hit is taken instead."""
+    ok = lambda u: url_key(retailer, u) not in skip  # noqa: E731
     if retailer in AMAZON_DOMAINS:
         for asin, title in _amazon_results(page):
-            if title_check(title, set_number)[0] == "ok":
+            if title_check(title, set_number)[0] == "ok" and ok(amazon_url(retailer, asin)):
                 return amazon_url(retailer, asin)
     elif retailer == "bol":
         for href in dict.fromkeys(re.findall(r'href="(/nl/nl/p/[^"]+)"', page)):
             url = "https://www.bol.com" + href.split("?")[0]
-            if title_check(f"lego {slug_title(url) or ''}", set_number)[0] == "ok":
+            if title_check(f"lego {slug_title(url) or ''}", set_number)[0] == "ok" and ok(url):
                 return url
     elif retailer == "kruidvat_be":
         for href in dict.fromkeys(re.findall(r'href="(/nl/[^"]*?/p/\d+[^"]*)"', page)):
             url = "https://www.kruidvat.be" + href.split("?")[0]
-            if title_check(slug_title(url), set_number)[0] == "ok":
+            if title_check(slug_title(url), set_number)[0] == "ok" and ok(url):
                 return url
     elif retailer == "lego_com":
         for href in dict.fromkeys(re.findall(r'href="((?:https://www\.lego\.com)?/[a-z]{2}-[a-z]{2}/product/[^"?#]+)"', page)):
-            if re.search(rf"(?<!\d){re.escape(set_number)}/?$", href):
-                return href if href.startswith("http") else "https://www.lego.com" + href
+            url = href if href.startswith("http") else "https://www.lego.com" + href
+            if re.search(rf"(?<!\d){re.escape(set_number)}/?$", href) and ok(url):
+                return url
     elif retailer in GENERIC_SHOPS:
-        return _generic_result(page, GENERIC_SHOPS[retailer]["domain"], set_number)
+        found = _generic_result(page, GENERIC_SHOPS[retailer]["domain"], set_number)
+        return found if found and ok(found) else None
     return None
 
 

@@ -371,11 +371,13 @@ class Fetcher:
         self._trace(retailer, "sitemap", url, t0, status, len(body), None, error)
         return status, bytes(body), error
 
-    async def discover(self, retailer: str, set_number: str, force: bool = False, url: str | None = None) -> str | None:
-        """Search the shop for the set; every attempt is kept in the shop's trace (Shops → click a shop)."""
+    async def discover(self, retailer: str, set_number: str, force: bool = False, url: str | None = None,
+                       skip: set[str] | frozenset[str] = frozenset()) -> str | None:
+        """Search the shop for the set; every attempt is kept in the shop's trace (Shops → click a shop).
+        skip: url_keys of links blocked for this set (the next good search hit is taken)."""
         t0 = time.time()
         self._search_meta[retailer] = (None, 0)
-        found = await self._discover(retailer, set_number, force, url)
+        found = await self._discover(retailer, set_number, force, url, skip)
         err = self.discover_error.get(retailer)
         if not (err or "").startswith("paused"):
             status, size = self._search_meta.get(retailer, (None, 0))
@@ -383,7 +385,8 @@ class Fetcher:
                         found, err, set_number)
         return found
 
-    async def _discover(self, retailer: str, set_number: str, force: bool = False, url: str | None = None) -> str | None:
+    async def _discover(self, retailer: str, set_number: str, force: bool = False, url: str | None = None,
+                        skip: set[str] | frozenset[str] = frozenset()) -> str | None:
         """Search the shop for the set (url: a search page to use instead of the shop's search URL).
         On failure the reason is kept in self.discover_error[retailer] (blocked, HTTP error, results
         loaded by JavaScript, or really nothing matching), so the panel can say what happened."""
@@ -409,7 +412,7 @@ class Fetcher:
         if status >= 400:
             self.discover_error[retailer] = T("search page: HTTP error {status}", status=status)
             return None
-        found = find_search_result(retailer, page, set_number) or self._landed_on_product(retailer, url, page, set_number)
+        found = find_search_result(retailer, page, set_number, skip) or self._landed_on_product(retailer, url, page, set_number)
         if found or retailer != "lego_com":
             if not found:
                 self.discover_error[retailer] = T("no matching product found") if set_number in page else \

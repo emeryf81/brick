@@ -6,7 +6,7 @@ STORAGE_KEY = f"{DOMAIN}.data"
 STORAGE_VERSION = 1
 
 PANEL_URL = "lego-tracker"
-API_LEVEL = 6          # raise together with API_LEVEL in the panel when the panel needs new server commands
+API_LEVEL = 7          # raise together with API_LEVEL in the panel when the panel needs new server commands
 PANEL_ELEMENT = "lego-tracker-panel"
 STATIC_URL = f"/{DOMAIN}_static"
 
@@ -32,6 +32,7 @@ CONF_DEAL_FILTER = "deal_filter"           # Deals → Settings: themes switched
 DEAL_FILTER_DEFAULT = {"themes_off": [], "min_price": None, "max_price": None, "min_discount": None,
                        "min_pieces": None, "max_pieces": None, "skip_owned": False, "skip_retired": False}
 CONF_TICKER = "ticker"                      # bottom ticker: {"watch": bool, "deals": bool, "news": bool, "max_*": int}
+TICKER_RELOAD = 600                        # the ticker's content (deals, watchlist, news, solved errors) is reloaded every 10 minutes
 TICKER_GOOD_SCORE = 45                     # a watched set shows in the ticker from this deal score (🔥 good price)
 TICKER_DEFAULT = {"watch": True, "deals": True, "news": True, "max_watch": 3, "max_deals": 3, "max_news": 3, "shuffle": True}
 CONF_COMPARE_OLD = "brickwatch"             # name of that option before 0.9.10 (still read once)

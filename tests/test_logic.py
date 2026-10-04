@@ -581,3 +581,15 @@ def test_export_safety_apostrophe_is_removed_on_import():
     text = models.rows_to_csv(rows, ["Number", "Name", "Location", "Notes"])
     item = csv_import.analyze_csv(text)["rows"][0]
     assert item["name"] == "'=Bonsai" and item["location"] == "=A1" and item["notes"] == "'t Huis"
+
+
+def test_wrong_product_only_for_clearly_other_products():
+    """Only another brand, an accessory or another set's number make a link go away by itself."""
+    wp = parsers.wrong_product
+    assert wp("LEGO Icons 10281 Bonsai", "10281") is None
+    assert "75192" in wp("LEGO Star Wars 75192 Millennium Falcon", "10281")
+    assert wp("LEGO Bonsai boompje 1200 stukjes", "10281") is None             # pieces, not a set number
+    assert wp("LEGO Bonsai 878-delig (2021)", "10281") is None
+    assert wp("LEGO Architecture New York", "21028") is None                   # number missing: only a doubt
+    assert wp("Led-verlichting voor LEGO 21028", "21028")                         # accessory
+    assert wp(None, "10281") is None

@@ -9,7 +9,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.lego_tracker.const import DOMAIN, MAX_HISTORY
+from custom_components.lego_tracker.const import DEAL_FILTER_DEFAULT, DOMAIN, MAX_HISTORY
 from custom_components.lego_tracker.parsers import Parsed
 
 CSV = "Number;Name;Theme;Qty;Paid;Value\n10281-1;Bonsai;Botanicals;1;40;50\n42143;Ferrari;Technic;1;350;400\n"
@@ -331,16 +331,27 @@ async def test_link_check_confirm_remove_and_block(hass: HomeAssistant, entry, h
     assert res["suspect"] == 1
     offer = c.store["offers"]["21028"]["amazon_nl"]
     assert offer["link_status"] == "suspect" and "wrong product" in offer["link_reason"]
+    # clearly another product (an accessory): only this link is blocked and the shop is searched again
     no_network.return_value = (Parsed(price=19.99, title="Led-verlichting voor LEGO 21028"), None)
+    with patch("custom_components.lego_tracker.client.Fetcher.discover",
+               AsyncMock(side_effect=lambda r, n, force=False, url=None, skip=frozenset(): None)) as disc:
+        await hass.services.async_call(DOMAIN, "refresh", {"set_number": "21028"}, blocking=True, return_response=True)
+        await hass.async_block_till_done(wait_background_tasks=True)
+    assert "amazon_nl" not in c.store["offers"]["21028"] and "b0ledledle" in [k.lower() for k in c.store["rejected"]["21028"]]
+    assert any(a.args[0] == "amazon_nl" and a.kwargs["skip"] for a in disc.call_args_list)       # searched again, skipping it
+    assert any("wrong product" in e["message"] for e in c.store["activity"])
+    assert c.compute()["statuses"]["21028"]["best_price"] is None
+    # a doubt (number not in the title) stays: confirm overrides, remove blocks rediscovery of the same page
+    c.store["offers"]["21028"]["amazon_nl"] = {"url": "https://www.amazon.nl/dp/B0DOUBTDOU", "history": []}
+    no_network.return_value = (Parsed(price=45.0, title="LEGO Architecture New York"), None)
     await hass.services.async_call(DOMAIN, "refresh", {"set_number": "21028"}, blocking=True, return_response=True)
-    assert c.compute()["statuses"]["21028"]["best_price"] is None        # suspect link never counts
-    # confirm overrides, remove blocks rediscovery of the same page
+    assert c.store["offers"]["21028"]["amazon_nl"]["link_status"] == "suspect"
     await hass.services.async_call(DOMAIN, "confirm_offer", {"set_number": "21028", "retailer": "amazon_nl"}, blocking=True)
     assert c.store["offers"]["21028"]["amazon_nl"]["link_status"] == "confirmed"
     await hass.services.async_call(DOMAIN, "remove_offer", {"set_number": "21028", "retailer": "amazon_nl"}, blocking=True)
-    assert "amazon_nl" not in c.store["offers"]["21028"] and "name" not in c.store["sets"]["21028"]
+    assert "amazon_nl" not in c.store["offers"]["21028"]
     with patch("custom_components.lego_tracker.client.Fetcher.discover",
-               AsyncMock(side_effect=lambda r, n, force=False, url=None: "https://www.amazon.nl/dp/B0LEDLEDLE" if r == "amazon_nl" else None)):
+               AsyncMock(side_effect=lambda r, n, force=False, url=None, skip=frozenset(): "https://www.amazon.nl/dp/B0DOUBTDOU" if r == "amazon_nl" else None)):
         found = await hass.services.async_call(DOMAIN, "discover_offers", {"set_number": "21028"}, blocking=True, return_response=True)
     assert found["found"] == 0                                             # rejected page is not re-added
     # manual link is trusted immediately
@@ -1274,7 +1285,7 @@ async def test_find_uses_pasted_search_page_and_says_why(hass: HomeAssistant, en
     # a search page pasted by hand is searched, not saved as the link
     seen = []
 
-    async def discover(retailer, num, force=False, url=None):
+    async def discover(retailer, num, force=False, url=None, skip=frozenset()):
         seen.append(url)
         c.fetcher.discover_error[retailer] = "the shop blocked the search (HTTP 403)"
         return None
@@ -1388,7 +1399,7 @@ async def test_pasted_search_page_on_existing_link_keeps_state(hass: HomeAssista
     c.store["offers"]["60510"]["bol"]["history"] = [[1700000000, 45.0]]
     seen = []
 
-    async def discover(retailer, num, force=False, url=None):
+    async def discover(retailer, num, force=False, url=None, skip=frozenset()):
         seen.append(url)
         return old                                    # the search page finds the same product
     with patch.object(c.fetcher, "discover", discover):
@@ -1410,7 +1421,7 @@ async def test_pasted_search_page_on_existing_link_keeps_state(hass: HomeAssista
     # a search that finds another page: new history, the manual price stays, not confirmed by hand
     other = "https://www.bol.com/nl/nl/p/lego-city-60510-b/9300000099999999/"
 
-    async def discover_other(retailer, num, force=False, url=None):
+    async def discover_other(retailer, num, force=False, url=None, skip=frozenset()):
         return other
     with patch.object(c.fetcher, "discover", discover_other):
         await c.fetch_shop("60510", "bol", "https://www.bol.com/nl/nl/s/?searchtext=60510")
@@ -1675,7 +1686,7 @@ async def test_links_from_sitemap_ean_and_redirect(hass: HomeAssistant, entry, n
     c.store["sets"]["60510"]["ean"] = "5702017583556"
     seen = []
 
-    async def discover(retailer, num, force=False, url=None):
+    async def discover(retailer, num, force=False, url=None, skip=frozenset()):
         seen.append(url)
         return "https://www.kruidvat.be/nl/lego-city-60510/p/123" if url and "5702017583556" in url else None
     c.job = {"running": True, "shops": {}}
@@ -2305,7 +2316,7 @@ async def test_new_set_gets_prices_and_market_value_right_away(hass: HomeAssista
         order.append(("compare", num, tuple(sources or ())))
         return {}
 
-    async def discover(retailer, num, force=False, url=None):
+    async def discover(retailer, num, force=False, url=None, skip=frozenset()):
         return f"https://www.amazon.nl/dp/B0{num}0" if retailer == "amazon_nl" else None
 
     with patch.object(c.fetcher, "discover", discover), patch.object(c, "compare_refresh", side_effect=compare):
@@ -2727,3 +2738,94 @@ def test_series_keeps_own_imported_value_for_opened_copies():
     assert series[-1]["value"] == 80.0 == collection_summary(store, {})["value"]
     store["collection"]["10281"]["value_source"] = "Market value"                  # value from the market: used value
     assert collection_series(store, now=1_000_000.0)[-1]["value"] == 30.0 == collection_summary(store, {})["value"]
+
+
+async def test_lego_temporarily_unavailable_keeps_the_lego_price(hass: HomeAssistant, entry, no_network):
+    """LEGO.com says 'temporarily unavailable': no new LEGO price; the one we had stays. Without one, the
+    regular price (RRP) is used: the page's own, else the RRP from another source. A warning, not an error."""
+    c = await _setup(hass, entry)
+    await c.add_set("10281", name="Bonsai", rrp=49.99, discover=False)
+    o = c.store["offers"].setdefault("10281", {})["lego_com"] = {"url": "https://www.lego.com/nl-be/product/bonsai-tree-10281", "history": []}
+    no_network.return_value = (Parsed(price=44.99, title="Bonsai"), None)
+    await c.refresh_set("10281", ["lego_com"])
+    assert o["last_price"] == 44.99 and o["available"]
+    away = Parsed(None, "Bonsai", unavailable=True, list_price=49.99, reason="sold_out")
+    no_network.return_value = (away, None)
+    await c.refresh_set("10281", ["lego_com"])
+    await c.refresh_set("10281", ["lego_com"])
+    assert o["last_price"] == 44.99 and o["available"] and o["unavailable"] == "sold_out" and o["error"] is None
+    assert [e["message"] for e in c.store["activity"] if e.get("unavailable")] == ["temporarily unavailable: last price €44.99 kept"]
+    assert c.compute()["statuses"]["10281"]["best_price"] == 44.99
+    # never had a price: the regular price from the page, else the set's RRP from elsewhere
+    del c.store["offers"]["10281"]["lego_com"]
+    o = c.store["offers"]["10281"]["lego_com"] = {"url": "https://www.lego.com/nl-be/product/bonsai-tree-10281", "history": []}
+    no_network.return_value = (Parsed(None, "Bonsai", unavailable=True, list_price=None, reason="sold_out"), None)
+    await c.refresh_set("10281", ["lego_com"])
+    assert o["last_price"] == 49.99 and o["unavailable"] == "sold_out"
+    # retired: no price, as before
+    no_network.return_value = (Parsed(None, "Bonsai", unavailable=True, list_price=49.99, reason="discontinued"), None)
+    await c.refresh_set("10281", ["lego_com"])
+    assert not o["available"] and o["unavailable"] == "discontinued"
+
+
+async def test_own_price_and_a_new_fetched_price_ask_for_a_choice(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    """Your own price counts; a different fetched price asks once: accept it (your price goes away) or keep
+    yours (that fetched price is not asked again, a newer one is)."""
+    c = await _setup(hass, entry)
+    await c.add_set("10281", name="Bonsai", rrp=49.99, discover=False)
+    c.store["offers"]["10281"] = {"bol": {"url": "https://www.bol.com/nl/nl/p/lego-10281-bonsai/1/", "history": []}}
+    c.update_offer("10281", "bol", manual_price="45")
+    o = c.store["offers"]["10281"]["bol"]
+    no_network.return_value = (Parsed(price=45.0, title="LEGO 10281 Bonsai"), None)
+    await c.refresh_set("10281", ["bol"])
+    assert "price_choice" not in o                                     # the same price: nothing to ask
+    no_network.return_value = (Parsed(price=39.99, title="LEGO 10281 Bonsai"), None)
+    await c.refresh_set("10281", ["bol"])
+    await c.refresh_set("10281", ["bol"])
+    assert o["price_choice"]["price"] == 39.99 and c.compute()["statuses"]["10281"]["best_price"] == 45
+    assert len([e for e in c.store["activity"] if e.get("choice")]) == 1
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/offer/price_choice", "set_number": "10281", "retailer": "bol", "accept": False})
+    assert (await ws.receive_json())["result"]["price"] == 45
+    await c.refresh_set("10281", ["bol"])
+    assert "price_choice" not in o and o["manual_price"]["price"] == 45          # declined: not asked again
+    no_network.return_value = (Parsed(price=37.5, title="LEGO 10281 Bonsai"), None)
+    await c.refresh_set("10281", ["bol"])
+    assert o["price_choice"]["price"] == 37.5                                    # a newer price is asked
+    await ws.send_json({"id": 2, "type": "lego_tracker/offer/price_choice", "set_number": "10281", "retailer": "bol", "accept": True})
+    assert (await ws.receive_json())["result"]["price"] == 37.5
+    assert "manual_price" not in o and c.compute()["statuses"]["10281"]["best_price"] == 37.5
+
+
+async def test_ticker_shows_solved_errors_once_and_a_news_hash(hass: HomeAssistant, entry, no_network):
+    """Errors solved since the previous ticker load are in it once; the news hash changes with the news file."""
+    c = await _setup(hass, entry)
+    await c.add_set("10281", name="Bonsai", discover=False)
+    now = time.time()
+    c.store["err_track"] = {"open": {}, "days": {}, "new": [], "since": now - 9000,
+                            "solved": [[now - 5000, "10281|bol", now - 9000], [now - 60, "10281|amazon_nl", now - 3000]]}
+    with patch("custom_components.lego_tracker.news.NewsFeed.get", AsyncMock(return_value=[{"id": "a", "title": "x", "body": "y", "date": "2026-10-04"}])):
+        first = await c.ticker_data("nl")
+        assert [f["shop"] for f in first["fixed"]] == ["Amazon.nl"]          # only the last 10 minutes at first
+        again = await c.ticker_data("nl", first["now"])
+        assert again["fixed"] == [] and len(first["news_hash"]) == 16       # shown once
+    with patch("custom_components.lego_tracker.news.NewsFeed.get", AsyncMock(return_value=[{"id": "b", "title": "x", "body": "y", "date": "2026-10-05"}])):
+        assert (await c.ticker_data("nl"))["news_hash"] != first["news_hash"]
+
+
+async def test_left_out_set_can_be_shown_anyway(hass: HomeAssistant, entry, no_network, hass_ws_client):
+    """Deals → Settings: a set left out by the filters can be put back (an exception), and left out again."""
+    c = await _setup(hass, entry)
+    await c.add_set("10281", name="Bonsai", rrp=49.99, discover=False)
+    c.store["collection"]["10281"] = {"qty": 1}
+    with patch.object(type(c), "deal_filter", property(lambda self: {**DEAL_FILTER_DEFAULT, "skip_owned": True})):
+        assert c.deal_blocked("10281", {}) == "owned"
+        ws = await hass_ws_client(hass)
+        await ws.send_json({"id": 1, "type": "lego_tracker/deal_exception", "set_number": "10281", "show": True})
+        assert (await ws.receive_json())["success"]
+        assert c.deal_blocked("10281", {}) is None
+        await ws.send_json({"id": 2, "type": "lego_tracker/overview"})
+        ov = (await ws.receive_json())["result"]
+        assert ov["deal_always"] == ["10281"] and "10281" not in ov["deal_blocked"]
+        await ws.send_json({"id": 3, "type": "lego_tracker/deal_exception", "set_number": "10281", "show": False})
+        assert (await ws.receive_json())["success"] and c.deal_blocked("10281", {}) == "owned"

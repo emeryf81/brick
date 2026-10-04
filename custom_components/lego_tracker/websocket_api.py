@@ -71,10 +71,11 @@ def _card(coord, num: str, with_history: bool = False) -> dict[str, Any]:
                   "manual_price": (o.get("manual_price") or {}).get("price"), "manual_url": bool(o.get("manual_url")),
                   "available": o.get("available"), "error": o.get("error"), "checked": o.get("last_checked"),
                   "unavailable": o.get("unavailable") if not o.get("available") else None,
+                  "held": bool(o.get("unavailable") and o.get("available")),       # LEGO.com: price kept while unavailable
                   "low": min((p for _, p in o.get("history", [])), default=None),
                   "title": o.get("title"), "link_status": o.get("link_status"), "link_reason": o.get("link_reason"),
                   "via": o.get("last_via") if o.get("available") and not o.get("manual_price") else None, "found_via": o.get("found_via"),
-                  "suspect": o.get("suspect"), "approved": o.get("approved"),
+                  "suspect": o.get("suspect"), "approved": o.get("approved"), "price_choice": o.get("price_choice"),
                   "ignored": bool(o.get("error") and o.get("ignored_error") == o.get("error"))}
             for rid, o in offers.items() if rid in RETAILERS
         },
@@ -119,6 +120,9 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_report)
     websocket_api.async_register_command(hass, ws_shop_detail)
     websocket_api.async_register_command(hass, ws_offer_approve)
+    websocket_api.async_register_command(hass, ws_offer_reject)
+    websocket_api.async_register_command(hass, ws_deal_exception)
+    websocket_api.async_register_command(hass, ws_offer_price_choice)
     websocket_api.async_register_command(hass, ws_shop_sitemap)
     websocket_api.async_register_command(hass, ws_notify_set)
     websocket_api.async_register_command(hass, ws_notify_test)
@@ -164,6 +168,7 @@ def ws_overview(hass, connection, msg):
         "compare": _compare_status(coord), "deal_rules": coord.deal_rules | {"filter": coord.deal_filter},
         "deal_blocked": {n: why for n in coord.store["sets"]
                          if (why := coord.deal_blocked(n, (coord.data or coord.compute())["statuses"].get(n, {})))},
+        "deal_always": [n for n in coord.store.get("deal_always") or [] if n in coord.store["sets"]],
         "lego_themes": list(LEGO_THEMES),
         "watch_limit": coord.watch_limit, "full_refresh": coord.dev(CONF_DEV_FULL_REFRESH), "manual": coord.manual_status(),
         "value_source": coord.store.get("value_source", "shop_first"),
@@ -583,6 +588,52 @@ def ws_shop_sitemap(hass, connection, msg):
 
 
 @websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/offer/price_choice", vol.Required("set_number"): str,
+                                  vol.Required("retailer"): str, vol.Required("accept"): bool})
+@callback
+def ws_offer_price_choice(hass, connection, msg):
+    """Your own price or the newly fetched one: accept = the fetched price counts from now on."""
+    coord = _coord(hass)
+    try:
+        price = coord.resolve_price_choice(msg["set_number"], msg["retailer"], msg["accept"])
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid", str(err))
+        return
+    connection.send_result(msg["id"], {"price": price})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/deal_exception", vol.Required("set_number"): str,
+                                  vol.Required("show"): bool})
+@callback
+def ws_deal_exception(hass, connection, msg):
+    """A left-out set shown anyway (an exception to the deal settings), or back under the filters."""
+    coord = _coord(hass)
+    try:
+        coord.set_deal_exception(msg["set_number"], msg["show"])
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid", str(err))
+        return
+    connection.send_result(msg["id"], {"ok": True})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/offer/reject", vol.Required("set_number"): str,
+                                  vol.Required("retailer"): str})
+@callback
+def ws_offer_reject(hass, connection, msg):
+    """'Never visit this link again': only this link is blocked, the shop is searched again for the set."""
+    coord = _coord(hass)
+    try:
+        coord.reject_link(msg["set_number"], msg["retailer"])
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid", str(err))
+        return
+    coord._save()
+    connection.send_result(msg["id"], {"ok": True})
+
+
+@websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/offer/approve", vol.Required("set_number"): str,
                                   vol.Required("retailer"): str})
 @callback
@@ -774,7 +825,8 @@ async def ws_dev_tool(hass, connection, msg):
     connection.send_result(msg["id"], out)
 
 
-@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/ticker", vol.Optional("lang", default="en"): str})
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/ticker", vol.Optional("lang", default="en"): str,
+                                  vol.Optional("since"): vol.Any(None, int, float)})
 @websocket_api.async_response
 async def ws_ticker(hass, connection, msg):
     """The ticker at the bottom of the panel: latest prices, deals and news."""
@@ -782,7 +834,7 @@ async def ws_ticker(hass, connection, msg):
     if coord is None:
         connection.send_result(msg["id"], {"items": [], "news": []})
         return
-    connection.send_result(msg["id"], await coord.ticker_data(msg["lang"]))
+    connection.send_result(msg["id"], await coord.ticker_data(msg["lang"], msg.get("since")))
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/new_sets"})
