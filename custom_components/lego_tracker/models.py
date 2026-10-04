@@ -675,8 +675,11 @@ def rows_to_csv(rows: list[dict[str, Any]], columns: list[str]) -> str:
     out = io.StringIO()
     w = csv.DictWriter(out, fieldnames=columns, lineterminator="\n")
     w.writeheader()
-    def safe(v: Any) -> Any:  # spreadsheet formula injection guard
-        return "'" + v if isinstance(v, str) and v[:1] in ("=", "+", "-", "@") else v
+    def safe(v: Any) -> Any:
+        # Spreadsheet formula injection guard. A value that already starts with an apostrophe gets one too, so
+        # the importer can always remove exactly one leading apostrophe before =, +, -, @ or ' and get the
+        # original text back.
+        return "'" + v if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "'") else v
 
     w.writerows({k: safe(v) for k, v in r.items()} for r in rows)
     return out.getvalue()

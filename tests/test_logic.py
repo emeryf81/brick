@@ -568,9 +568,16 @@ def test_custom_shop_search_must_be_on_the_shop_host():
     assert shops.validate_custom_shop({"name": "x", "domain": "shop.be", "search": "https://www.shop.be/zoek?q={query}"})["domain"] == "shop.be"
 
 
+
+
 def test_export_safety_apostrophe_is_removed_on_import():
-    """Our export puts an apostrophe before =, +, - and @ (spreadsheet safety); importing the file again gives
-    the original text back. Other leading apostrophes stay."""
+    """Our export puts an apostrophe before =, +, -, @ and ' (spreadsheet safety); importing the file again gives
+    the original text back, also for text that itself starts with an apostrophe. Other leading apostrophes stay."""
     res = csv_import.analyze_csv("Number;Name;Location;Notes\n10281;'=Bonsai;'-shelf 2;'quoted\n")
     item = res["rows"][0]
     assert item["name"] == "=Bonsai" and item["location"] == "-shelf 2" and item["notes"] == "'quoted"
+
+    rows = [{"Number": "10281", "Name": "'=Bonsai", "Location": "=A1", "Notes": "'t Huis"}]
+    text = models.rows_to_csv(rows, ["Number", "Name", "Location", "Notes"])
+    item = csv_import.analyze_csv(text)["rows"][0]
+    assert item["name"] == "'=Bonsai" and item["location"] == "=A1" and item["notes"] == "'t Huis"
