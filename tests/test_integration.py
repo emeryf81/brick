@@ -2535,6 +2535,16 @@ async def test_smyths_toys_built_in(hass: HomeAssistant, no_network):
     with patch.object(f, "_get", landed):
         assert await f._discover("smyths_be", "11504") == product
         assert await f._discover("smyths_be", "11504", skip={url_key("smyths_be", product)}) is None
+    # LEGO.com: the direct product URL you blocked is not even requested
+    from custom_components.lego_tracker.parsers import lego_product_url
+    calls = []
+
+    async def nothing(retailer, url, search=False):
+        calls.append(url)
+        return 200, "<html></html>"
+    with patch.object(f, "_get", nothing):
+        assert await f._discover("lego_com", "11504", skip={url_key("lego_com", lego_product_url("11504"))}) is None
+    assert calls and lego_product_url("11504") not in calls
     payload = '<script id="__NUXT_DATA__">["' + product.replace("https://www.smythstoys.com", "").replace("/", "\\/") + '"]</script>'
     assert find_search_result("smyths_be", payload, "11504") == product
     assert find_search_result("smyths_be", payload.replace("11504", "11505"), "11504") is None

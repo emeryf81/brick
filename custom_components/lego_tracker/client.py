@@ -422,6 +422,9 @@ class Fetcher:
             return found
         # LEGO.com search is partly rendered in the browser: try the product URL directly (its own trace entry)
         t0, purl = time.time(), lego_product_url(set_number)
+        if url_key(retailer, purl) in skip:                # you blocked this page: never visit it again
+            self.discover_error[retailer] = T("no matching product found")
+            return None
         try:
             status, page = await self._get(retailer, purl)
         except Exception as err:  # noqa: BLE001 - also Aborted
