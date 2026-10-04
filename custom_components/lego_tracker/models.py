@@ -440,11 +440,12 @@ def collection_series(store: dict[str, Any], now: float | None = None, points: i
             if unit is None:
                 unit = entry.get("current_value") or store["sets"].get(num, {}).get("rrp") or 0
             used = (store["sets"].get(num, {}).get("market") or {}).get("market_used")
-            for c in copies(entry):               # every copy from its own purchase date
+            own_import = pref and entry.get("current_value") and entry.get("value_source") not in (None, MARKET_LABEL)
+            for c in copies(entry):               # every copy from its own purchase date (same rule as copy_value)
                 added = _added_ts(c)
                 if added and added > t:
                     continue
-                value += float(used if used and c.get("condition") in OPENED else unit)
+                value += float(used if used and c.get("condition") in OPENED and not own_import else unit)
                 cost += float(c.get("paid") or 0)
         out.append({"ts": t, "value": round(value, 2), "cost": round(cost, 2)})
         if t >= now:

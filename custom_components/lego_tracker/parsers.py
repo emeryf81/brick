@@ -68,7 +68,9 @@ def availability_reason(page: str, set_number: str | None = None) -> str | None:
     """'discontinued', 'sold_out' or None for a page without a price. The structured availability of the
     page's own product decides first; without one, the words on the page."""
     own = _own_product_availability(page, set_number)
-    if own:
+    if own is not None:
+        if not own:
+            return None                                 # the product is there but says nothing: no guessing from text
         if "Discontinued" in own:
             return "discontinued"
         if "OutOfStock" in own or "SoldOut" in own:

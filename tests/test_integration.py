@@ -2578,6 +2578,8 @@ async def test_sold_out_and_discontinued_are_warnings_with_a_reason(hass: HomeAs
     rec = '{"@type":"Product","name":"LEGO 10305","offers":{"availability":"https://schema.org/Discontinued"}}'
     assert availability_reason(ld(f"[{own},{rec}]") + "<p>uitverkocht</p>", "10281") is None
     assert availability_reason(ld(f"[{rec},{own.replace('InStock', 'OutOfStock')}]"), "10281") == "sold_out"
+    # the own product without any availability: words elsewhere on the page don't decide
+    assert availability_reason(ld('{"@type":"Product","name":"LEGO 10281 Bonsai","offers":{"price":""}}') + "<p>Uitverkocht</p>", "10281") is None
     assert availability_reason("<script>var t='uitverkocht'</script><p>Bonsai</p>") is None   # words in scripts don't count
     c = await _setup(hass, entry)
     await c.add_set("10281", name="Bonsai", discover=False)
@@ -2650,6 +2652,9 @@ async def test_every_copy_has_its_own_price_date_condition_and_value(hass: HomeA
     assert len(e["items"]) == 4 and e["items"][3] == {"condition": "Opened"}
     c.update_set("10281", {"qty": 2, "location": "Shelf"})
     assert len(e["items"]) == 2 and all(x["location"] == "Shelf" for x in e["items"])
+    c.update_set("10281", {"qty": 4, "location": "Attic"})                    # new copies get the new location too
+    assert len(e["items"]) == 4 and all(x["location"] == "Attic" for x in e["items"])
+    c.update_set("10281", {"qty": 2})
     for bad in ([], [{"paid": -1}], [{"added": "2999-01-01"}], [{"condition": "Mint"}], ["x"]):
         with pytest.raises(LocalizedError):
             c.update_set("10281", {"copies": bad})
@@ -2686,3 +2691,18 @@ async def test_own_shop_move_is_finished_on_a_later_start(hass: HomeAssistant, n
     await hass.async_block_till_done()
     c = hass.data[DOMAIN][e.entry_id]
     assert list(c.store["offers"]["11504"]) == ["smyths_be"]
+
+
+def test_series_keeps_own_imported_value_for_opened_copies():
+    """With 'imported value first' and your own imported value, an opened copy keeps that value in the chart,
+    the same as in the collection value (no used market value instead)."""
+    from custom_components.lego_tracker.models import collection_series, collection_summary, new_store
+
+    store = new_store()
+    store["value_source"] = "import_first"
+    store["sets"]["10281"] = {"set_number": "10281", "rrp": 50, "market": {"market_new": 60, "market_used": 30}}
+    store["collection"]["10281"] = {"qty": 1, "current_value": 80.0, "value_source": "import", "condition": "Built", "added": "1970-01-05"}
+    series = collection_series(store, now=1_000_000.0)
+    assert series[-1]["value"] == 80.0 == collection_summary(store, {})["value"]
+    store["collection"]["10281"]["value_source"] = "Market value"                  # value from the market: used value
+    assert collection_series(store, now=1_000_000.0)[-1]["value"] == 30.0 == collection_summary(store, {})["value"]

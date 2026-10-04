@@ -2752,13 +2752,13 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if entry.get("items"):
                 # the set-level fields apply to every copy; a new quantity adds or removes copies at the end
                 items = entry["items"]
-                for k in COPY_FIELDS:
+                if (q := clean_coll.get("qty")) and q != len(items):      # first the new number of copies ...
+                    last = {k: v for k, v in items[-1].items() if k in ("condition", "location")}
+                    items = entry["items"] = items[:q] + [dict(last) for _ in range(q - len(items))]
+                for k in COPY_FIELDS:                                       # ... then the fields for all of them
                     if k in clean_coll:
                         for c in items:
                             c[k] = clean_coll[k]
-                if (q := clean_coll.get("qty")) and q != len(items):
-                    last = {k: v for k, v in items[-1].items() if k in ("condition", "location")}
-                    entry["items"] = items[:q] + [dict(last) for _ in range(q - len(items))]
                 entry.update({k: v for k, v in clean_coll.items() if k not in COPY_FIELDS and k != "qty"})
                 sync_copies(entry)
             else:
