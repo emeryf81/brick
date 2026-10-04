@@ -8,44 +8,44 @@
 # - link:  optioneel; https://... of een pad in Home Assistant zoals /hacs/dashboard
 # Tekst: gewone tekst, lege regel = nieuwe alinea, https-links worden klikbaar.
 
-id: 2026-10-03-update
-date: 2026-10-03
+id: 2026-10-04-update
+date: 2026-10-04
 lang: nl
-title: UPDATE 3 oktober! Nieuwe versie klaar in HACS
+title: UPDATE 4 oktober! Versie 0.9.21 staat klaar in HACS
 link: /hacs/dashboard
 
-Er staat een nieuwe versie van LEGO Organizing Tool klaar.
+Er staat een grote nieuwe versie van LEGO Organizing Tool klaar.
 
 Wat is er nieuw?
-• Verdachte prijzen kun je nu zelf goedkeuren (in de set, bij Winkels & taken en in het logboek, met een eigen filter).
-• Het userscript lost openstaande fouten zelf op: het haalt de prijs in je browser en de fout verdwijnt uit de lijst.
-• In het logboek zie je meteen hoe elke prijs gelezen werd: ⌂ rechtstreeks van de winkel, ⓤ via je browser (userscript).
-• Sorteren op datum: wanneer een set op je watchlist kwam en wanneer de laatste dealmelding binnenkwam.
-• Marktwaarde (nieuw en gebruikt) van elke set, één keer per dag per set.
-• Deze ticker! In te stellen bij Beheer → Instellingen → Ticker.
-• Meldingen bevatten nu altijd een directe link naar het product bij de goedkoopste winkel.
-• Bedragen met een komma (164,99) worden overal juist gelezen.
+• Deals op álle LEGO-sets: de tool kijkt elke dag rustig een deel van alle recente sets na, ook sets die je niet volgt. Je vindt ze bij Deals → Alle LEGO-sets. Sets die uit handel zijn, worden overgeslagen (dat wordt elke maand opnieuw nagekeken).
+• Sets bladeren en toevoegen: zoek op nummer of een stukje van de naam (met automatisch aanvullen), filter op thema en jaar, en zet een set met één klik op je watchlist of in je collectie.
+• Na het toevoegen van een set worden de prijzen meteen opgehaald.
+• Smyths Toys is nu een vaste winkel en staat standaard aan, net als bol.com. Had je Smyths zelf toegevoegd? Dan worden je links en prijzen automatisch overgezet.
+• Uitverkocht of uit het assortiment? Dan staat de reden erbij. Dat is een waarschuwing, geen fout: je hoeft er niets mee te doen.
+• Meerdere exemplaren van dezelfde set: geef per exemplaar de prijs, aankoopdatum, staat, locatie en notities op. De waarde wordt per exemplaar berekend (verzegeld = nieuwwaarde, geopend of gebouwd = gebruikte waarde).
+• De ticker toont enkel echte deals op basis van de dealscore, ook voor je watchlist. Nieuws, deals en watchlist staan standaard door elkaar (uit te zetten bij Beheer → Instellingen → Ticker).
+• Openstaande fouten: klik erop voor een overzicht van hoeveel fouten er opgelost zijn en hoeveel er bijkwamen, met grafieken per dag, week en maand.
 
 Bijwerken: klik op de knop hieronder (HACS), zoek "LEGO Organizing Tool", kies "Bijwerken" en herstart Home Assistant.
 
 ---
-id: 2026-10-03-update-en
-date: 2026-10-03
+id: 2026-10-04-update-en
+date: 2026-10-04
 lang: en
-title: UPDATE October 3! A new version is ready in HACS
+title: UPDATE October 4! Version 0.9.21 is ready in HACS
 link: /hacs/dashboard
 
-A new version of LEGO Organizing Tool is ready.
+A big new version of LEGO Organizing Tool is ready.
 
 What's new?
-• Approve suspicious prices yourself (in the set, under Shops & jobs and in the logbook, with its own filter).
-• The userscript solves open errors by itself: it fetches the price in your browser and the error leaves the list.
-• The logbook shows how every price was read: ⌂ directly from the shop, ⓤ via your browser (userscript).
-• Sort by date: when a set came on your watchlist and when the latest deal notification came in.
-• Market value (new and used) of every set, once a day per set.
-• This ticker! Set it up under Manage → Settings → Ticker.
-• Notifications always contain a direct link to the product at the cheapest shop.
-• Amounts with a decimal comma (164,99) are read correctly everywhere.
+• Deals on every LEGO set: every day the tool calmly checks part of all recent sets, also sets you don't follow. Find them under Deals → All LEGO sets. Retired sets are skipped (checked again every month).
+• Browse and add sets: search by number or part of the name (with autocomplete), filter by theme and year, and put a set on your watchlist or in your collection with one click.
+• After you add a set, its prices are fetched right away.
+• Smyths Toys is now a built-in shop and on by default, just like bol.com. Did you add Smyths yourself? Your links and prices are moved over automatically.
+• Sold out or no longer sold? The reason is shown. It is a warning, not an error: there is nothing to fix.
+• Several copies of the same set: enter the price, purchase date, condition, location and notes per copy. The value is calculated per copy (sealed = new value, opened or built = used value).
+• The ticker only shows real deals based on the deal score, also for your watchlist. News, deals and watchlist are mixed by default (switch it off under Manage → Settings → Ticker).
+• Open errors: click them for an overview of how many errors were solved and how many came in, with charts per day, week and month.
 
 To update: click the button below (HACS), find "LEGO Organizing Tool", choose "Update" and restart Home Assistant.
 
