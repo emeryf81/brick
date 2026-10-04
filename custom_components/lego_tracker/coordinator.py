@@ -31,7 +31,7 @@ from .const import (
 )
 from .models import (
     add_activity, add_event, clean_history, collection_analytics, link_check, collection_rows, collection_series, is_suspicious_price, collection_summary, COLLECTION_COLUMNS, rows_to_csv, validate_backup, wishlist_summary, is_watched, compute_set_status, new_store, normalize_set_number,
-    offer_price, query_activity, record_price, today_iso, COPY_FIELDS, copies, copy_value, sync_copies,
+    offer_price, query_activity, record_price, today_iso, COPY_FIELDS, OPENED, copies, copy_value, sync_copies,
 )
 from .i18n import DEFAULT_LANGUAGE, LANGUAGES, LocalizedError, T, resolve, set_language
 from .notifications import Notifier, default_rules
@@ -1026,8 +1026,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             s["exit_date"], s["exit_date_source"] = when, name
         entry = self.store["collection"].get(num)
         if entry is not None:
-            # the new value; opened, built or incomplete copies take the used value themselves (models.copy_value)
-            value = d.get("market_new") or d.get("market_used")
+            # the new value; opened, built or incomplete copies take the used value themselves (models.copy_value).
+            # The used value only stands in when no copy is sealed.
+            opened = all(c.get("condition") in OPENED for c in copies(entry))
+            value = d.get("market_new") or (d.get("market_used") if opened else None)
             if value:
                 hist = list(entry.get("value_history") or [])
                 if not hist or abs(hist[-1][1] - value) > 0.005:

@@ -2648,6 +2648,14 @@ async def test_every_copy_has_its_own_price_date_condition_and_value(hass: HomeA
     assert [(r["Qty"], r["Paid"], r["Condition"]) for r in rows] == [(1, 39.99, "Sealed"), (1, 25.5, "Built"), (1, "", "Opened")]
     assert [(r["Location"], r["Notes"]) for r in rows] == [("Attic", ""), ("", "living room"), ("", "")]   # per copy, also on import
 
+    # a market value with only a used price: not the value of a set that still has a sealed copy
+    s = c.store["sets"]["10281"]
+    e.pop("current_value", None)
+    c._apply_market("10281", s, {"market_used": 33.0}, "market", 1.0)
+    assert not e.get("current_value")
+    c._apply_market("10281", s, {"market_new": 61.0, "market_used": 33.0}, "market", 2.0)
+    assert e["current_value"] == 61.0
+
     # a new quantity on the set adds or removes copies at the end; set-level fields go to every copy
     c.update_set("10281", {"qty": 4})
     assert len(e["items"]) == 4 and e["items"][3] == {"condition": "Opened"}
