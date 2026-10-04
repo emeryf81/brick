@@ -2830,6 +2830,12 @@ async def test_ticker_shows_solved_errors_once_and_a_news_hash(hass: HomeAssista
         assert again["fixed"] == [] and len(first["news_hash"]) == 16       # shown once
     with patch("custom_components.lego_tracker.news.NewsFeed.get", AsyncMock(return_value=[{"id": "b", "title": "x", "body": "y", "date": "2026-10-05"}])):
         assert (await c.ticker_data("nl"))["news_hash"] != first["news_hash"]
+        # more than 10 solved at once: 10 now, the rest with the next load (none skipped)
+        c.store["err_track"]["solved"] = [[now - 100 + i, f"10281|shop{i}", now - 900] for i in range(13)]
+        a = await c.ticker_data("nl", now - 200)
+        b = await c.ticker_data("nl", a["cursor"])
+        assert len(a["fixed"]) == 10 and len(b["fixed"]) == 3 and b["cursor"] == b["now"]
+        assert {f["shop"] for f in a["fixed"] + b["fixed"]} == {f"shop{i}" for i in range(13)}
 
 
 async def test_left_out_set_can_be_shown_anyway(hass: HomeAssistant, entry, no_network, hass_ws_client):

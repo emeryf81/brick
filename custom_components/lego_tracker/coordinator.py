@@ -835,16 +835,18 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # errors solved since the previous ticker (shown once; gone at the next ticker load)
         self._track_errors(now)
         since = now - TICKER_RELOAD if since is None else max(float(since), now - 86400)
+        # oldest first, at most 10 per load; when more are waiting, the cursor stops at the last one sent,
+        # so the rest come with the next load instead of being skipped
+        waiting = [(ts, key) for ts, key, _opened in (self.store.get("err_track") or {}).get("solved") or []
+                   if ts > since and key.partition("|")[0] in self.store["sets"]]
         fixed = []
-        for ts, key, _opened in reversed((self.store.get("err_track") or {}).get("solved") or []):
-            if ts <= since or len(fixed) >= 10:
-                break
+        for ts, key in waiting[:10]:
             num, _, rid = key.partition("|")
-            if num in self.store["sets"]:
-                fixed.append({"kind": "fixed", "ts": ts, "set_number": num, "name": self.store["sets"][num].get("name") or "",
-                              "shop": RETAILERS.get(rid, (rid,))[0] if rid else None})
+            fixed.append({"kind": "fixed", "ts": ts, "set_number": num, "name": self.store["sets"][num].get("name") or "",
+                          "shop": RETAILERS.get(rid, (rid,))[0] if rid else None})
+        cursor = fixed[-1]["ts"] if len(waiting) > 10 else now
         return {"items": out, "news": news, "news_hash": news_hash, "fixed": fixed, "config": cfg, "now": now,
-                "reload": TICKER_RELOAD}
+                "cursor": cursor, "reload": TICKER_RELOAD}
 
     @callback
     def market_tick(self, _now: Any = None) -> None:

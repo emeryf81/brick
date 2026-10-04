@@ -577,7 +577,7 @@ class LegoTrackerPanel extends HTMLElement {
     clearTimeout(this._tickerTimer); this._tickerTimer = setTimeout(() => { if (this.isConnected) this.loadTicker(); }, TICKER_RELOAD);
     let tk;
     try { tk = await this._hass.callWS({ type: "lego_tracker/ticker", lang: LANG, ...(this._tkSince ? { since: this._tkSince } : {}) }); } catch (e) { return; }
-    this._tkSince = tk.now; this.state.ticker = tk;
+    this._tkSince = tk.cursor ?? tk.now; this.state.ticker = tk;      // more solved errors waiting: they come next time
     // solved errors wait in a queue until a round has really shown them (the server sends each one once)
     const q = this._tkFixed || (this._tkFixed = []);
     for (const f of tk.fixed || []) if (!q.some((x) => x.ts === f.ts && x.set_number === f.set_number && x.shop === f.shop)) q.push(f);
