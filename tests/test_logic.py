@@ -593,3 +593,91 @@ def test_wrong_product_only_for_clearly_other_products():
     assert wp("LEGO Architecture New York", "21028") is None                   # number missing: only a doubt
     assert wp("Led-verlichting voor LEGO 21028", "21028")                         # accessory
     assert wp(None, "10281") is None
+
+
+def test_parse_lego_new_page_layouts():
+    """LEGO.com pages without the set number in JSON-LD, with the page state as escaped JSON, or with only
+    meta data still give the set's own price, never a recommended product's."""
+    canon = '<link rel="canonical" href="https://www.lego.com/nl-be/product/the-lego-van-60500">'
+    # JSON-LD sku is LEGO's own article number; the only Product on the set's own page is the set
+    ld = ('<script type="application/ld+json">{"@type":"Product","name":"De LEGO® bestelwagen","sku":"6570123",'
+          '"offers":{"@type":"Offer","price":"29.99","priceCurrency":"EUR","availability":"https://schema.org/InStock"}}</script>')
+    p = parsers.parse_page("lego_com", f"<html><head>{canon}{ld}</head></html>", "60500")
+    assert p.price == 29.99 and p.title == "De LEGO® bestelwagen" and not p.unavailable
+    # with a recommendation's Product node too: the page Product is the one without another set's number
+    rec = '<script type="application/ld+json">{"@type":"Product","name":"Politiewagen","sku":"60400","offers":{"price":"9.99"}}</script>'
+    p = parsers.parse_page("lego_com", f"<html><head>{canon}{rec}{ld}</head></html>", "60500")
+    assert p.price == 29.99
+    # JSON-LD price without stock status, availability meta says sold out: no price to buy at
+    oos = '<meta property="product:availability" content="out of stock">'
+    p = parsers.parse_page("lego_com", f"<html><head>{canon}{oos}{ld.replace(',\"availability\":\"https://schema.org/InStock\"', '')}</head></html>", "60500")
+    assert p.price is None and p.unavailable
+    # escaped state with a recommendation before our code and no price of our own: no price
+    nop = ('<script>self.__next_f.push([1,"{\\"recs\\":[{\\"productCode\\":\\"40646\\",\\"price\\":{\\"centAmount\\":1499}}],'
+           '\\"product\\":{\\"productCode\\":\\"60500\\",\\"name\\":\\"Van\\"}}"])</script>')
+    assert parsers.parse_page("lego_com", f"<html><body>{nop}</body></html>", "60500").price is None
+    # the same JSON-LD on another set's page is not ours
+    other = canon.replace("the-lego-van-60500", "police-car-60400")
+    assert parsers.parse_page("lego_com", f"<html><head>{other}{ld}</head></html>", "60500").price is None
+    # page state as escaped JSON (Next.js app router), with a recommended product first
+    rsc = ('<script>self.__next_f.push([1,"{\\"recs\\":[{\\"productCode\\":\\"40646\\",\\"price\\":{\\"formattedAmount\\":\\"€ 14,99\\",'
+           '\\"centAmount\\":1499}}],\\"product\\":{\\"productCode\\":\\"60500\\",\\"price\\":{\\"formattedAmount\\":\\"€ 29,99\\",'
+           '\\"centAmount\\":2999},\\"listPrice\\":{\\"centAmount\\":2999},\\"availabilityStatus\\":\\"E_AVAILABLE\\"}}"])</script>')
+    p = parsers.parse_page("lego_com", f"<html><head><title>De LEGO® bestelwagen 60500</title></head><body>{rsc}</body></html>", "60500")
+    assert p.price == 29.99 and p.list_price == 29.99 and not p.unavailable
+    sold = rsc.replace("E_AVAILABLE", "H_OUT_OF_STOCK")
+    p = parsers.parse_page("lego_com", f"<html><body>{sold}</body></html>", "60500")
+    assert p.price is None and p.unavailable and p.list_price == 29.99
+    # only meta data on the set's own page
+    meta = f'<html><head>{canon}<meta property="product:price:amount" content="29.99"><meta property="og:title" content="De LEGO® bestelwagen"></head></html>'
+    assert parsers.parse_page("lego_com", meta, "60500").price == 29.99
+    assert parsers.parse_page("lego_com", meta.replace("the-lego-van-60500", "police-car-60400"), "60500").price is None
+
+
+def test_parse_lego_words_on_the_page_stop_the_price():
+    """"Product uit handel" / "Tijdelijk niet beschikbaar" for this set: no price is taken (a warning with the
+    reason); the same words next to another set on a search page don't count."""
+    canon = '<link rel="canonical" href="https://www.lego.com/nl-be/product/train-station-60050">'
+    retired = f"<html><head>{canon}<title>Treinstation</title></head><body><h1>Treinstation</h1><span>Product uit handel</span></body></html>"
+    p = parsers.parse_page("lego_com", retired, "60050")
+    assert p.price is None and p.unavailable and p.reason == "discontinued"
+    # search page: the tile of 60050 says it, another set is for sale
+    search = ('<html><body><li><a href="/nl-be/product/train-station-60050">Treinstation 60050</a><span>Product uit handel</span></li>'
+              '<li><a href="/nl-be/product/the-lego-van-60500">De LEGO bestelwagen 60500</a><span>€ 29,99</span></li></body></html>')
+    assert parsers.parse_page("lego_com", search, "60050").reason == "discontinued"
+    assert parsers.parse_page("lego_com", search, "60500").reason is None
+    # temporarily unavailable next to the number: no new price
+    temp = '<html><body><h1>De LEGO bestelwagen</h1><p>Artikel 60500</p><p>Tijdelijk niet beschikbaar</p></body></html>'
+    p = parsers.parse_page("lego_com", temp, "60500")
+    assert p.price is None and p.unavailable and p.reason == "sold_out"
+    # a recommended set's badge on a page where this set has a price: the price stays
+    ld = ('<script type="application/ld+json">{"@type":"Product","name":"De LEGO bestelwagen","sku":"60500",'
+          '"offers":{"price":"29.99","availability":"https://schema.org/InStock"}}</script>')
+    rec = '<div class="recs"><a href="/nl-be/product/x-10305">Kasteel</a><span>Uit de handel</span></div>' + "x" * 1000
+    page = f'<html><head>{canon.replace("train-station-60050", "the-lego-van-60500")}{ld}</head><body>{"y" * 1000}{rec}</body></html>'
+    assert parsers.parse_page("lego_com", page, "60500").price == 29.99
+
+
+def test_parse_lego_status_words_in_the_product_section_and_meta():
+    """Status words count in the set's own product section (from its title), not in recommendations further
+    down; the page's availability meta data decides before its meta price is used."""
+    canon = '<link rel="canonical" href="https://www.lego.com/nl-be/product/the-lego-van-60500">'
+    recs = "<section><h2>Aanbevolen</h2>" + "<p>tekst</p>" * 300 + '<div>Kasteel<span>Uit de handel</span></div></section>'
+    # unpriced own page, a recommendation far below says "Uit de handel": not ours
+    p = parsers.parse_page("lego_com", f"<html><head>{canon}</head><body><h1>De LEGO bestelwagen</h1>{recs}</body></html>", "60500")
+    assert p.reason is None
+    # also right after a short product block, and with our number in the recommendation text
+    short = '<section><h2>Vaak samen gekocht</h2><div>Kasteel 10305 / De LEGO bestelwagen 60500 <span>Uit de handel</span></div></section>'
+    p = parsers.parse_page("lego_com", f"<html><head>{canon}</head><body><h1>De LEGO bestelwagen</h1><p>€ 29,99</p>{short}</body></html>", "60500")
+    assert p.reason is None
+    # priced own page, the product section says "Tijdelijk niet beschikbaar": no new price
+    ld = ('<script type="application/ld+json">{"@type":"Product","name":"De LEGO bestelwagen","sku":"60500",'
+          '"offers":{"price":"29.99"}}</script>')
+    p = parsers.parse_page("lego_com", f"<html><head>{canon}{ld}</head><body><h1>De LEGO bestelwagen</h1><p>Tijdelijk niet beschikbaar</p></body></html>", "60500")
+    assert p.price is None and p.reason == "sold_out" and p.list_price == 29.99
+    # availability meta: discontinued with a meta price gives no price; out of stock without any price is a reason
+    meta = '<meta property="product:price:amount" content="29.99"><meta property="product:availability" content="{a}">'
+    p = parsers.parse_page("lego_com", f"<html><head>{canon}{meta.format(a='discontinued')}</head></html>", "60500")
+    assert p.price is None and p.reason == "discontinued"
+    p = parsers.parse_page("lego_com", f"<html><head>{canon}{meta.format(a='out of stock')}</head></html>", "60500")
+    assert p.price is None and p.reason == "sold_out" and p.list_price == 29.99
