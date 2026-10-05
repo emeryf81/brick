@@ -9,7 +9,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.lego_tracker.const import DEAL_FILTER_DEFAULT, DOMAIN, MAX_HISTORY
+from custom_components.lego_tracker.const import DEAL_FILTER_DEFAULT, DOMAIN, LEGO_RETIRED_REST, MAX_HISTORY
 from custom_components.lego_tracker.parsers import Parsed
 
 CSV = "Number;Name;Theme;Qty;Paid;Value\n10281-1;Bonsai;Botanicals;1;40;50\n42143;Ferrari;Technic;1;350;400\n"
@@ -2887,9 +2887,24 @@ async def test_lego_out_of_the_range_takes_no_price_and_rests(hass: HomeAssistan
     assert no_network.call_count == calls + 1               # ↻ in the set still fetches it
     await c.refresh_set("60050", ["lego_com"], wake=True)
     assert no_network.call_count == calls + 2               # a forced round (service force: true) too
+    no_network.return_value = (None, "HTTP 503")            # a forced round that fails keeps "out of the range"
+    await c.refresh_set("60050", ["lego_com"], force=True)
+    assert o["unavailable"] == "discontinued" and c._lego_retired_rest("lego_com", o)
+    no_network.return_value = (Parsed(None, "Treinstation", unavailable=True, reason="discontinued"), None)
     # a comparison site still listing a LEGO.com price doesn't undo "out of the range"
     with patch.object(type(c), "compare_enabled", property(lambda self: True)), \
          patch.object(c, "compare_refresh", AsyncMock()), \
          patch.object(c, "compare_prices", lambda num: {"lego_com": {"price": 25.0, "source": "kieskeurig"}}):
         await c.refresh_set("60050", ["lego_com"], force=True)
     assert o["unavailable"] == "discontinued" and not o["available"]
+    # the month counts from the last time LEGO.com said so: a failed fetch after it doesn't start a new month
+    o["discontinued_at"] = time.time() - LEGO_RETIRED_REST - 60
+    no_network.return_value = (None, "HTTP 503")
+    await c.lego_lookup("60050")
+    assert o["unavailable"] == "discontinued" and not c._lego_retired_rest("lego_com", o)
+    no_network.return_value = (Parsed(None, "Treinstation", unavailable=True, reason="discontinued"), None)
+    await c.lego_lookup("60050")
+    assert c._lego_retired_rest("lego_com", o)              # confirmed again: a new month
+    no_network.return_value = (Parsed(24.99, "Treinstation"), None)
+    await c.lego_lookup("60050", force=True)
+    assert "unavailable" not in o and "discontinued_at" not in o

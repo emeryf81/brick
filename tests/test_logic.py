@@ -608,6 +608,19 @@ def test_parse_lego_new_page_layouts():
     rec = '<script type="application/ld+json">{"@type":"Product","name":"Politiewagen","sku":"60400","offers":{"price":"9.99"}}</script>'
     p = parsers.parse_page("lego_com", f"<html><head>{canon}{rec}{ld}</head></html>", "60500")
     assert p.price == 29.99
+    # two Products without a set number (one a recommendation): can't tell which is the set, so no JSON-LD price
+    rec2 = ('<script type="application/ld+json">{"@type":"Product","name":"Cadeaukaart","sku":"5005123",'
+            '"offers":{"price":"9.99"}}</script>')
+    assert parsers.parse_page("lego_com", f"<html><head>{canon}{rec2}{ld}</head></html>", "60500").price is None
+    # ... nor a page-state price that isn't tied to this set's code (here a recommendation's, the first on the page)
+    state = '<script>window.__STATE__={"recs":[{"name":"Cadeaukaart","price":{"centAmount":999}}]}</script>'
+    assert parsers.parse_page("lego_com", f"<html><head>{canon}{rec2}{ld}</head><body>{state}</body></html>", "60500").price is None
+    coded = state.replace('"recs"', '"product":{"productCode":"60500","price":{"centAmount":2999}},"recs"')
+    assert parsers.parse_page("lego_com", f"<html><head>{canon}{rec2}{ld}</head><body>{coded}</body></html>", "60500").price == 29.99
+    # the set's code without a price of its own: the recommendation price just before it isn't taken either
+    nocost = state.replace('"recs":[{"name":"Cadeaukaart","price":{"centAmount":999}}]',
+                           '"recs":[{"name":"Cadeaukaart","price":{"centAmount":999}}],"product":{"productCode":"60500","name":"Van"}')
+    assert parsers.parse_page("lego_com", f"<html><head>{canon}{rec2}{ld}</head><body>{nocost}</body></html>", "60500").price is None
     # JSON-LD price without stock status, availability meta says sold out: no price to buy at
     oos = '<meta property="product:availability" content="out of stock">'
     p = parsers.parse_page("lego_com", f"<html><head>{canon}{oos}{ld.replace(',\"availability\":\"https://schema.org/InStock\"', '')}</head></html>", "60500")

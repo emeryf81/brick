@@ -1256,7 +1256,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         before = self.compute()["statuses"].get(num, {})
         offers = [(rid, o) for rid, o in self.store["offers"].get(num, {}).items()
                   if (rid in live or (rid in bw_prices and rid in self.retailers)) and o.get("url") and o.get("link_status") != "rejected"
-                  and (force or wake or not self._lego_retired_rest(rid, o))]
+                  and (not self._lego_retired_rest(rid, o) or force or wake)]
         results = await asyncio.gather(*(self._fetch(rid, o, num, force) for rid, o in offers))
         counts = {"updated": 0, "errors": 0, "skipped": 0}
         shop_results: dict[str, dict[str, Any]] = {}
@@ -1319,9 +1319,11 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     else:
                         msg = T("no price: sold out") if why == "sold_out" else T("no price: no longer sold (out of the range)")
                     self.log("warning", "price", msg, set_number=num, retailer=rid, url=offer.get("url"), source=source, unavailable=why)
-                offer["unavailable"] = why
-            elif price is not None or error:
-                offer.pop("unavailable", None)
+                self._set_unavailable(offer, why)
+            elif price is not None:
+                self._set_unavailable(offer, None)
+            elif error and offer.get("unavailable") != "discontinued":
+                offer.pop("unavailable", None)             # out of the range stays: a failed fetch confirms nothing
             if self.job and self.job.get("running"):
                 st = self.job["shops"].setdefault(rid, {"ok": 0, "err": 0})
                 st["err" if error else "ok"] += 1
@@ -1793,9 +1795,24 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     @staticmethod
     def _lego_retired_rest(rid: str, offer: dict[str, Any]) -> bool:
         """LEGO.com said the set is out of the range ("Product uit handel"): its page is not fetched again for
-        a month (no prices to get there); ↻ in the set still fetches it."""
-        return rid == "lego_com" and offer.get("unavailable") == "discontinued" \
-            and time.time() - (offer.get("last_checked") or 0) < LEGO_RETIRED_REST
+        a month (no prices to get there); ↻ in the set still fetches it. The month counts from the last time
+        LEGO.com confirmed it (`discontinued_at`), so a failed fetch in between doesn't stretch it."""
+        if rid != "lego_com" or offer.get("unavailable") != "discontinued":
+            return False
+        since = offer.setdefault("discontinued_at", offer.get("last_checked") or 0)   # offers from before 0.9.23
+        return time.time() - since < LEGO_RETIRED_REST
+
+    @staticmethod
+    def _set_unavailable(offer: dict[str, Any], why: str | None) -> None:
+        """Remember why a shop page has no price (or forget it); "out of the range" also notes when it was seen."""
+        if why:
+            offer["unavailable"] = why
+        else:
+            offer.pop("unavailable", None)
+        if why == "discontinued":
+            offer["discontinued_at"] = time.time()
+        else:
+            offer.pop("discontinued_at", None)
 
     def _lego_hold(self, num: str, offer: dict[str, Any], parsed: Any) -> tuple[float, str] | None:
         """LEGO.com shows the set as temporarily unavailable (sold out, not retired): no new price is taken.
@@ -1853,7 +1870,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 s["lego_checked"] = time.time()
                 return False
             offer = offers["lego_com"] = {"url": url, "history": [], "found": time.time()}
-        if not (force or wake) and self._lego_retired_rest("lego_com", offer):
+        if self._lego_retired_rest("lego_com", offer) and not (force or wake):
             return False                                   # out of the range: nothing to read there this month
         parsed, error = await self.fetcher.fetch_offer("lego_com", url, force=force)
         if error and error.startswith("paused"):
@@ -1869,11 +1886,11 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         else:
             record_price(offer, fetched, error=error)
         if held:
-            offer["unavailable"] = "sold_out"
+            self._set_unavailable(offer, "sold_out")
         elif parsed and parsed.unavailable and parsed.reason and not error:
-            offer["unavailable"] = parsed.reason           # e.g. "Product uit handel": a warning, no price
+            self._set_unavailable(offer, parsed.reason)    # e.g. "Product uit handel": a warning, no price
         elif parsed and parsed.price:
-            offer.pop("unavailable", None)
+            self._set_unavailable(offer, None)
         if parsed and (parsed.price or held):
             offer["last_ok"] = offer["last_checked"]
         if error:
