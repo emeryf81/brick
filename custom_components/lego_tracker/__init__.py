@@ -198,6 +198,7 @@ async def _register_frontend(hass: HomeAssistant) -> None:
 
 @callback
 def _register_services(hass: HomeAssistant) -> None:
+    """Register the integration's services (add, refresh, discover, ...) once per Home Assistant instance."""
     async def add_set(call: ServiceCall) -> None:
         c = _coordinator(hass)
         d = call.data
@@ -279,6 +280,7 @@ def _register_services(hass: HomeAssistant) -> None:
             raise ServiceValidationError(str(err)) from err
 
     async def refresh(call: ServiceCall) -> dict:
+        """Fetch one set's shop prices now, or start a full round; `force` also wakes paused shops and resting pages."""
         c = _coordinator(hass)
         if num := call.data.get("set_number"):
             num = normalize_set_number(num)

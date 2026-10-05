@@ -292,6 +292,7 @@ def _lego_product(page: str, num: str | None) -> tuple[float | None, str | None,
                 nodes.append(node)
 
     def ids(node: dict[str, Any]) -> str:
+        """The fields that can name the set: sku, product id, mpn, name and url."""
         return " ".join(str(node.get(k) or "") for k in ("sku", "productID", "mpn", "name", "url"))
     own = next((n for n in nodes if not num or re.search(rf"(?<!\d){re.escape(num)}(?!\d)", ids(n))), None)
     if own is None and nodes and _lego_own_page(page, num):
@@ -345,6 +346,7 @@ def _lego_text_status(page: str, num: str | None) -> str | None:
     body = re.sub(r"<script\b.*?</script>|<style\b.*?</style>|<noscript\b.*?</noscript>", " ", page[:2000000], flags=re.S | re.I)
 
     def text(html: str) -> str:
+        """Visible text of an HTML fragment: tags removed, whitespace collapsed, entities decoded."""
         return htmllib.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html)))
     if _lego_own_page(page, num):
         # the set's own page: only its product block counts, from its title (h1) to the next heading (h2, e.g.

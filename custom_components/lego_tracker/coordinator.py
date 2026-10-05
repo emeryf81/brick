@@ -1226,6 +1226,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return job
 
     def start_refresh(self, force: bool = False) -> dict[str, Any]:
+        """Start a background job that fetches the shop prices of every set with a live link (or all sets when
+        comparison sites are on); `force` also includes paused shops and resting LEGO.com pages."""
         live = self._live_retailers(force)
         nums = list(self.store["sets"]) if self.compare_enabled else [
             n for n, offers in self.store["offers"].items()
@@ -1885,6 +1887,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                               None if has_key else T("no API key set: public Brickset pages are used"))
 
     async def enrich_set(self, num: str, force: bool = False, wake: bool = False) -> dict[str, int]:
+        """Fill in a set's RRP, image, name and other details from LEGO.com first, then the metadata sources."""
         s = self.store["sets"][num]
         lego_changed = await self.lego_lookup(num, force=force, wake=wake)       # 1st source: RRP, image, name
         meta, source = await lookup_metadata(async_get_clientsession(self.hass),
