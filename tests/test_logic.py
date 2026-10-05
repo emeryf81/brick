@@ -604,6 +604,18 @@ def test_parse_lego_new_page_layouts():
           '"offers":{"@type":"Offer","price":"29.99","priceCurrency":"EUR","availability":"https://schema.org/InStock"}}</script>')
     p = parsers.parse_page("lego_com", f"<html><head>{canon}{ld}</head></html>", "60500")
     assert p.price == 29.99 and p.title == "De LEGO® bestelwagen" and not p.unavailable
+    # with a recommendation's Product node too: the page Product is the one without another set's number
+    rec = '<script type="application/ld+json">{"@type":"Product","name":"Politiewagen","sku":"60400","offers":{"price":"9.99"}}</script>'
+    p = parsers.parse_page("lego_com", f"<html><head>{canon}{rec}{ld}</head></html>", "60500")
+    assert p.price == 29.99
+    # JSON-LD price without stock status, availability meta says sold out: no price to buy at
+    oos = '<meta property="product:availability" content="out of stock">'
+    p = parsers.parse_page("lego_com", f"<html><head>{canon}{oos}{ld.replace(',\"availability\":\"https://schema.org/InStock\"', '')}</head></html>", "60500")
+    assert p.price is None and p.unavailable
+    # escaped state with a recommendation before our code and no price of our own: no price
+    nop = ('<script>self.__next_f.push([1,"{\\"recs\\":[{\\"productCode\\":\\"40646\\",\\"price\\":{\\"centAmount\\":1499}}],'
+           '\\"product\\":{\\"productCode\\":\\"60500\\",\\"name\\":\\"Van\\"}}"])</script>')
+    assert parsers.parse_page("lego_com", f"<html><body>{nop}</body></html>", "60500").price is None
     # the same JSON-LD on another set's page is not ours
     other = canon.replace("the-lego-van-60500", "police-car-60400")
     assert parsers.parse_page("lego_com", f"<html><head>{other}{ld}</head></html>", "60500").price is None

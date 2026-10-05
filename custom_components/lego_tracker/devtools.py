@@ -85,9 +85,10 @@ async def fetch(coord: Any, url: str, set_number: str | None = None) -> dict[str
     coord.manual_gate("site:" + coord._site(rid))
     t0 = time.time()
     status, page, error = await coord.fetcher.get_page(rid, url, force=True, note_block=False)
-    out = parse(rid, page or "", url, set_number) if page else {"retailer": rid}
+    num = set_number or (lego_number(url) if rid == "lego_com" else None)
+    out = parse(rid, page or "", url, num) if page else {"retailer": rid}
     if page and rid == "lego_com":
-        out["lego"] = lego_summary(page, set_number or lego_number(url))
+        out["lego"] = lego_summary(page, num)
     return {**out, "status": status, "error": error, "ms": int((time.time() - t0) * 1000),
             "final_url": coord.fetcher.final_url.get(rid), "head": (page or "")[:1500]}
 

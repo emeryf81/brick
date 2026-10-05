@@ -9,6 +9,7 @@ import html as htmllib
 import json
 import re
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import quote_plus, urlparse
 
 from .const import GENERIC_SHOPS
@@ -293,8 +294,10 @@ def _lego_product(page: str, num: str | None) -> tuple[float | None, str | None,
     def ids(node: dict[str, Any]) -> str:
         return " ".join(str(node.get(k) or "") for k in ("sku", "productID", "mpn", "name", "url"))
     own = next((n for n in nodes if not num or re.search(rf"(?<!\d){re.escape(num)}(?!\d)", ids(n))), None)
-    if own is None and len(nodes) == 1 and _lego_own_page(page, num):
-        own = nodes[0]
+    if own is None and nodes and _lego_own_page(page, num):
+        # the set's own page: the first Product that carries no other set's number (a recommendation does;
+        # LEGO's own article numbers have 7 digits)
+        own = next((n for n in nodes if not re.search(r"(?<!\d)\d{4,6}(?!\d)", ids(n))), None)
     if own is None:
         return None, None, None, None                  # only other products (e.g. recommendations)
     prices, stock = [], None
@@ -308,9 +311,10 @@ def _lego_product(page: str, num: str | None) -> tuple[float | None, str | None,
     return (min(prices) if prices else None, own.get("name"), img if isinstance(img, str) else None, stock)
 
 
-def _lego_window(page: str, num: str | None, ld_price: float | None) -> str:
+def _lego_window(page: str, num: str | None, ld_price: float | None, strict: bool = False) -> str:
     """The part of the page state that belongs to this product: around its price (the one JSON-LD gives),
-    or around its product code. A page also lists recommended products with their own prices."""
+    or around its product code. A page also lists recommended products with their own prices.
+    strict: only prices inside the product's own data (no nearest price before its code)."""
     if ld_price is not None:
         m = re.search(rf'"price"\s*:\s*\{{[^{{}}]*?"centAmount"\s*:\s*{round(ld_price * 100)}\b', page)
         if m:
@@ -320,7 +324,7 @@ def _lego_window(page: str, num: str | None, ld_price: float | None) -> str:
         if m:                                              # up to the neighbouring products' codes
             codes = [c.start() for c in re.finditer(r'"productCode"\s*:\s*"', page)]
             end = min([c for c in codes if c > m.start()] + [m.end() + 3000])
-            if LEGO_CENTS_RE["price"].search(page, m.start(), end):
+            if LEGO_CENTS_RE["price"].search(page, m.start(), end) or strict:
                 return page[m.start():end]                 # the prices that follow its code
             start = max([c + 15 for c in codes if c < m.start()] + [m.start() - 3000, 0])
             before = page[start:m.start()]
@@ -362,7 +366,7 @@ def parse_lego(page: str, num: str | None = None) -> Parsed:
     ld_price, ld_name, ld_image, in_stock = _lego_product(page, num)
     # newer pages carry the page state as escaped JSON inside scripts (\"centAmount\":2999): read it unescaped
     state = page.replace('\\"', '"') if '\\"centAmount\\"' in page or '\\"productCode\\"' in page else page
-    win = _lego_window(state, num, ld_price)
+    win = _lego_window(state, num, ld_price, strict=state is not page)
     cents = {k: int(m.group(1)) / 100 for k, rx in LEGO_CENTS_RE.items() if (m := rx.search(win))}
     price = ld_price or cents.get("price")
     list_price = cents.get("listPrice") or cents.get("originalPrice") or price
@@ -384,10 +388,10 @@ def parse_lego(page: str, num: str | None = None) -> Parsed:
     if sold_out or (price is None and gone):
         return Parsed(None, title, image, unavailable=True, list_price=list_price, retiring=bool(LEGO_RETIRING_RE.search(head)),
                       reason="discontinued" if gone else "sold_out")
-    if price is None and _lego_own_page(page, num):
-        # the set's own page: its product price in the page's meta data
-        price = parse_price(_meta(page, "product:price:amount", "og:price:amount"))
-        list_price = list_price or price
+    if _lego_own_page(page, num):
+        if price is None:                                   # the set's own page: its price in the page's meta data
+            price = parse_price(_meta(page, "product:price:amount", "og:price:amount"))
+            list_price = list_price or price
         if price is not None and re.search(r"out ?of ?stock|sold ?out", _meta(page, "product:availability", "og:availability") or "", re.I):
             return Parsed(None, title, image, unavailable=True, list_price=list_price, reason="sold_out")
     return Parsed(price, title, image, list_price=list_price, retiring=bool(LEGO_RETIRING_RE.search(head)))
