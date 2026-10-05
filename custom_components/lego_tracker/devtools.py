@@ -12,7 +12,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .const import RETAILERS
 from .i18n import T
-from .parsers import parse_page, retailer_from_url
+from .parsers import lego_number, parse_page, retailer_from_url
 
 RESETS = ("sitemaps", "relay_searched", "shop_js", "cooldowns", "manual", "trace", "suspects", "compare_debug")
 OUTLIER_FACTOR = 3.0          # a history point more than 3× above or below the median of that link
@@ -86,8 +86,26 @@ async def fetch(coord: Any, url: str, set_number: str | None = None) -> dict[str
     t0 = time.time()
     status, page, error = await coord.fetcher.get_page(rid, url, force=True, note_block=False)
     out = parse(rid, page or "", url, set_number) if page else {"retailer": rid}
+    if page and rid == "lego_com":
+        out["lego"] = lego_summary(page, set_number or lego_number(url))
     return {**out, "status": status, "error": error, "ms": int((time.time() - t0) * 1000),
             "final_url": coord.fetcher.final_url.get(rid), "head": (page or "")[:1500]}
+
+
+def lego_summary(page: str, num: str | None) -> dict[str, Any]:
+    """Where a LEGO.com page keeps its product data, to see quickly why a price is (not) read."""
+    from .parsers import _jsonld_blocks, _lego_own_page, _meta, _walk
+
+    nodes = [n for b in _jsonld_blocks(page) for n in _walk(b)
+             if "Product" in (n.get("@type") if isinstance(n.get("@type"), list) else [n.get("@type")])]
+    escaped = '\\"centAmount\\"' in page or '\\"productCode\\"' in page
+    state = page.replace('\\"', '"') if escaped else page
+    return {"own_page": _lego_own_page(page, num), "escaped_state": escaped,
+            "jsonld_products": [{k: str(n.get(k))[:80] for k in ("name", "sku", "mpn", "productID", "url") if n.get(k)}
+                                | {"offers": str(n.get("offers"))[:200]} for n in nodes][:5],
+            "meta_price": _meta(page, "product:price:amount", "og:price:amount"),
+            "product_codes": re.findall(r'"productCode"\s*:\s*"(\d+)"', state)[:10],
+            "cent_amounts": [state[max(0, m.start() - 120):m.end() + 20] for m in re.finditer(r'"centAmount"', state)][:4]}
 
 
 def outliers(coord: Any, apply: bool = False) -> list[dict[str, Any]]:

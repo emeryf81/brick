@@ -593,3 +593,30 @@ def test_wrong_product_only_for_clearly_other_products():
     assert wp("LEGO Architecture New York", "21028") is None                   # number missing: only a doubt
     assert wp("Led-verlichting voor LEGO 21028", "21028")                         # accessory
     assert wp(None, "10281") is None
+
+
+def test_parse_lego_new_page_layouts():
+    """LEGO.com pages without the set number in JSON-LD, with the page state as escaped JSON, or with only
+    meta data still give the set's own price, never a recommended product's."""
+    canon = '<link rel="canonical" href="https://www.lego.com/nl-be/product/the-lego-van-60500">'
+    # JSON-LD sku is LEGO's own article number; the only Product on the set's own page is the set
+    ld = ('<script type="application/ld+json">{"@type":"Product","name":"De LEGO® bestelwagen","sku":"6570123",'
+          '"offers":{"@type":"Offer","price":"29.99","priceCurrency":"EUR","availability":"https://schema.org/InStock"}}</script>')
+    p = parsers.parse_page("lego_com", f"<html><head>{canon}{ld}</head></html>", "60500")
+    assert p.price == 29.99 and p.title == "De LEGO® bestelwagen" and not p.unavailable
+    # the same JSON-LD on another set's page is not ours
+    other = canon.replace("the-lego-van-60500", "police-car-60400")
+    assert parsers.parse_page("lego_com", f"<html><head>{other}{ld}</head></html>", "60500").price is None
+    # page state as escaped JSON (Next.js app router), with a recommended product first
+    rsc = ('<script>self.__next_f.push([1,"{\\"recs\\":[{\\"productCode\\":\\"40646\\",\\"price\\":{\\"formattedAmount\\":\\"€ 14,99\\",'
+           '\\"centAmount\\":1499}}],\\"product\\":{\\"productCode\\":\\"60500\\",\\"price\\":{\\"formattedAmount\\":\\"€ 29,99\\",'
+           '\\"centAmount\\":2999},\\"listPrice\\":{\\"centAmount\\":2999},\\"availabilityStatus\\":\\"E_AVAILABLE\\"}}"])</script>')
+    p = parsers.parse_page("lego_com", f"<html><head><title>De LEGO® bestelwagen 60500</title></head><body>{rsc}</body></html>", "60500")
+    assert p.price == 29.99 and p.list_price == 29.99 and not p.unavailable
+    sold = rsc.replace("E_AVAILABLE", "H_OUT_OF_STOCK")
+    p = parsers.parse_page("lego_com", f"<html><body>{sold}</body></html>", "60500")
+    assert p.price is None and p.unavailable and p.list_price == 29.99
+    # only meta data on the set's own page
+    meta = f'<html><head>{canon}<meta property="product:price:amount" content="29.99"><meta property="og:title" content="De LEGO® bestelwagen"></head></html>'
+    assert parsers.parse_page("lego_com", meta, "60500").price == 29.99
+    assert parsers.parse_page("lego_com", meta.replace("the-lego-van-60500", "police-car-60400"), "60500").price is None
