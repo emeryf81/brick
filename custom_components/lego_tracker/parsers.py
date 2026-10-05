@@ -337,20 +337,27 @@ def _lego_window(page: str, num: str | None, ld_price: float | None, strict: boo
 
 def _lego_text_status(page: str, num: str | None) -> str | None:
     """'discontinued' ("Product uit handel") or 'sold_out' ("Tijdelijk niet beschikbaar") from the words you see
-    on a LEGO.com page, only when they are about this set: in the product section of its own page (from its
-    title on, before the recommendations), or with this set's number as the number closest to the words (a
-    search page lists other sets too). Words in scripts don't count (translation bundles hold them on every page)."""
+    on a LEGO.com page, only when they are about this set: on its own page only in its product block (title to
+    the next heading, before the recommendations); on other pages (search) when this set's number is the number
+    closest to the words. Words in scripts don't count (translation bundles hold them on every page)."""
     if not num:
         return None
     body = re.sub(r"<script\b.*?</script>|<style\b.*?</style>|<noscript\b.*?</noscript>", " ", page[:2000000], flags=re.S | re.I)
 
     def text(html: str) -> str:
         return htmllib.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html)))
-    if _lego_own_page(page, num) and (h1 := re.search(r"<h1\b", body, re.I)):
-        section = text(body[h1.start():])[:1500]           # the product's own block: title, price, buy box
+    if _lego_own_page(page, num):
+        # the set's own page: only its product block counts, from its title (h1) to the next heading (h2, e.g.
+        # "Aanbevolen voor jou") or the page's aside / footer; without a title nothing on it counts
+        h1 = re.search(r"<h1\b", body, re.I)
+        if not h1:
+            return None
+        end = re.compile(r"<(?:h2|aside|footer)\b", re.I).search(body, h1.end())
+        section = text(body[h1.start():end.start() if end else len(body)])[:3000]
         for rx, why in ((GONE_WORDS_RE, "discontinued"), (SOLD_OUT_WORDS_RE, "sold_out")):
             if rx.search(section):
                 return why
+        return None
     full = text(body)
     for rx, why in ((GONE_WORDS_RE, "discontinued"), (SOLD_OUT_WORDS_RE, "sold_out")):
         for m in rx.finditer(full):

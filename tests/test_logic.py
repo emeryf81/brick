@@ -666,6 +666,10 @@ def test_parse_lego_status_words_in_the_product_section_and_meta():
     # unpriced own page, a recommendation far below says "Uit de handel": not ours
     p = parsers.parse_page("lego_com", f"<html><head>{canon}</head><body><h1>De LEGO bestelwagen</h1>{recs}</body></html>", "60500")
     assert p.reason is None
+    # also right after a short product block, and with our number in the recommendation text
+    short = '<section><h2>Vaak samen gekocht</h2><div>Kasteel 10305 / De LEGO bestelwagen 60500 <span>Uit de handel</span></div></section>'
+    p = parsers.parse_page("lego_com", f"<html><head>{canon}</head><body><h1>De LEGO bestelwagen</h1><p>€ 29,99</p>{short}</body></html>", "60500")
+    assert p.reason is None
     # priced own page, the product section says "Tijdelijk niet beschikbaar": no new price
     ld = ('<script type="application/ld+json">{"@type":"Product","name":"De LEGO bestelwagen","sku":"60500",'
           '"offers":{"price":"29.99"}}</script>')
