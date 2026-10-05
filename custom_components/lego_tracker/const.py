@@ -32,6 +32,7 @@ CONF_DEAL_FILTER = "deal_filter"           # Deals → Settings: themes switched
 DEAL_FILTER_DEFAULT = {"themes_off": [], "min_price": None, "max_price": None, "min_discount": None,
                        "min_pieces": None, "max_pieces": None, "skip_owned": False, "skip_retired": False}
 CONF_TICKER = "ticker"                      # bottom ticker: {"watch": bool, "deals": bool, "news": bool, "max_*": int}
+LEGO_RETIRED_REST = 30 * 86400             # a LEGO.com page that says "out of the range" is fetched again after a month
 TICKER_RELOAD = 600                        # the ticker's content (deals, watchlist, news, solved errors) is reloaded every 10 minutes
 TICKER_GOOD_SCORE = 45                     # a watched set shows in the ticker from this deal score (🔥 good price)
 TICKER_DEFAULT = {"watch": True, "deals": True, "news": True, "max_watch": 3, "max_deals": 3, "max_news": 3, "shuffle": True}

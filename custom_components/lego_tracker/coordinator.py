@@ -25,7 +25,7 @@ from .client import DOMAIN_GAP, SEARCH_GAP, Fetcher, lookup_metadata
 from .const import (
     CONF_COMPARE, CONF_COMPARE_OLD, CONF_BLOCK_WORDS, CYCLE_CHOICES, CONF_WATCH_CYCLE, WATCH_CYCLE_CHOICES, WATCH_LIMIT,
     FULL_REFRESH_GAP, MANUAL_GAP, CONF_DEAL_MIN_SCORE, CONF_DEAL_ATL, CONF_DEAL_TARGET, DEFAULT_DEAL_MIN_SCORE, CONF_DEV_FIXED_TIMES, CONF_DEV_FULL_REFRESH, CONF_DEV_FREE_CYCLE, CONF_DEV_WATCH_UNLIMITED, CONF_ALLOW_WORDS, CONF_COMPARE_SOURCES, COMPARE_FRESH_HOURS, COMPARE_MISSING_HOURS, COMPARE_NET_ERRORS, COMPARE_PAUSE_HOURS,
-    CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET, CONF_BOL_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS, CONF_MARKET, CONF_TICKER, TICKER_DEFAULT, TICKER_GOOD_SCORE, TICKER_RELOAD, CONF_DEAL_FILTER, DEAL_FILTER_DEFAULT, CONF_SCAN,
+    CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET, CONF_BOL_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS, CONF_MARKET, CONF_TICKER, TICKER_DEFAULT, TICKER_GOOD_SCORE, TICKER_RELOAD, LEGO_RETIRED_REST, CONF_DEAL_FILTER, DEAL_FILTER_DEFAULT, CONF_SCAN,
     CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_LANGUAGE, CONF_REFRESH_MODE, CONF_SPREAD_HOURS, DEFAULT_REFRESH_MODE, DEFAULT_SPREAD_HOURS, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, CONF_CUSTOM_SHOPS, CONF_DIGEST_TIME, CONF_NO_AUTOPAUSE, CONF_SHOP_SEARCH, CONF_VALUE_SOURCE, DEFAULT_DIGEST_TIME, GENERIC_SHOPS, CONF_DISCOUNT_THRESHOLD, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
     DEFAULT_REFRESH_TIMES, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS, DEFAULT_RETAILERS,
     DOMAIN, EVENT_JOB_DONE, EVENT_HIGH_DISCOUNT, EVENT_NEW_LOW, EVENT_TARGET_HIT, RETAILERS, STORAGE_KEY,
@@ -1252,7 +1252,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 _LOGGER.exception("Comparison sites failed for %s", num)
         before = self.compute()["statuses"].get(num, {})
         offers = [(rid, o) for rid, o in self.store["offers"].get(num, {}).items()
-                  if (rid in live or (rid in bw_prices and rid in self.retailers)) and o.get("url") and o.get("link_status") != "rejected"]
+                  if (rid in live or (rid in bw_prices and rid in self.retailers)) and o.get("url") and o.get("link_status") != "rejected"
+                  and (force or not self._lego_retired_rest(rid, o))]
         results = await asyncio.gather(*(self._fetch(rid, o, num, force) for rid, o in offers))
         counts = {"updated": 0, "errors": 0, "skipped": 0}
         shop_results: dict[str, dict[str, Any]] = {}
@@ -1785,6 +1786,13 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         lego_due = lego_missing and time.time() - s.get("lego_checked", 0) > 7 * 86400
         return lego_due or self._name_replaceable(s) or not all(s.get(k) for k in ("theme", "year", "pieces", "image"))
 
+    @staticmethod
+    def _lego_retired_rest(rid: str, offer: dict[str, Any]) -> bool:
+        """LEGO.com said the set is out of the range ("Product uit handel"): its page is not fetched again for
+        a month (no prices to get there); ↻ in the set still fetches it."""
+        return rid == "lego_com" and offer.get("unavailable") == "discontinued" \
+            and time.time() - (offer.get("last_checked") or 0) < LEGO_RETIRED_REST
+
     def _lego_hold(self, num: str, offer: dict[str, Any], parsed: Any) -> tuple[float, str] | None:
         """LEGO.com shows the set as temporarily unavailable (sold out, not retired): no new price is taken.
         The LEGO price you had stays ('kept'); without one, the regular price (RRP) of the set is used: the
@@ -1841,6 +1849,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 s["lego_checked"] = time.time()
                 return False
             offer = offers["lego_com"] = {"url": url, "history": [], "found": time.time()}
+        if not force and self._lego_retired_rest("lego_com", offer):
+            return False                                   # out of the range: nothing to read there this month
         parsed, error = await self.fetcher.fetch_offer("lego_com", url, force=force)
         if error and error.startswith("paused"):
             return False
@@ -1856,6 +1866,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             record_price(offer, fetched, error=error)
         if held:
             offer["unavailable"] = "sold_out"
+        elif parsed and parsed.unavailable and parsed.reason and not error:
+            offer["unavailable"] = parsed.reason           # e.g. "Product uit handel": a warning, no price
         elif parsed and parsed.price:
             offer.pop("unavailable", None)
         if parsed and (parsed.price or held):

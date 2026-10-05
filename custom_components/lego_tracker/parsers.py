@@ -36,7 +36,9 @@ GONE_WORDS_RE = re.compile(r"niet meer (?:leverbaar|verkrijgbaar|beschikbaar|in 
                            r"nicht mehr (?:lieferbar|erhältlich|verfügbar)|aus dem sortiment|plus disponible|"
                            r"n'est plus (?:vendu|disponible|fabriqué)|ya no está disponible|descatalogado", re.I)
 SOLD_OUT_WORDS_RE = re.compile(r"(?:tijdelijk )?uitverkocht|niet (?:op voorraad|leverbaar)|out of stock|sold out|"
-                               r"currently unavailable|ausverkauft|nicht (?:vorrätig|lieferbar|auf lager)|épuisé|"
+                               r"(?:tijdelijk|momenteel) niet (?:beschikbaar|verkrijgbaar)|temporarily (?:unavailable|out of stock)|"
+                               r"currently unavailable|ausverkauft|nicht (?:vorrätig|lieferbar|auf lager)|"
+                               r"vorübergehend nicht (?:verfügbar|lieferbar)|temporairement (?:indisponible|en rupture)|épuisé|"
                                r"rupture de stock|agotado|sin stock", re.I)
 
 
@@ -329,6 +331,29 @@ def _lego_window(page: str, num: str | None, ld_price: float | None) -> str:
     return page[:400000]
 
 
+def _lego_text_status(page: str, num: str | None, priced: bool) -> str | None:
+    """'discontinued' ("Product uit handel") or 'sold_out' ("Tijdelijk niet beschikbaar") from the words you see
+    on a LEGO.com page, only when they belong to this set: next to its number (a search page lists other sets
+    too), or anywhere on its own page when the product data has no price (a recommended set's badge must not
+    take away a price you can pay). Words in scripts don't count (translation bundles hold them on every page)."""
+    if not num:
+        return None
+    text = re.sub(r"<script\b.*?</script>|<style\b.*?</style>|<noscript\b.*?</noscript>", " ", page[:2000000], flags=re.S | re.I)
+    text = htmllib.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text)))
+    own = not priced and _lego_own_page(page, num)
+    for rx, why in ((GONE_WORDS_RE, "discontinued"), (SOLD_OUT_WORDS_RE, "sold_out")):
+        for m in rx.finditer(text):
+            if own:
+                return why
+            # the set number closest to the words is the set they are about (a search page has several tiles)
+            lo = max(0, m.start() - 400)
+            near = [(min(abs(n.start() + lo - m.start()), abs(n.start() + lo - m.end())), n.group(0))
+                    for n in re.finditer(r"(?<![\d.,€$])\d{4,7}(?![\d.,%])", text[lo:m.end() + 400])]
+            if near and min(near)[1] == num:
+                return why
+    return None
+
+
 def parse_lego(page: str, num: str | None = None) -> Parsed:
     """LEGO.com product page: JSON-LD + the Next.js/Apollo state (centAmount prices). Only the prices of the
     product itself count; a sold-out set gives its regular price (RRP) but no price to buy at."""
@@ -348,6 +373,14 @@ def parse_lego(page: str, num: str | None = None) -> Parsed:
     head = win if num else page[:400000]
     sold_out = in_stock is False or bool(LEGO_SOLD_OUT_RE.search(win[:20000] if num else ""))
     gone = bool(LEGO_GONE_RE.search(head))
+    # what the page says in words ("Product uit handel", "Tijdelijk niet beschikbaar"): then no price is taken
+    said = _lego_text_status(page, num, price is not None) if not gone else None
+    if said == "discontinued":
+        gone = True
+    elif said == "sold_out":
+        sold_out = True
+    if gone:
+        price = None
     if sold_out or (price is None and gone):
         return Parsed(None, title, image, unavailable=True, list_price=list_price, retiring=bool(LEGO_RETIRING_RE.search(head)),
                       reason="discontinued" if gone else "sold_out")

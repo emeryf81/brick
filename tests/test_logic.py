@@ -620,3 +620,27 @@ def test_parse_lego_new_page_layouts():
     meta = f'<html><head>{canon}<meta property="product:price:amount" content="29.99"><meta property="og:title" content="De LEGO® bestelwagen"></head></html>'
     assert parsers.parse_page("lego_com", meta, "60500").price == 29.99
     assert parsers.parse_page("lego_com", meta.replace("the-lego-van-60500", "police-car-60400"), "60500").price is None
+
+
+def test_parse_lego_words_on_the_page_stop_the_price():
+    """"Product uit handel" / "Tijdelijk niet beschikbaar" for this set: no price is taken (a warning with the
+    reason); the same words next to another set on a search page don't count."""
+    canon = '<link rel="canonical" href="https://www.lego.com/nl-be/product/train-station-60050">'
+    retired = f"<html><head>{canon}<title>Treinstation</title></head><body><h1>Treinstation</h1><span>Product uit handel</span></body></html>"
+    p = parsers.parse_page("lego_com", retired, "60050")
+    assert p.price is None and p.unavailable and p.reason == "discontinued"
+    # search page: the tile of 60050 says it, another set is for sale
+    search = ('<html><body><li><a href="/nl-be/product/train-station-60050">Treinstation 60050</a><span>Product uit handel</span></li>'
+              '<li><a href="/nl-be/product/the-lego-van-60500">De LEGO bestelwagen 60500</a><span>€ 29,99</span></li></body></html>')
+    assert parsers.parse_page("lego_com", search, "60050").reason == "discontinued"
+    assert parsers.parse_page("lego_com", search, "60500").reason is None
+    # temporarily unavailable next to the number: no new price
+    temp = '<html><body><h1>De LEGO bestelwagen</h1><p>Artikel 60500</p><p>Tijdelijk niet beschikbaar</p></body></html>'
+    p = parsers.parse_page("lego_com", temp, "60500")
+    assert p.price is None and p.unavailable and p.reason == "sold_out"
+    # a recommended set's badge on a page where this set has a price: the price stays
+    ld = ('<script type="application/ld+json">{"@type":"Product","name":"De LEGO bestelwagen","sku":"60500",'
+          '"offers":{"price":"29.99","availability":"https://schema.org/InStock"}}</script>')
+    rec = '<div class="recs"><a href="/nl-be/product/x-10305">Kasteel</a><span>Uit de handel</span></div>' + "x" * 1000
+    page = f'<html><head>{canon.replace("train-station-60050", "the-lego-van-60500")}{ld}</head><body>{"y" * 1000}{rec}</body></html>'
+    assert parsers.parse_page("lego_com", page, "60500").price == 29.99

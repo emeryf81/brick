@@ -2868,3 +2868,20 @@ async def test_lego_lookup_with_your_own_price_asks_instead_of_overwriting(hass:
         await c.lego_lookup("10281", force=True)
     assert o["manual_price"]["price"] == 45 and o["auto_price"] == 39.99 and o["price_choice"]["price"] == 39.99
     assert c.compute()["statuses"]["10281"]["best_price"] == 45
+
+
+async def test_lego_out_of_the_range_takes_no_price_and_rests(hass: HomeAssistant, entry, no_network):
+    """LEGO.com says "Product uit handel": no price, a warning (not an open error), and the page is not fetched
+    again for a month unless you ask for it."""
+    c = await _setup(hass, entry)
+    await c.add_set("60050", name="Treinstation", discover=False)
+    o = c.store["offers"].setdefault("60050", {})["lego_com"] = {"url": "https://www.lego.com/nl-be/product/60050", "history": []}
+    no_network.return_value = (Parsed(None, "Treinstation", unavailable=True, reason="discontinued"), None)
+    await c.refresh_set("60050", ["lego_com"])
+    assert o["unavailable"] == "discontinued" and not o["available"] and o["error"] is None
+    assert "60050|lego_com" not in c.open_error_keys()
+    calls = no_network.call_count
+    await c.refresh_set("60050", ["lego_com"])
+    assert no_network.call_count == calls                    # resting: not fetched again
+    await c.refresh_set("60050", ["lego_com"], force=True)
+    assert no_network.call_count == calls + 1               # ↻ in the set still fetches it
