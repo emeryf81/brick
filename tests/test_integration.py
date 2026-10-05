@@ -2887,6 +2887,10 @@ async def test_lego_out_of_the_range_takes_no_price_and_rests(hass: HomeAssistan
     assert no_network.call_count == calls + 1               # ↻ in the set still fetches it
     await c.refresh_set("60050", ["lego_com"], wake=True)
     assert no_network.call_count == calls + 2               # a forced round (service force: true) too
+    no_network.return_value = (None, "HTTP 503")            # a forced round that fails keeps "out of the range"
+    await c.refresh_set("60050", ["lego_com"], force=True)
+    assert o["unavailable"] == "discontinued" and c._lego_retired_rest("lego_com", o)
+    no_network.return_value = (Parsed(None, "Treinstation", unavailable=True, reason="discontinued"), None)
     # a comparison site still listing a LEGO.com price doesn't undo "out of the range"
     with patch.object(type(c), "compare_enabled", property(lambda self: True)), \
          patch.object(c, "compare_refresh", AsyncMock()), \

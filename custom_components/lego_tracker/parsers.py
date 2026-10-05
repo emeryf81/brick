@@ -279,11 +279,12 @@ def _lego_own_page(page: str, num: str | None) -> bool:
     return any(re.search(rf"/product/(?:[^/?#]*?-)?{re.escape(num)}/?(?:[?#]|$)", u) for u in urls)
 
 
-def _lego_product(page: str, num: str | None) -> tuple[float | None, str | None, str | None, bool | None]:
-    """(price, name, image, in stock) of the page's own product in JSON-LD: the node for this set number,
-    also when it is sold out (then its price is the regular price, not a price you can pay now).
+def _lego_product(page: str, num: str | None) -> tuple[float | None, str | None, str | None, bool | None, bool]:
+    """(price, name, image, in stock, ambiguous) of the page's own product in JSON-LD: the node for this set
+    number, also when it is sold out (then its price is the regular price, not a price you can pay now).
     LEGO.com does not always put the set number in it (the sku can be its own article number): then the
-    only Product on the set's own page (canonical URL with the number) is the set."""
+    only Product on the set's own page (canonical URL with the number) is the set. ambiguous: several such
+    Products, so it can't tell which one is the set (and no price without the set's own code is safe)."""
     nodes = []
     for block in _jsonld_blocks(page):
         for node in _walk(block):
@@ -300,8 +301,10 @@ def _lego_product(page: str, num: str | None) -> tuple[float | None, str | None,
         # LEGO's own article numbers have 7 digits); more than one such Product → can't tell which is the set
         bare = [n for n in nodes if not re.search(r"(?<!\d)\d{4,6}(?!\d)", ids(n))]
         own = bare[0] if len(bare) == 1 else None
+        if len(bare) > 1:
+            return None, None, None, None, True
     if own is None:
-        return None, None, None, None                  # only other products (e.g. recommendations)
+        return None, None, None, None, False           # only other products (e.g. recommendations)
     prices, stock = [], None
     for off in _walk(own.get("offers") or []):
         if (p := parse_price(off.get("price") or off.get("lowPrice"))) is not None:
@@ -310,13 +313,15 @@ def _lego_product(page: str, num: str | None) -> tuple[float | None, str | None,
             stock = (stock or False) or not ("OutOfStock" in avail or "SoldOut" in avail or "Discontinued" in avail)
     img = own.get("image")
     img = img[0] if isinstance(img, list) and img else img
-    return (min(prices) if prices else None, own.get("name"), img if isinstance(img, str) else None, stock)
+    return (min(prices) if prices else None, own.get("name"), img if isinstance(img, str) else None, stock, False)
 
 
-def _lego_window(page: str, num: str | None, ld_price: float | None, strict: bool = False) -> str:
+def _lego_window(page: str, num: str | None, ld_price: float | None, strict: bool = False,
+                 scoped: bool = False) -> str:
     """The part of the page state that belongs to this product: around its price (the one JSON-LD gives),
     or around its product code. A page also lists recommended products with their own prices.
-    strict: only prices inside the product's own data (no nearest price before its code)."""
+    strict: only prices inside the product's own data (no nearest price before its code).
+    scoped: no page-wide prices when the page has no code for this set (it lists several unnamed products)."""
     if ld_price is not None:
         m = re.search(rf'"price"\s*:\s*\{{[^{{}}]*?"centAmount"\s*:\s*{round(ld_price * 100)}\b', page)
         if m:
@@ -332,7 +337,7 @@ def _lego_window(page: str, num: str | None, ld_price: float | None, strict: boo
             before = page[start:m.start()]
             last = before.rfind('"price"')                 # else the nearest price just before its code
             return before[last:] + page[m.start():end] if last >= 0 else page[m.start():end]
-        if re.search(r'"productCode"\s*:\s*"\d', page):
+        if scoped or re.search(r'"productCode"\s*:\s*"\d', page):
             return ""                                      # only other products' codes: none of these prices is ours
     return page[:400000]
 
@@ -378,10 +383,10 @@ def parse_lego(page: str, num: str | None = None) -> Parsed:
     product itself count; a sold-out set gives its regular price (RRP) but no price to buy at."""
     if "Access Denied" in page[:3000] or "captcha" in page[:5000].lower():
         return Parsed(None, blocked=True)
-    ld_price, ld_name, ld_image, in_stock = _lego_product(page, num)
+    ld_price, ld_name, ld_image, in_stock, ambiguous = _lego_product(page, num)
     # newer pages carry the page state as escaped JSON inside scripts (\"centAmount\":2999): read it unescaped
     state = page.replace('\\"', '"') if '\\"centAmount\\"' in page or '\\"productCode\\"' in page else page
-    win = _lego_window(state, num, ld_price, strict=state is not page)
+    win = _lego_window(state, num, ld_price, strict=state is not page, scoped=ambiguous)
     cents = {k: int(m.group(1)) / 100 for k, rx in LEGO_CENTS_RE.items() if (m := rx.search(win))}
     price = ld_price or cents.get("price")
     list_price = cents.get("listPrice") or cents.get("originalPrice") or price

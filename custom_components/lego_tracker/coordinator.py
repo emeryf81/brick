@@ -1322,8 +1322,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._set_unavailable(offer, why)
             elif price is not None:
                 self._set_unavailable(offer, None)
-            elif error:
-                offer.pop("unavailable", None)             # keeps `discontinued_at`: a failed fetch confirms nothing
+            elif error and offer.get("unavailable") != "discontinued":
+                offer.pop("unavailable", None)             # out of the range stays: a failed fetch confirms nothing
             if self.job and self.job.get("running"):
                 st = self.job["shops"].setdefault(rid, {"ok": 0, "err": 0})
                 st["err" if error else "ok"] += 1
