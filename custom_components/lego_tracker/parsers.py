@@ -386,7 +386,7 @@ def parse_lego(page: str, num: str | None = None) -> Parsed:
     ld_price, ld_name, ld_image, in_stock, ambiguous = _lego_product(page, num)
     # newer pages carry the page state as escaped JSON inside scripts (\"centAmount\":2999): read it unescaped
     state = page.replace('\\"', '"') if '\\"centAmount\\"' in page or '\\"productCode\\"' in page else page
-    win = _lego_window(state, num, ld_price, strict=state is not page, scoped=ambiguous)
+    win = _lego_window(state, num, ld_price, strict=state is not page or ambiguous, scoped=ambiguous)
     cents = {k: int(m.group(1)) / 100 for k, rx in LEGO_CENTS_RE.items() if (m := rx.search(win))}
     price = ld_price or cents.get("price")
     list_price = cents.get("listPrice") or cents.get("originalPrice") or price
