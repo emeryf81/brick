@@ -608,6 +608,10 @@ def test_parse_lego_new_page_layouts():
     rec = '<script type="application/ld+json">{"@type":"Product","name":"Politiewagen","sku":"60400","offers":{"price":"9.99"}}</script>'
     p = parsers.parse_page("lego_com", f"<html><head>{canon}{rec}{ld}</head></html>", "60500")
     assert p.price == 29.99
+    # two Products without a set number (one a recommendation): can't tell which is the set, so no JSON-LD price
+    rec2 = ('<script type="application/ld+json">{"@type":"Product","name":"Cadeaukaart","sku":"5005123",'
+            '"offers":{"price":"9.99"}}</script>')
+    assert parsers.parse_page("lego_com", f"<html><head>{canon}{rec2}{ld}</head></html>", "60500").price is None
     # JSON-LD price without stock status, availability meta says sold out: no price to buy at
     oos = '<meta property="product:availability" content="out of stock">'
     p = parsers.parse_page("lego_com", f"<html><head>{canon}{oos}{ld.replace(',\"availability\":\"https://schema.org/InStock\"', '')}</head></html>", "60500")

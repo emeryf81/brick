@@ -296,9 +296,10 @@ def _lego_product(page: str, num: str | None) -> tuple[float | None, str | None,
         return " ".join(str(node.get(k) or "") for k in ("sku", "productID", "mpn", "name", "url"))
     own = next((n for n in nodes if not num or re.search(rf"(?<!\d){re.escape(num)}(?!\d)", ids(n))), None)
     if own is None and nodes and _lego_own_page(page, num):
-        # the set's own page: the first Product that carries no other set's number (a recommendation does;
-        # LEGO's own article numbers have 7 digits)
-        own = next((n for n in nodes if not re.search(r"(?<!\d)\d{4,6}(?!\d)", ids(n))), None)
+        # the set's own page: the one Product that carries no other set's number (a recommendation does;
+        # LEGO's own article numbers have 7 digits); more than one such Product → can't tell which is the set
+        bare = [n for n in nodes if not re.search(r"(?<!\d)\d{4,6}(?!\d)", ids(n))]
+        own = bare[0] if len(bare) == 1 else None
     if own is None:
         return None, None, None, None                  # only other products (e.g. recommendations)
     prices, stock = [], None
