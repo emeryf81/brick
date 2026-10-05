@@ -335,24 +335,29 @@ def _lego_window(page: str, num: str | None, ld_price: float | None, strict: boo
     return page[:400000]
 
 
-def _lego_text_status(page: str, num: str | None, priced: bool) -> str | None:
+def _lego_text_status(page: str, num: str | None) -> str | None:
     """'discontinued' ("Product uit handel") or 'sold_out' ("Tijdelijk niet beschikbaar") from the words you see
-    on a LEGO.com page, only when they belong to this set: next to its number (a search page lists other sets
-    too), or anywhere on its own page when the product data has no price (a recommended set's badge must not
-    take away a price you can pay). Words in scripts don't count (translation bundles hold them on every page)."""
+    on a LEGO.com page, only when they are about this set: in the product section of its own page (from its
+    title on, before the recommendations), or with this set's number as the number closest to the words (a
+    search page lists other sets too). Words in scripts don't count (translation bundles hold them on every page)."""
     if not num:
         return None
-    text = re.sub(r"<script\b.*?</script>|<style\b.*?</style>|<noscript\b.*?</noscript>", " ", page[:2000000], flags=re.S | re.I)
-    text = htmllib.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text)))
-    own = not priced and _lego_own_page(page, num)
-    for rx, why in ((GONE_WORDS_RE, "discontinued"), (SOLD_OUT_WORDS_RE, "sold_out")):
-        for m in rx.finditer(text):
-            if own:
+    body = re.sub(r"<script\b.*?</script>|<style\b.*?</style>|<noscript\b.*?</noscript>", " ", page[:2000000], flags=re.S | re.I)
+
+    def text(html: str) -> str:
+        return htmllib.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html)))
+    if _lego_own_page(page, num) and (h1 := re.search(r"<h1\b", body, re.I)):
+        section = text(body[h1.start():])[:1500]           # the product's own block: title, price, buy box
+        for rx, why in ((GONE_WORDS_RE, "discontinued"), (SOLD_OUT_WORDS_RE, "sold_out")):
+            if rx.search(section):
                 return why
-            # the set number closest to the words is the set they are about (a search page has several tiles)
+    full = text(body)
+    for rx, why in ((GONE_WORDS_RE, "discontinued"), (SOLD_OUT_WORDS_RE, "sold_out")):
+        for m in rx.finditer(full):
+            # the set number closest to the words is the set they are about
             lo = max(0, m.start() - 400)
             near = [(min(abs(n.start() + lo - m.start()), abs(n.start() + lo - m.end())), n.group(0))
-                    for n in re.finditer(r"(?<![\d.,€$])\d{4,7}(?![\d.,%])", text[lo:m.end() + 400])]
+                    for n in re.finditer(r"(?<![\d.,€$])\d{4,7}(?![\d.,%])", full[lo:m.end() + 400])]
             if near and min(near)[1] == num:
                 return why
     return None
@@ -378,22 +383,27 @@ def parse_lego(page: str, num: str | None = None) -> Parsed:
     sold_out = in_stock is False or bool(LEGO_SOLD_OUT_RE.search(win[:20000] if num else ""))
     gone = bool(LEGO_GONE_RE.search(head))
     # what the page says in words ("Product uit handel", "Tijdelijk niet beschikbaar"): then no price is taken
-    said = _lego_text_status(page, num, price is not None) if not gone else None
+    said = _lego_text_status(page, num) if not gone else None
     if said == "discontinued":
         gone = True
     elif said == "sold_out":
         sold_out = True
     if gone:
         price = None
+    own_page = _lego_own_page(page, num)
+    avail = (_meta(page, "product:availability", "og:availability") or "") if own_page else ""
+    if re.search(r"discontinued|retired", avail, re.I):     # the page's own meta data says it in so many words
+        gone, price = True, None
+    elif re.search(r"out ?of ?stock|sold ?out", avail, re.I):
+        sold_out = True
     if sold_out or (price is None and gone):
+        if own_page and not list_price:                     # the regular price, also when it can't be bought now
+            list_price = parse_price(_meta(page, "product:price:amount", "og:price:amount"))
         return Parsed(None, title, image, unavailable=True, list_price=list_price, retiring=bool(LEGO_RETIRING_RE.search(head)),
                       reason="discontinued" if gone else "sold_out")
-    if _lego_own_page(page, num):
-        if price is None:                                   # the set's own page: its price in the page's meta data
-            price = parse_price(_meta(page, "product:price:amount", "og:price:amount"))
-            list_price = list_price or price
-        if price is not None and re.search(r"out ?of ?stock|sold ?out", _meta(page, "product:availability", "og:availability") or "", re.I):
-            return Parsed(None, title, image, unavailable=True, list_price=list_price, reason="sold_out")
+    if own_page and price is None:                          # the set's own page: its price in the page's meta data
+        price = parse_price(_meta(page, "product:price:amount", "og:price:amount"))
+        list_price = list_price or price
     return Parsed(price, title, image, list_price=list_price, retiring=bool(LEGO_RETIRING_RE.search(head)))
 
 

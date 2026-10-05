@@ -656,3 +656,24 @@ def test_parse_lego_words_on_the_page_stop_the_price():
     rec = '<div class="recs"><a href="/nl-be/product/x-10305">Kasteel</a><span>Uit de handel</span></div>' + "x" * 1000
     page = f'<html><head>{canon.replace("train-station-60050", "the-lego-van-60500")}{ld}</head><body>{"y" * 1000}{rec}</body></html>'
     assert parsers.parse_page("lego_com", page, "60500").price == 29.99
+
+
+def test_parse_lego_status_words_in_the_product_section_and_meta():
+    """Status words count in the set's own product section (from its title), not in recommendations further
+    down; the page's availability meta data decides before its meta price is used."""
+    canon = '<link rel="canonical" href="https://www.lego.com/nl-be/product/the-lego-van-60500">'
+    recs = "<section><h2>Aanbevolen</h2>" + "<p>tekst</p>" * 300 + '<div>Kasteel<span>Uit de handel</span></div></section>'
+    # unpriced own page, a recommendation far below says "Uit de handel": not ours
+    p = parsers.parse_page("lego_com", f"<html><head>{canon}</head><body><h1>De LEGO bestelwagen</h1>{recs}</body></html>", "60500")
+    assert p.reason is None
+    # priced own page, the product section says "Tijdelijk niet beschikbaar": no new price
+    ld = ('<script type="application/ld+json">{"@type":"Product","name":"De LEGO bestelwagen","sku":"60500",'
+          '"offers":{"price":"29.99"}}</script>')
+    p = parsers.parse_page("lego_com", f"<html><head>{canon}{ld}</head><body><h1>De LEGO bestelwagen</h1><p>Tijdelijk niet beschikbaar</p></body></html>", "60500")
+    assert p.price is None and p.reason == "sold_out" and p.list_price == 29.99
+    # availability meta: discontinued with a meta price gives no price; out of stock without any price is a reason
+    meta = '<meta property="product:price:amount" content="29.99"><meta property="product:availability" content="{a}">'
+    p = parsers.parse_page("lego_com", f"<html><head>{canon}{meta.format(a='discontinued')}</head></html>", "60500")
+    assert p.price is None and p.reason == "discontinued"
+    p = parsers.parse_page("lego_com", f"<html><head>{canon}{meta.format(a='out of stock')}</head></html>", "60500")
+    assert p.price is None and p.reason == "sold_out" and p.list_price == 29.99

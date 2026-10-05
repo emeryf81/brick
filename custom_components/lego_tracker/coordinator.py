@@ -1265,7 +1265,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             via = None
             # LEGO.com says "temporarily unavailable": no new LEGO price, the one we had stays
             held = self._lego_hold(num, offer, parsed) if rid == "lego_com" and not error else None
-            if held is None and (bwp := bw_prices.get(rid)) and (error or not parsed or parsed.price is None):
+            retired = rid == "lego_com" and parsed is not None and parsed.unavailable and parsed.reason == "discontinued"
+            if held is None and not retired and (bwp := bw_prices.get(rid)) and (error or not parsed or parsed.price is None):
                 parsed, error, via = Parsed(price=bwp["price"], title=offer.get("title")), None, bwp["source"]
             if error and error.startswith("paused"):
                 counts["skipped"] += 1        # keep the last known price, just skip
