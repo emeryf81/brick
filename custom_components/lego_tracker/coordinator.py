@@ -1233,14 +1233,15 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         paused = [RETAILERS[r][0] for r in self.retailers if r not in live]
         note = T("paused and skipped: {shops}", shops=", ".join(paused)) if paused else None
         return self.start_job("refresh", T("Refreshing shop prices"), nums,
-                              lambda n: self.refresh_set(n, live), note)
+                              lambda n: self.refresh_set(n, live, wake=force), note)
 
     async def refresh_set(self, num: str, retailers: list[str] | None = None, source: str = "server",
-                          force: bool = False) -> dict[str, int]:
+                          force: bool = False, wake: bool = False) -> dict[str, int]:
         """Fetch all shop pages of one set, shops in parallel (each shop stays sequential and polite).
 
         Writes one 'check' entry to the logbook with a green/red result per shop, plus separate
-        'price' entries for changes. A manual price always wins over the automatic one."""
+        'price' entries for changes. A manual price always wins over the automatic one.
+        `wake` (a forced round) also fetches a LEGO.com page that rests because the set is out of the range."""
         live = retailers if retailers is not None else self._live_retailers(False)
         s = self.store["sets"][num]
         bw_prices: dict[str, dict[str, Any]] = {}
@@ -1253,7 +1254,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         before = self.compute()["statuses"].get(num, {})
         offers = [(rid, o) for rid, o in self.store["offers"].get(num, {}).items()
                   if (rid in live or (rid in bw_prices and rid in self.retailers)) and o.get("url") and o.get("link_status") != "rejected"
-                  and (force or not self._lego_retired_rest(rid, o))]
+                  and (force or wake or not self._lego_retired_rest(rid, o))]
         results = await asyncio.gather(*(self._fetch(rid, o, num, force) for rid, o in offers))
         counts = {"updated": 0, "errors": 0, "skipped": 0}
         shop_results: dict[str, dict[str, Any]] = {}
@@ -1835,7 +1836,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         s["lego_checked"] = time.time()
         return before != (s.get("rrp"), s.get("image"), s.get("name"), s.get("retiring"))
 
-    async def lego_lookup(self, num: str, force: bool = False) -> bool:
+    async def lego_lookup(self, num: str, force: bool = False, wake: bool = False) -> bool:
         """Find + read the set's LEGO.com page (also kept as a 'LEGO.com' shop link)."""
         if not force and self.fetcher.cooldown_left("lego_com") > 0:
             return False
@@ -1850,7 +1851,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 s["lego_checked"] = time.time()
                 return False
             offer = offers["lego_com"] = {"url": url, "history": [], "found": time.time()}
-        if not force and self._lego_retired_rest("lego_com", offer):
+        if not (force or wake) and self._lego_retired_rest("lego_com", offer):
             return False                                   # out of the range: nothing to read there this month
         parsed, error = await self.fetcher.fetch_offer("lego_com", url, force=force)
         if error and error.startswith("paused"):
@@ -1883,9 +1884,9 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return self.start_job("enrich", T("Filling in set data"), nums, self.enrich_set,
                               None if has_key else T("no API key set: public Brickset pages are used"))
 
-    async def enrich_set(self, num: str, force: bool = False) -> dict[str, int]:
+    async def enrich_set(self, num: str, force: bool = False, wake: bool = False) -> dict[str, int]:
         s = self.store["sets"][num]
-        lego_changed = await self.lego_lookup(num, force=force)       # 1st source: RRP, image, name
+        lego_changed = await self.lego_lookup(num, force=force, wake=wake)       # 1st source: RRP, image, name
         meta, source = await lookup_metadata(async_get_clientsession(self.hass),
                                              self.opt(self.entry, CONF_BRICKSET_KEY, ""),
                                              self.opt(self.entry, CONF_REBRICKABLE_KEY, ""), num)
@@ -1915,9 +1916,9 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         async def work(num: str) -> dict[str, int]:
             out = {"updated": 0, "found": 0, "errors": 0, "skipped": 0}
             if self.needs_enrich(num):
-                out["updated"] += (await self.enrich_set(num)).get("updated", 0)
+                out["updated"] += (await self.enrich_set(num, wake=force)).get("updated", 0)
             out["found"] += (await self.discover_set(num, live))["found"]
-            res = await self.refresh_set(num, live)
+            res = await self.refresh_set(num, live, wake=force)
             out["errors"] += res["errors"]
             out["skipped"] += res["skipped"]
             return out

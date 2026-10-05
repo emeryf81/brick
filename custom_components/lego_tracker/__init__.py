@@ -290,7 +290,7 @@ def _register_services(hass: HomeAssistant) -> None:
             except ValueError as err:
                 raise ServiceValidationError(str(err)) from err
             c.mark_sites([r for r in (c.store["offers"].get(num) or {}) if r in live])
-            res = await c.refresh_set(num, live)
+            res = await c.refresh_set(num, live, wake=call.data["force"])
             c.push_update()
             return {"started": False, **res}
         return _job(c.start_full_refresh, call.data["force"])
