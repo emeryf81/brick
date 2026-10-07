@@ -2637,7 +2637,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 sets_url, themes_url = source_url("set_database_sets"), source_url("set_database_themes")
                 if not (sets_url and themes_url):
                     raise ValueError(T("the set database is not in your shop settings (or their terms are not accepted)"))
-                sets_gz, themes_gz = await self._download(sets_url), await self._download(themes_url)
+                sets_gz = await self._download(sets_url)
+                if not source_url("set_database_themes"):        # withdrawn in the meantime
+                    raise ValueError(T("the set database is not in your shop settings (or their terms are not accepted)"))
+                themes_gz = await self._download(themes_url)
                 new = await self.hass.async_add_executor_job(setdb.parse, sets_gz, themes_gz)
                 if len(new) < 1000:
                     raise ValueError(f"only {len(new)} sets in the download")

@@ -159,6 +159,14 @@
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const tell = (msg) => window.postMessage({ source: "lego-tracker-userscript", ...msg }, "*");
   let running = false;
+  /** Asked before every page this browser fetches: shop settings still imported, terms still accepted and the
+   *  relay still on? (Withdrawing them in Home Assistant stops a queue this browser already has.) */
+  async function allowed() {
+    try {
+      const r = await req({ method: "GET", url: HA() + "/api/lego_tracker/relay?mode=check", headers: { Authorization: "Bearer " + TOKEN() } });
+      return r.status === 200 && JSON.parse(r.responseText || "{}").ready === true;
+    } catch (e) { return false; }
+  }
   async function relay(manual) {
     if (running || !TOKEN() || !HA()) { tell({ type: "relay-status", running, error: TOKEN() ? null : "no-token" }); return; }
     const every = GM_getValue("relay_hours", 6) * 3600 * 1000;
@@ -179,6 +187,7 @@
       for (let i = 0; i < items.length; i++) {
         const it = items[i], who = it.retailer || it.source;
         if ((blocked[who] || 0) >= 2) { fail++; continue; }   // this site blocks this browser too: stop asking it
+        if (!(await allowed())) break;                     // withdrawn in Home Assistant: stop right away
         const r = await req({ method: "GET", url: it.url, headers: { "Accept-Language": "nl-BE,nl;q=0.9,en;q=0.8", Accept: "text/html" } });
         const html = r.responseText || "";
         let result = { set_number: it.set_number, retailer: it.retailer, url: it.url };
@@ -318,6 +327,7 @@
             if (Date.now() - lastBeat > 5 * 60000 && !(await post([]))) { tellCont(); await nap(5 * 60000); break; }
             await nap(Math.min(wait - now, 60000)); continue;
           }
+          if (!(await allowed())) { queue.length = 0; break; }   // withdrawn in Home Assistant: drop this queue
           const it = queue.splice(times.indexOf(wait), 1)[0];
           stamp(it);
           cont.shop = it.shop; cont.set_number = it.set_number; cont.next = 0;

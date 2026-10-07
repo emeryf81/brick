@@ -326,6 +326,36 @@ async def ws_settings_set(hass, connection, msg):
     connection.send_result(msg["id"], {"saved": True})
 
 
+# API keys and the data sources they are sent to: a key is only ever sent to the host it was used with
+CONF_KEY_HOSTS = "key_hosts"
+KEY_SOURCES = {"brickset_api_key": ("brickset_api",), "rebrickable_api_key": ("rebrickable_api",),
+               "bol_client_id": ("bol_api_token", "bol_api"), "bol_client_secret": ("bol_api_token", "bol_api")}
+
+
+def _hosts(profile: dict[str, Any] | None, sources: tuple[str, ...]) -> list[str]:
+    from urllib.parse import urlparse
+    data = (profile or {}).get("data_sources") or {}
+    return [(urlparse(data[s]).hostname or "").lower() if data.get(s) else "" for s in sources]
+
+
+def _keys_for_moved_sources(options: dict[str, Any], profile: dict[str, Any]) -> set[str]:
+    """Stored API keys whose source now points at another host than the one they were used with: they are removed,
+    so an imported file can never send your key somewhere new (you enter it again if you trust the new address)."""
+    known = options.get(CONF_KEY_HOSTS) or {}
+    out = set()
+    for key, sources in KEY_SOURCES.items():
+        if not options.get(key):
+            continue
+        before = known.get(key) or _hosts(options.get("shop_profile"), sources)
+        if any(before) and before != _hosts(profile, sources):
+            out.add(key)
+    return out
+
+
+def _key_hosts(profile: dict[str, Any], options: dict[str, Any]) -> dict[str, list[str]]:
+    return {key: _hosts(profile, sources) for key, sources in KEY_SOURCES.items() if options.get(key)}
+
+
 @websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/shop_settings/import", vol.Required("settings"): dict,
                                   vol.Required("accept"): bool})
@@ -346,7 +376,8 @@ async def ws_shop_settings_import(hass, connection, msg):
     except ValueError as err:
         connection.send_error(msg["id"], "invalid_format", str(err))
         return
-    options = {**coord.entry.options, CONF_SHOP_PROFILE: profile,
+    dropped = _keys_for_moved_sources(coord.entry.options, profile)
+    options = {**{k: v for k, v in coord.entry.options.items() if k not in dropped}, CONF_SHOP_PROFILE: profile,
                CONF_LEGAL: {"accepted": time.time(), "version": LEGAL_VERSION, "user": connection.user.id if connection.user else None}}
     if isinstance(extra := msg["settings"].get("custom_shops"), list):     # shops you added by hand (an exported file)
         try:
@@ -358,6 +389,9 @@ async def ws_shop_settings_import(hass, connection, msg):
         options["custom_shops"] = [s for rid, s in mine.items() if rid not in {p["id"] for p in profile["shops"]}]
     if profile.get("lego_locale") and not coord.entry.options.get("lego_locale"):
         options["lego_locale"] = profile["lego_locale"]
+    options[CONF_KEY_HOSTS] = _key_hosts(profile, options)
+    if dropped:
+        coord.log("warning", "settings", T("The address of a source with your API key changed in the imported settings: the key was removed. Enter it again if you trust the new address."), source="panel")
     coord.log("info", "settings", T("Shop settings imported: {n} shops, {m} comparison sites; terms accepted",
                                     n=len(profile["shops"]), m=len(profile["comparison_sites"])), source="panel")
     coord._save()
@@ -855,6 +889,9 @@ class RelayView(HomeAssistantView):
             limit = max(1, min(100, int(request.query.get("limit", "40"))))
         except ValueError:
             limit = 40
+        if request.query.get("mode") == "check":               # asked before every page: still allowed to fetch?
+            from .shops import ready
+            return self.json({"ready": ready() and coord.relay_enabled})
         if request.query.get("mode") == "continuous":          # the userscript's continuous check
             return self.json(coord.continuous_items(min(limit, 50)))
         return self.json(coord.relay_items(limit))

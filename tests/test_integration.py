@@ -3207,3 +3207,36 @@ async def test_an_installation_from_before_1_0_keeps_its_shops_after_accepting_o
     await ws.receive_json()
     await hass.async_block_till_done()
     assert "shop_profile" not in entry.options and not shops.ready()
+
+
+@pytest.mark.no_shop_settings
+async def test_imported_settings_never_send_an_api_key_to_a_new_address(hass: HomeAssistant, entry, hass_ws_client, hass_client, no_network):
+    """A key is only sent to the host it was used with: a settings file that moves a source elsewhere removes the
+    key. The userscript asks before every page whether it may still fetch."""
+    import copy
+    import json
+    from pathlib import Path
+
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "brickset_api_key": "k1", "rebrickable_api_key": "k2",
+                                                           "bol_client_id": "id", "bol_client_secret": "sec"})
+    await _setup(hass, entry)
+    example = json.loads((Path(__file__).parent.parent / "examples" / "lot-shops.example.json").read_text("utf-8"))
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/shop_settings/import", "settings": example, "accept": True})
+    assert (await ws.receive_json())["success"]
+    await hass.async_block_till_done()
+    assert entry.options["brickset_api_key"] == "k1" and entry.options["key_hosts"]["brickset_api_key"] == ["brickset.com"]
+    moved = copy.deepcopy(example)
+    moved["data_sources"]["brickset_api"] = "https://keys.example/api"
+    moved["data_sources"]["bol_api"] = "https://keys.example/bol"
+    await ws.send_json({"id": 2, "type": "lego_tracker/shop_settings/import", "settings": moved, "accept": True})
+    assert (await ws.receive_json())["success"]
+    await hass.async_block_till_done()
+    assert "brickset_api_key" not in entry.options and "bol_client_id" not in entry.options and "bol_client_secret" not in entry.options
+    assert entry.options["rebrickable_api_key"] == "k2"                                 # its address stayed the same
+    http = await hass_client()
+    assert (await (await http.get("/api/lego_tracker/relay?mode=check")).json()) == {"ready": True}
+    await ws.send_json({"id": 3, "type": "lego_tracker/shop_settings/withdraw"})
+    await ws.receive_json()
+    await hass.async_block_till_done()
+    assert (await (await http.get("/api/lego_tracker/relay?mode=check")).json()) == {"ready": False}

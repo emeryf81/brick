@@ -1001,6 +1001,7 @@
 "The LEGO set database is not downloaded yet (within 10 minutes after Home Assistant starts).": "La base de datos de sets LEGO aún no se ha descargado (en los 10 minutos tras el inicio de Home Assistant).",
 "The address is not on {shop} ({domain}): pick the right shop or address.": "La dirección no está en {shop} ({domain}): elige la tienda o la dirección correcta.",
 "The address is on {host}, not on {shop} ({domain}): pick the right shop or address.": "La dirección está en {host}, no en {shop} ({domain}): elige la tienda o la dirección correcta.",
+"The address of a source with your API key changed in the imported settings: the key was removed. Enter it again if you trust the new address.": "La dirección de una fuente con tu clave API cambió en la configuración importada: la clave se ha eliminado. Vuelve a introducirla si confías en la nueva dirección.",
 "The backup is fully checked first (structure, set numbers, URLs, price history) before anything changes.": "La copia de seguridad se comprueba primero por completo (estructura, números de set, URL, historial de precios) antes de cambiar nada.",
 "The bar at the bottom of the screen. Click an item to open the set, or a news item to read it.": "La barra en la parte inferior de la pantalla. Haz clic en un elemento para abrir el set, o en una noticia para leerla.",
 "The check only runs while a Home Assistant tab is open (any page of Home Assistant). Tips:": "La comprobación solo funciona mientras haya una pestaña de Home Assistant abierta (cualquier página). Consejos:",
