@@ -297,13 +297,16 @@ input[type=range]{padding:0;accent-color:var(--lt-accent)}input[type=checkbox]{a
 .tbl.bk tr.bk-copy td{border-top:0}.tbl.bk tr.bk-new td{background:color-mix(in srgb,var(--lt-green) 7%,transparent)}.tbl.bk .bk-sticky{position:sticky;left:0;background:var(--lt-card);z-index:1;white-space:nowrap}
 .labform{grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}.labres{border:1px solid var(--lt-line);border-left:4px solid var(--lt-muted);border-radius:12px;padding:12px 14px;background:var(--lt-bg)}
 .labres.lv-ok{border-left-color:var(--lt-green)}.labres.lv-warn{border-left-color:var(--lt-yellow)}.labres.lv-bad{border-left-color:var(--lt-red)}
+code{word-break:break-all}
+@media(max-width:640px){.rule{flex-wrap:wrap}.rule>div:last-child{width:100%;justify-content:flex-start!important}.labgrid{flex-direction:column}}
+.labres .kv{display:grid;grid-template-columns:minmax(120px,180px) 1fr;gap:10px;justify-content:start;text-align:left}.labres .kv b{text-align:left;font-weight:600}
 .labgrid{display:flex;gap:14px;align-items:flex-start;justify-content:space-between}.labgrid>div{flex:1;min-width:0}.labgrid .kv b{word-break:break-word}
 .labfind{list-style:none;padding:0;margin:0;display:grid;gap:6px}.labfind li{display:flex;gap:8px;font-size:14px;line-height:1.4}.labfind li.lv-bad{color:var(--lt-red)}.labfind li.lv-warn{color:var(--lt-yellow)}
 .labhead{white-space:pre-wrap;word-break:break-all;font-size:11px;max-height:220px;overflow:auto;background:var(--lt-card);padding:8px;border-radius:8px}
 .chip:hover{border-color:var(--lt-accent)}.chip.on{background:var(--lt-accent);color:var(--lt-on-accent);border-color:transparent}.chip.sm{font-size:12px;padding:3px 10px}
 .toggle{display:inline-flex;border:1px solid var(--lt-line);border-radius:10px;overflow:hidden}.toggle button{border:0;background:var(--lt-card);padding:8px 11px;cursor:pointer}.toggle button.on{background:var(--lt-soft);color:var(--lt-accent)}
 /* layout */
-.cols{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:16px}@media(max-width:980px){.cols{grid-template-columns:1fr}}
+.cols{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:16px}@media(max-width:980px){.cols{grid-template-columns:minmax(0,1fr)}}
 .panel{background:var(--lt-card);border-radius:var(--lt-radius);padding:16px;box-shadow:var(--lt-shadow);margin-bottom:16px}
 .panel h3{margin:0 0 12px;font-size:16px;display:flex;align-items:center;gap:8px}.panel h3 .hsp{flex:1}
 .panel p{margin:0 0 10px;color:var(--lt-muted);font-size:14px;line-height:1.5}
@@ -362,7 +365,7 @@ h2.sec{font-size:16px;margin:18px 0 10px;display:flex;align-items:center;gap:8px
 .bars{display:flex;align-items:flex-end;gap:6px;height:170px;padding-top:18px;overflow-x:auto}
 .bar{flex:1;min-width:30px;display:flex;flex-direction:column;align-items:center;height:100%;justify-content:flex-end}
 .bf{width:70%;height:var(--h);background:linear-gradient(var(--lt-accent),color-mix(in srgb,var(--lt-accent) 60%,var(--lt-card)));border-radius:6px 6px 2px 2px;animation:grow .8s cubic-bezier(.3,1.2,.5,1) both;animation-delay:calc(var(--i) * 40ms);transform-origin:bottom}
-.pbars{display:flex;align-items:flex-end;gap:4px;height:170px;padding-top:14px;overflow-x:auto}.pbar{flex:1;min-width:26px;display:flex;flex-direction:column;height:100%;justify-content:flex-end}
+.pbars{display:flex;align-items:flex-end;gap:4px;height:170px;padding-top:14px;overflow-x:auto}.pbar{flex:1;min-width:0;display:flex;flex-direction:column;height:100%;justify-content:flex-end}
 .pcols{flex:1;display:flex;align-items:flex-end;gap:2px;justify-content:center}.pc{width:42%;max-width:16px;height:var(--h);min-height:1px;border-radius:4px 4px 1px 1px;position:relative;animation:grow .8s cubic-bezier(.3,1.2,.5,1) both;animation-delay:calc(var(--i) * 25ms);transform-origin:bottom}
 .pc.ok{background:var(--lt-green)}.pc.bad{background:var(--lt-red)}.pc span{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);font-size:10px;color:var(--lt-muted)}
 .pbar .bl{text-align:center;white-space:nowrap}
@@ -2437,7 +2440,7 @@ class LegoTrackerPanel extends HTMLElement {
         const c = x.collection;
         B.draft[x.set_number] = { name: x.name || "", theme: x.theme || "", rrp: x.rrp ?? "", watch: !!x.watched, owned: !!c,
           value: c && c.current_value != null ? c.current_value : "",
-          copies: c ? (c.copies || []).map((k) => ({ paid: k.paid ?? "", added: k.added || "", condition: k.condition || "", location: k.location || "", notes: k.notes || "" })) : [] };
+          copies: c ? ((c.copies && c.copies.length ? c.copies : [c])).map((k) => ({ paid: k.paid ?? "", added: k.added || "", condition: k.condition || "", location: k.location || "", notes: k.notes || "" })) : [] };
       }
       B.orig = JSON.parse(JSON.stringify(B.draft));
     }
