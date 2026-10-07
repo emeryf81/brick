@@ -93,19 +93,6 @@
         "dreamland.be",
         "dreamland"
       ]
-    },
-    {
-      "id": "smyths_be",
-      "name": "Smyths Toys",
-      "domain": "smythstoys.com",
-      "reader": "generic",
-      "search": "https://www.smythstoys.com/be/nl-be/search?text={number}",
-      "aliases": [
-        "smythstoys.com",
-        "smythstoys",
-        "smyths toys",
-        "smyths"
-      ]
     }
   ],
   "comparison_sites": [

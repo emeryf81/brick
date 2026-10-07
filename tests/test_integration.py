@@ -2567,7 +2567,7 @@ async def test_smyths_toys_built_in(hass: HomeAssistant, no_network):
         enabled = list(e.options["retailers"])
         assert await hass.config_entries.async_unload(e.entry_id)
         return enabled
-    base = {"retailers": ["bol"], "known_shops": ["amazon_nl", "amazon_de", "amazon_be", "bol", "kruidvat_be", "lego_com", "dreamland_be"]}
+    base = {"setup_version": 1, "retailers": ["bol"], "known_shops": ["amazon_nl", "amazon_de", "amazon_be", "bol", "kruidvat_be", "lego_com", "dreamland_be"]}
     assert "smyths_be" in await setup(dict(base))
     own = {**base, "custom_shops": [{"id": "c_smyths", "name": "Smyths", "domain": "smythstoys.com",
                                      "search": "https://www.smythstoys.com/be/nl-be/search?text={query}"}], "retailers": ["bol", "c_smyths"]}
@@ -2735,7 +2735,7 @@ async def test_own_shop_move_is_finished_on_a_later_start(hass: HomeAssistant, n
     """The built-in shop is already known (an earlier start was interrupted): the own shop is off, so its links
     still move to the built-in shop at this start."""
     e = MockConfigEntry(domain=DOMAIN, data={}, options={
-        "retailers": ["bol", "smyths_be"], "known_shops": ["amazon_nl", "amazon_de", "amazon_be", "bol", "kruidvat_be", "lego_com",
+        "setup_version": 1, "retailers": ["bol", "smyths_be"], "known_shops": ["amazon_nl", "amazon_de", "amazon_be", "bol", "kruidvat_be", "lego_com",
                                                             "dreamland_be", "smyths_be"],
         "custom_shops": [{"id": "c_smyths", "name": "Smyths", "domain": "smythstoys.com",
                           "search": "https://www.smythstoys.com/be/nl-be/search?text={query}"}]})
@@ -3160,12 +3160,12 @@ async def test_no_shop_is_contacted_before_shop_settings_are_imported_and_accept
     assert "not a shop settings file" in (await ws.receive_json())["error"]["message"]
     assert "shop_profile" not in entry.options
     await ws.send_json({"id": 3, "type": "lego_tracker/shop_settings/import", "settings": example, "accept": True})
-    assert (await ws.receive_json())["result"] == {"imported": True, "shops": 8}
+    assert (await ws.receive_json())["result"] == {"imported": True, "shops": 7}
     await hass.async_block_till_done()
     c = hass.data[DOMAIN][entry.entry_id]                                    # entry reloaded with the shops
     assert shops.ready() and entry.options["legal"]["version"] == shops.LEGAL_VERSION and entry.options["legal"]["accepted"]
     assert set(c.retailers) == set(shops.profile_ids()) and "lego_com" in c.retailers      # every imported shop on
-    assert c.shop_settings_info() | {"accepted": 1} == {"imported": True, "ready": True, "shops": 8, "comparison_sites": 5,
+    assert c.shop_settings_info() | {"accepted": 1} == {"imported": True, "ready": True, "shops": 7, "comparison_sites": 5,
                                                         "accepted": 1, "legal_version": 1, "accepted_version": 1}
     await ws.send_json({"id": 4, "type": "lego_tracker/shop_settings/export"})
     out = (await ws.receive_json())["result"]
@@ -3185,8 +3185,8 @@ async def test_an_installation_from_before_1_0_keeps_its_shops_after_accepting_o
     from custom_components.lego_tracker import shops
 
     c = await _setup(hass, entry)
-    assert entry.options["setup_version"] == 1 and len(entry.options["shop_profile"]["shops"]) == 8
-    assert c.retailers == ["bol", "amazon_nl", "dreamland_be", "smyths_be"] and not shops.ready()   # your choice stays, newer shops on
+    assert entry.options["setup_version"] == 1 and len(entry.options["shop_profile"]["shops"]) == 7
+    assert c.retailers == ["bol", "amazon_nl", "dreamland_be"] and not shops.ready()   # your choice stays, newer shops on
     assert c.shop_settings_info()["imported"] and not c.shop_settings_info()["ready"]
     assert c._live_retailers(False) == []
     page = {"10281": {"set_number": "10281"}}, {"10281": {"amazon_nl": {"url": "https://www.amazon.nl/dp/B000000001"}}}
@@ -3199,7 +3199,7 @@ async def test_an_installation_from_before_1_0_keeps_its_shops_after_accepting_o
     assert (await ws.receive_json())["result"]["accepted"]
     await hass.async_block_till_done()
     c = hass.data[DOMAIN][entry.entry_id]
-    assert shops.ready() and c._live_retailers(False) == ["bol", "amazon_nl", "dreamland_be", "smyths_be"]
+    assert shops.ready() and c._live_retailers(False) == ["bol", "amazon_nl", "dreamland_be"]
     c.store["sets"].update(page[0]); c.store["offers"].update(page[1])
     assert c.relay_items()["items"] and c.continuous_items()["items"]
     # withdrawn: never carried over again

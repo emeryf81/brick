@@ -776,7 +776,7 @@ def test_shop_settings_file_is_checked_and_drives_every_address():
     from lego_pkg import compare, shops
     example = json.loads((Path(__file__).parent.parent / "examples" / "lot-shops.example.json").read_text("utf-8"))
     ok = shops.validate_settings(example)
-    assert [s["reader"] for s in ok["shops"]] == ["lego", "amazon", "amazon", "amazon", "bol", "kruidvat", "generic", "generic"]
+    assert [s["reader"] for s in ok["shops"]] == ["lego", "amazon", "amazon", "amazon", "bol", "kruidvat", "generic"]
     for bad, why in ((lambda d: d.update(format="x"), "not a shop settings file"),
                      (lambda d: d.update(version=9), "version 9"),
                      (lambda d: d.update(shops=[]), "no shops"),
