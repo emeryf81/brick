@@ -445,6 +445,12 @@ class Fetcher:
         except Exception as err:  # noqa: BLE001 - also Aborted
             self._trace(retailer, "page", purl, t0, None, 0, None, T("network error: {error}", error=str(err)[:120]), set_number)
             return None
+        if status in (403, 429, 503) or (status < 400 and parse_page(retailer, page, set_number).blocked):
+            self._note_block(retailer)                     # a refusal or a bot wall here pauses the shop too
+            self.discover_error[retailer] = T("blocked (HTTP {status})", status=status) if status >= 400 \
+                else T("blocked (captcha / bot protection)")
+            self._trace(retailer, "page", purl, t0, status, len(page or ""), None, self.discover_error[retailer], set_number)
+            return None
         if status < 400:
             parsed = parse_page(retailer, page, set_number)
             if parsed.price or parsed.list_price or (parsed.title and set_number in (parsed.title + page[:200000])):
