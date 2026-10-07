@@ -2451,14 +2451,17 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # ------------------------------------------------------------------ edits
     async def add_set(self, set_number: str, *, name: str | None = None, theme: str | None = None,
                       subtheme: str | None = None, rrp: float | None = None, pieces: int | None = None, target_price: float | None = None,
-                      owned: dict | None = None, discover: bool = True) -> str:
-        """Add or update a set, enrich its metadata, and return its normalized number."""
+                      owned: dict | None = None, discover: bool = True, watch: bool | None = None) -> str:
+        """Add or update a set, enrich its metadata, and return its normalized number.
+        watch=False: tracked without being on the watchlist (Edit all, a set you neither own nor watch)."""
         num = normalize_set_number(set_number)
-        if owned is None and not (num in self.store["sets"] and self.is_watched(num)) and (limit := self.watch_limit) is not None \
-                and len(self.watched_sets()) >= limit:
+        if owned is None and watch is not False and not (num in self.store["sets"] and self.is_watched(num)) \
+                and (limit := self.watch_limit) is not None and len(self.watched_sets()) >= limit:
             raise LocalizedError("The watchlist is full ({n} sets): remove a set or move one to your collection first.", n=limit)
         s = self.store["sets"].setdefault(num, {"set_number": num})
-        if owned is None and s.get("watch") is False:
+        if watch is False:
+            s["watch"] = False
+        elif owned is None and s.get("watch") is False:
             s.pop("watch")                                    # added to the watchlist again
         known = catalog.apply(num, s, self.store["offers"].setdefault(num, {}))   # built-in catalogue first
         self._fill_from_setdb(num, s)                                              # then the LEGO set database

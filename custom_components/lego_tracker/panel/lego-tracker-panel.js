@@ -2536,7 +2536,7 @@ class LegoTrackerPanel extends HTMLElement {
         if (!r.set_number.trim()) continue;
         const f = {};
         if (r.name.trim()) f.name = r.name.trim(); if (r.theme.trim()) f.theme = r.theme.trim(); if (num(r.rrp)) f.rrp = +num(r.rrp);
-        if (r.watch) f.watch = true;
+        f.watch = !!r.watch;
         if (r.owned) { f.copies = [{ paid: num(r.paid), added: r.added, condition: r.condition, location: r.location, notes: r.notes }]; if (num(r.value)) f.current_value = +num(r.value); }
         sets.push({ set_number: r.set_number.trim(), new: true, owned: !!r.owned, fields: f });
       }

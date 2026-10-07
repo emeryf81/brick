@@ -375,7 +375,9 @@ class Notifier:
             if quiet and target["type"] not in ("persistent", "event"):
                 q = self.store.setdefault("notify_queue", {}).setdefault(rule["id"], [])
                 q.append({"title": title, "message": message, "url": url, "dotd": "deal_of_day" in (data or {}).get("triggers", [])})
-                del q[:-50]
+                if len(q) > 50:                              # the newest 50, never without the deal of the day
+                    dotd = [i for i in q if i.get("dotd")][-1:]
+                    q[:] = dotd + [i for i in q if not i.get("dotd")][-(50 - len(dotd)):]
                 results.append({"target": target, "ok": True, "queued": True})
                 continue
             try:

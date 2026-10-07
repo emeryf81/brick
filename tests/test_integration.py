@@ -2986,6 +2986,10 @@ async def test_edit_all_saves_many_sets_and_copies_at_once(hass: HomeAssistant, 
         {"set_number": "60380", "new": True, "owned": True, "fields": {"copies": [{"paid": "abc"}]}}]})
     r = (await ws.receive_json())["result"]
     assert r["added"] == 0 and "60380" in r["errors"] and "60380" not in c.store["sets"] and "60380" not in c.store["collection"]
+    # a new set you neither own nor watch: tracked, not on the watchlist
+    await ws.send_json({"id": 4, "type": "lego_tracker/bulk_update", "sets": [
+        {"set_number": "60380", "new": True, "owned": False, "fields": {"watch": False}}]})
+    assert (await ws.receive_json())["result"]["added"] == 1 and not c.is_watched("60380")
 
 
 async def test_deal_of_the_day_notification_once_a_day_from_its_time(hass: HomeAssistant, entry, no_network):
@@ -3027,3 +3031,10 @@ async def test_deal_of_the_day_notification_once_a_day_from_its_time(hass: HomeA
     await c.notifier.flush_queues()
     await hass.async_block_till_done()
     assert "Deal of the day: 10311" in pn[-1].data["message"] and "6 more" in pn[-1].data["message"]
+    # the queue keeps the newest 50, never without the deal of the day
+    rule = c.store["notify_rules"][0] | {"quiet": {"from": "00:00", "to": "23:59"}, "targets": [{"type": "notify", "service": "notify.phone"}]}
+    c.store["notify_queue"] = {"q": [{"title": "⭐ dotd", "message": "m", "url": None, "dotd": True}]}
+    for i in range(60):
+        await c.notifier.send(rule, f"n{i}", "m")
+    q = c.store["notify_queue"]["q"]
+    assert len(q) == 50 and q[0]["title"] == "⭐ dotd" and q[-1]["title"] == "n59"
