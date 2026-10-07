@@ -2919,22 +2919,29 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             out.append(c)
         return out
 
-    def update_set(self, set_number: str, fields: dict[str, Any]) -> None:
-        num = normalize_set_number(set_number)
-        s = self.store["sets"][num]
-        refill = False
+    def check_set_fields(self, num: str, fields: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]] | None]:
+        """Check an edit of a set without changing anything (also for a set that isn't tracked yet): the copies,
+        every field and the watchlist limit. Returns (fields without the copies, the cleaned copies or None).
+        Raises LocalizedError."""
         copies_new = None
         if "copies" in fields:                         # every copy with its own price, date, condition, ...
-            copies_new = self._clean_copies(fields["copies"])   # validated now, stored once the whole edit is valid
+            copies_new = self._clean_copies(fields["copies"])
             fields = {k: v for k, v in fields.items() if k not in ("copies", "owned", *self.COLL_FIELDS) or k == "current_value"}
-        # the whole edit is checked before anything changes: a rejected edit leaves the set as it was
         for key, value in fields.items():
             if (typ := self.SET_FIELDS.get(key) or self.COLL_FIELDS.get(key)) and value not in ("", None) \
                     and not (key == "watch" and value is False) and not (value == 0 and key in self.CLEARABLE):
                 self._coerce(key, typ, value)
-        if fields.get("watch") not in (None, False, "", 0) and not self.is_watched(num) \
+        if fields.get("watch") not in (None, False, "", 0) and not (num in self.store["sets"] and self.is_watched(num)) \
                 and (limit := self.watch_limit) is not None and len(self.watched_sets()) >= limit:
             raise LocalizedError("The watchlist is full ({n} sets): remove a set or move one to your collection first.", n=limit)
+        return fields, copies_new
+
+    def update_set(self, set_number: str, fields: dict[str, Any]) -> None:
+        num = normalize_set_number(set_number)
+        s = self.store["sets"][num]
+        refill = False
+        # the whole edit is checked before anything changes: a rejected edit leaves the set as it was
+        fields, copies_new = self.check_set_fields(num, fields)
         clean_set: dict[str, Any] = {}
         clean_coll: dict[str, Any] = {}
         for key, value in fields.items():

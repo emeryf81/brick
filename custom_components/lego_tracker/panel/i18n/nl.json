@@ -944,6 +944,7 @@
 "The LEGO set database is being downloaded…": "De LEGO-setdatabase wordt gedownload…",
 "The LEGO set database is downloaded within 10 minutes after Home Assistant starts, then once a day.": "De LEGO-setdatabase wordt binnen 10 minuten na de start van Home Assistant gedownload, daarna één keer per dag.",
 "The LEGO set database is not downloaded yet (within 10 minutes after Home Assistant starts).": "De LEGO-setdatabase is nog niet gedownload (binnen 10 minuten na de start van Home Assistant).",
+"The address is not on {shop} ({domain}): pick the right shop or address.": "Het adres staat niet op {shop} ({domain}): kies de juiste winkel of het juiste adres.",
 "The address is on {host}, not on {shop} ({domain}): pick the right shop or address.": "Het adres staat op {host}, niet op {shop} ({domain}): kies de juiste winkel of het juiste adres.",
 "The backup is fully checked first (structure, set numbers, URLs, price history) before anything changes.": "De back-up wordt eerst volledig gecontroleerd (structuur, setnummers, URL's, prijshistoriek) voordat er iets verandert.",
 "The bar at the bottom of the screen. Click an item to open the set, or a news item to read it.": "De balk onderaan het scherm. Klik op een item om de set te openen, of op een nieuwsbericht om het te lezen.",

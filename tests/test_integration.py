@@ -2948,6 +2948,11 @@ async def test_parser_lab_links_run_and_log(hass: HomeAssistant, entry, hass_ws_
     assert entry_["kind"] == "lab" and entry_["set_number"] == "10281" and entry_["level"] == "warning" and entry_["details"]
     await ws.send_json({"id": 5, "type": "lego_tracker/lab", "action": "run", "retailer": "nope", "url": "https://x.be"})
     assert not (await ws.receive_json())["success"]
+    # only addresses on the chosen shop's own site (never another site or the local network)
+    for i, bad in enumerate(("https://evil.example/p/1", "http://192.168.1.10/", "https://bol.com.evil.example/x"), 6):
+        await ws.send_json({"id": i, "type": "lego_tracker/lab", "action": "run", "retailer": "bol", "url": bad})
+        res = await ws.receive_json()
+        assert not res["success"] and "not on bol.com" in res["error"]["message"]
 
 
 async def test_edit_all_saves_many_sets_and_copies_at_once(hass: HomeAssistant, entry, hass_ws_client, no_network):
@@ -2976,6 +2981,11 @@ async def test_edit_all_saves_many_sets_and_copies_at_once(hass: HomeAssistant, 
     # out of the collection again
     await ws.send_json({"id": 2, "type": "lego_tracker/bulk_update", "sets": [{"set_number": "42143", "fields": {"owned": False}}]})
     assert (await ws.receive_json())["result"]["saved"] == 1 and "42143" not in c.store["collection"]
+    # a new set with a wrong value is not added at all
+    await ws.send_json({"id": 3, "type": "lego_tracker/bulk_update", "sets": [
+        {"set_number": "60380", "new": True, "owned": True, "fields": {"copies": [{"paid": "abc"}]}}]})
+    r = (await ws.receive_json())["result"]
+    assert r["added"] == 0 and "60380" in r["errors"] and "60380" not in c.store["sets"] and "60380" not in c.store["collection"]
 
 
 async def test_deal_of_the_day_notification_once_a_day_from_its_time(hass: HomeAssistant, entry, no_network):
@@ -3010,3 +3020,10 @@ async def test_deal_of_the_day_notification_once_a_day_from_its_time(hass: HomeA
     assert len(pn) == n0 + 2
     with pytest.raises(ValueError):
         validate_rules([{"name": "x", "triggers": ["deal_of_day"], "params": {"dotd_time": "25:99"}, "targets": [{"type": "persistent"}]}])
+    # during quiet hours it waits in the queue and is never cut off behind other notifications
+    c.store["notify_queue"] = {"q": [{"title": f"t{i}", "message": "m", "url": None} for i in range(20)]
+                               + [{"title": "⭐ Deal of the day: 10311", "message": "€30.00", "url": None, "dotd": True}]}
+    c.store["notify_rules"] = validate_rules([{"id": "q", "name": "q", "triggers": ["digest"], "targets": [{"type": "persistent"}]}])
+    await c.notifier.flush_queues()
+    await hass.async_block_till_done()
+    assert "Deal of the day: 10311" in pn[-1].data["message"] and "6 more" in pn[-1].data["message"]

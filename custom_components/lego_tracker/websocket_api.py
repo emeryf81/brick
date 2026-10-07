@@ -250,6 +250,7 @@ async def ws_bulk_update(hass, connection, msg):
             if num not in coord.store["sets"]:
                 if not item["new"]:
                     raise LocalizedError("Set {number} is not tracked.", number=num)
+                coord.check_set_fields(num, item["fields"])      # a wrong value: the set isn't added at all
                 await coord.add_set(num, owned={"qty": 1} if item["owned"] else None, discover=False)
                 added += 1
             if item["fields"]:

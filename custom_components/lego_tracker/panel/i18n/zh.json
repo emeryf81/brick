@@ -944,6 +944,7 @@
 "The LEGO set database is being downloaded…": "正在下载乐高套装数据库…",
 "The LEGO set database is downloaded within 10 minutes after Home Assistant starts, then once a day.": "乐高套装数据库会在 Home Assistant 启动后 10 分钟内下载，之后每天一次。",
 "The LEGO set database is not downloaded yet (within 10 minutes after Home Assistant starts).": "乐高套装数据库尚未下载（Home Assistant 启动后 10 分钟内）。",
+"The address is not on {shop} ({domain}): pick the right shop or address.": "地址不在 {shop}（{domain}）上：请选择正确的商店或地址。",
 "The address is on {host}, not on {shop} ({domain}): pick the right shop or address.": "地址位于 {host}，而不是 {shop}（{domain}）：请选择正确的商店或地址。",
 "The backup is fully checked first (structure, set numbers, URLs, price history) before anything changes.": "在做任何更改之前，会先完整检查备份（结构、套装编号、URL、价格历史）。",
 "The bar at the bottom of the screen. Click an item to open the set, or a news item to read it.": "屏幕底部的横条。点击条目打开套装，点击新闻阅读内容。",

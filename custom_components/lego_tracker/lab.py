@@ -7,6 +7,7 @@ import html as htmllib
 import re
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 from .const import RETAILERS
 from .i18n import T
@@ -147,6 +148,9 @@ async def run(coord: Any, rid: str | None, num: str | None, url: str, html: str 
     else:
         if not url.startswith(("https://", "http://")):
             raise ValueError(T("Give a full address (https://…)."))
+        host, dom = (urlparse(url).hostname or "").lower().rstrip("."), (domain_of(rid) or "").lower()
+        if not dom or not (host == dom or host.endswith("." + dom)):    # never another site or the local network
+            raise ValueError(T("The address is not on {shop} ({domain}): pick the right shop or address.", shop=RETAILERS[rid][0], domain=dom or "?"))
         coord.manual_gate("site:" + coord._site(rid))
         t0 = time.time()
         status, page, error = await coord.fetcher.get_page(rid, url, force=True, note_block=False)

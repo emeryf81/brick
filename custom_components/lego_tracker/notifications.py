@@ -374,7 +374,7 @@ class Notifier:
         for target in rule["targets"]:
             if quiet and target["type"] not in ("persistent", "event"):
                 q = self.store.setdefault("notify_queue", {}).setdefault(rule["id"], [])
-                q.append({"title": title, "message": message, "url": url})
+                q.append({"title": title, "message": message, "url": url, "dotd": "deal_of_day" in (data or {}).get("triggers", [])})
                 del q[:-50]
                 results.append({"target": target, "ok": True, "queued": True})
                 continue
@@ -437,7 +437,7 @@ class Notifier:
             key = f"{rule['id']}|dotd|{today}"
             if key in sent or now.strftime("%H:%M") < rule["params"].get("dotd_time", "09:00"):
                 continue
-            top = self.coord.deal_of_the_day(lambda n: self.in_scope(rule, n), rule["shops"])
+            top = self.coord.deal_of_the_day(lambda n, r=rule: self.in_scope(r, n), rule["shops"])
             if not top:
                 continue
             sent[key] = time.time()
@@ -462,7 +462,10 @@ class Notifier:
             if not items or in_quiet(rule.get("quiet"), now):
                 continue
             queue[rule["id"]] = []
+            items = sorted(items, key=lambda i: not i.get("dotd"))      # the deal of the day is never cut off
             body = "\n".join(f"• {i['title']}: {i['message']}" for i in items[:15])
+            if len(items) > 15:
+                body += "\n" + tr("… and {n} more", n=len(items) - 15)
             await self.send(rule, "🧱 " + tr("{n} LEGO notifications (quiet hours)", n=len(items)), body, force=True)
 
     # --------------------------------------------------------------- options

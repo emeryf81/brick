@@ -944,6 +944,7 @@
 "The LEGO set database is being downloaded…": "Basis data set LEGO sedang diunduh…",
 "The LEGO set database is downloaded within 10 minutes after Home Assistant starts, then once a day.": "Basis data set LEGO diunduh dalam 10 menit setelah Home Assistant mulai, lalu sekali sehari.",
 "The LEGO set database is not downloaded yet (within 10 minutes after Home Assistant starts).": "Basis data set LEGO belum diunduh (dalam 10 menit setelah Home Assistant mulai).",
+"The address is not on {shop} ({domain}): pick the right shop or address.": "Alamat tidak ada di {shop} ({domain}): pilih toko atau alamat yang benar.",
 "The address is on {host}, not on {shop} ({domain}): pick the right shop or address.": "Alamat ada di {host}, bukan di {shop} ({domain}): pilih toko atau alamat yang benar.",
 "The backup is fully checked first (structure, set numbers, URLs, price history) before anything changes.": "Cadangan diperiksa sepenuhnya terlebih dahulu (struktur, nomor set, URL, riwayat harga) sebelum ada yang diubah.",
 "The bar at the bottom of the screen. Click an item to open the set, or a news item to read it.": "Bilah di bagian bawah layar. Klik item untuk membuka set, atau berita untuk membacanya.",

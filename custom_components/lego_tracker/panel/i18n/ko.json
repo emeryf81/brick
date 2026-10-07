@@ -944,6 +944,7 @@
 "The LEGO set database is being downloaded…": "LEGO 세트 데이터베이스를 내려받는 중…",
 "The LEGO set database is downloaded within 10 minutes after Home Assistant starts, then once a day.": "LEGO 세트 데이터베이스는 Home Assistant 시작 후 10분 안에, 그 뒤로는 하루 한 번 내려받습니다.",
 "The LEGO set database is not downloaded yet (within 10 minutes after Home Assistant starts).": "LEGO 세트 데이터베이스를 아직 내려받지 않았습니다(Home Assistant 시작 후 10분 안에).",
+"The address is not on {shop} ({domain}): pick the right shop or address.": "주소가 {shop}({domain})에 있지 않습니다. 올바른 상점이나 주소를 고르세요.",
 "The address is on {host}, not on {shop} ({domain}): pick the right shop or address.": "주소가 {shop}({domain})이 아니라 {host}에 있습니다. 올바른 상점이나 주소를 고르세요.",
 "The backup is fully checked first (structure, set numbers, URLs, price history) before anything changes.": "변경하기 전에 백업을 먼저 전체 확인합니다 (구조, 세트 번호, URL, 가격 기록).",
 "The bar at the bottom of the screen. Click an item to open the set, or a news item to read it.": "화면 하단의 막대입니다. 항목을 클릭하면 세트가 열리고, 뉴스를 클릭하면 읽을 수 있습니다.",
