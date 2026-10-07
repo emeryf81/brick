@@ -31,7 +31,7 @@ for m in re.finditer(r'const ic = \{(.*?)\};', js):
     for x in re.finditer(r'\["[^"]*", ' + STR + r'\]', m.group(1)): add(x.group(1))
 for c in ["Sealed", "Opened", "Built", "Incomplete", "Unknown", "Job"]: add(c)
 # backend
-for f in ["coordinator.py", "models.py", "parsers.py", "client.py", "csv_import.py", "notifications.py", "__init__.py", "websocket_api.py", "shops.py", "sensor.py", "bol_api.py", "compare.py"]:
+for f in ["coordinator.py", "models.py", "parsers.py", "lab.py", "client.py", "csv_import.py", "notifications.py", "__init__.py", "websocket_api.py", "shops.py", "sensor.py", "bol_api.py", "compare.py"]:
     src = open(B + f).read()
     for m in re.finditer(r'\b(?:T|tr|LocalizedError)\(\s*' + STR, src): add(ast.literal_eval('"' + m.group(1) + '"'))
     for m in re.finditer(r'\b(?:T|tr|LocalizedError)\(\s*\n\s*' + STR, src): add(ast.literal_eval('"' + m.group(1) + '"'))

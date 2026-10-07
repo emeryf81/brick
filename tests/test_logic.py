@@ -740,3 +740,29 @@ def test_bol_com_site_choice_belgium_or_netherlands():
         assert parsers.search_url("bol", "1").startswith("https://www.bol.com/nl/nl/s/")
     finally:
         shops.apply_shop_options({})
+
+
+def test_parser_lab_explains_why_there_is_no_or_a_wrong_price():
+    """The lab says in plain words what goes wrong: amounts on the page in places the parser doesn't trust,
+    bot protection, a price far below the RRP, an Amazon page without a buy box, a JavaScript shell."""
+    from lego_pkg import lab
+    texts = lambda r: " ".join(f["text"] for f in r["findings"])  # noqa: E731
+    page = "<html><title>LEGO 10280 Bloemen</title><body><h1>LEGO Icons 10280 Bloemenboeket</h1>" + "tekst " * 2000 + \
+           "<div class='x'>Nu maar 49,99 €</div><div>Verzending 4,99 €</div></body></html>"
+    p = parsers.parse_page("c_shop", page, "10280")
+    r = lab.analyze("c_shop", page, parsers.Parsed(None, "LEGO Icons 10280 Bloemenboeket"), "10280", url="https://shop.be/p/10280")
+    assert r["verdict"] == "no_price" and "49.99" in texts(r) and r["amounts"][0]["price"] in (49.99, 4.99)
+    blocked = "<html>Type the characters you see in this image</html>"
+    r = lab.analyze("amazon_nl", blocked, parsers.parse_page("amazon_nl", blocked), "10280")
+    assert r["verdict"] == "blocked" and "Type the characters" in texts(r)
+    r = lab.analyze("c_shop", page, parsers.Parsed(9.99, "LEGO 10280 lichtset"), "10280", rrp=49.99)
+    assert r["verdict"] == "suspect" and "35%" in texts(r)
+    amz = '<html><span id="productTitle">LEGO 10280</span></html>'
+    r = lab.analyze("amazon_nl", amz, parsers.parse_page("amazon_nl", amz), "10280")
+    assert r["verdict"] == "unavailable" and "buy box" in texts(r)
+    shell = '<html><body><div id="app"></div><noscript>Please enable JavaScript</noscript></body></html>'
+    r = lab.analyze("c_shop", shell, parsers.Parsed(None), "10280")
+    assert "JavaScript" in texts(r) and r["verdict"] == "no_price"
+    r = lab.analyze("c_shop", "", parsers.Parsed(None), "10280", status=404, error="page not found (HTTP 404)")
+    assert r["verdict"] == "error" and "out of date" in texts(r)
+    assert p.price is None or p.price == 49.99

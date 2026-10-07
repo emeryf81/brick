@@ -2922,3 +2922,57 @@ async def test_bol_links_move_to_the_chosen_bol_site(hass: HomeAssistant, entry,
     c = hass.data[DOMAIN][entry.entry_id]
     assert c.bol_country == "BE"
     assert c.store["offers"]["10281"]["bol"]["url"] == "https://www.bol.com/be/nl/p/lego-bonsai/9300000038297067/"
+
+
+async def test_parser_lab_links_run_and_log(hass: HomeAssistant, entry, hass_ws_client, no_network):
+    """Manage → Parser lab: the address is filled in for a shop + set, a pasted page is read and analysed,
+    and a result can go to the logbook with its analysis."""
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281", "rrp": 49.99}, blocking=True)
+    await hass.services.async_call(DOMAIN, "set_offer", {"set_number": "10281", "retailer": "bol",
+                                                         "url": "https://www.bol.com/nl/nl/p/lego-bonsai/9300000038297067/"}, blocking=True)
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/lab", "action": "links", "retailer": "bol", "set_number": "10281"})
+    links = (await ws.receive_json())["result"]
+    assert links["suggested"] == links["link"] == "https://www.bol.com/nl/nl/p/lego-bonsai/9300000038297067/" and "searchtext" in links["search"]
+    await ws.send_json({"id": 2, "type": "lego_tracker/lab", "action": "links", "retailer": "lego_com", "set_number": "10281"})
+    assert "/product/10281" in (await ws.receive_json())["result"]["suggested"]
+    page = '<html><h1>LEGO Icons 10281 Bonsai</h1><script type="application/ld+json">{"@type":"Product","name":"LEGO 10281 Bonsaiboom","offers":{"price":"12.99"}}</script></html>'
+    await ws.send_json({"id": 3, "type": "lego_tracker/lab", "action": "run", "retailer": "bol", "set_number": "10281",
+                        "url": links["link"], "html": page})
+    r = (await ws.receive_json())["result"]
+    assert r["price"] == 12.99 and r["verdict"] == "suspect" and r["pasted"] and any("35%" in f["text"] for f in r["findings"])
+    await ws.send_json({"id": 4, "type": "lego_tracker/lab", "action": "log", "result": {k: v for k, v in r.items() if k != "head"}})
+    assert (await ws.receive_json())["success"]
+    entry_ = c.store["activity"][-1]
+    assert entry_["kind"] == "lab" and entry_["set_number"] == "10281" and entry_["level"] == "warning" and entry_["details"]
+    await ws.send_json({"id": 5, "type": "lego_tracker/lab", "action": "run", "retailer": "nope", "url": "https://x.be"})
+    assert not (await ws.receive_json())["success"]
+
+
+async def test_edit_all_saves_many_sets_and_copies_at_once(hass: HomeAssistant, entry, hass_ws_client, no_network):
+    """Manage → Edit all: names, RRP, own value, every copy (price, date, condition, location) and new sets in
+    one save; a set with a wrong value is reported and left as it was, the others are saved."""
+    c = await _setup(hass, entry)
+    for n in ("10281", "10311"):
+        await hass.services.async_call(DOMAIN, "add_set", {"set_number": n}, blocking=True)
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/bulk_update", "sets": [
+        {"set_number": "10281", "fields": {"name": "Bonsai", "rrp": 49.99, "current_value": 60, "copies": [
+            {"paid": "39,99", "added": "2024-05-01", "condition": "Sealed", "location": "zolder"},
+            {"paid": 35, "added": "2024-06-01", "condition": "Built", "location": "kast 2"}]}},
+        {"set_number": "10311", "fields": {"rrp": "not a price"}},
+        {"set_number": "42143", "new": True, "owned": True, "fields": {"copies": [{"paid": 300, "location": "kelder"}]}},
+        {"set_number": "99999", "fields": {"name": "x"}},
+    ]})
+    r = (await ws.receive_json())["result"]
+    assert r["saved"] == 2 and r["added"] == 1 and set(r["errors"]) == {"10311", "99999"}
+    coll = c.store["collection"]["10281"]
+    assert c.store["sets"]["10281"]["name"] == "Bonsai" and c.store["sets"]["10281"]["rrp"] == 49.99
+    assert [x["location"] for x in coll["items"]] == ["zolder", "kast 2"] and coll["items"][0]["paid"] == 39.99
+    assert coll["qty"] == 2 and coll["current_value"] == 60
+    assert c.store["collection"]["42143"]["items"][0]["location"] == "kelder"
+    assert "rrp" not in c.store["sets"]["10311"] or c.store["sets"]["10311"]["rrp"] != "not a price"
+    # out of the collection again
+    await ws.send_json({"id": 2, "type": "lego_tracker/bulk_update", "sets": [{"set_number": "42143", "fields": {"owned": False}}]})
+    assert (await ws.receive_json())["result"]["saved"] == 1 and "42143" not in c.store["collection"]
