@@ -30,6 +30,7 @@ for m in re.finditer(r'srcLabel = \{(.*?)\};', js):
 for m in re.finditer(r'const ic = \{(.*?)\};', js):
     for x in re.finditer(r'\["[^"]*", ' + STR + r'\]', m.group(1)): add(x.group(1))
 for c in ["Sealed", "Opened", "Built", "Incomplete", "Unknown", "Job"]: add(c)
+for m in re.finditer(r'\["\w+", ' + STR + r', \[', js[js.index("const COLOR_THEMES"):js.index("const COLOR_THEMES") + 1200]): add(m.group(1))
 # backend
 for f in ["coordinator.py", "models.py", "parsers.py", "lab.py", "client.py", "csv_import.py", "notifications.py", "__init__.py", "websocket_api.py", "shops.py", "sensor.py", "bol_api.py", "compare.py"]:
     src = open(B + f).read()

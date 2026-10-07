@@ -2976,3 +2976,37 @@ async def test_edit_all_saves_many_sets_and_copies_at_once(hass: HomeAssistant, 
     # out of the collection again
     await ws.send_json({"id": 2, "type": "lego_tracker/bulk_update", "sets": [{"set_number": "42143", "fields": {"owned": False}}]})
     assert (await ws.receive_json())["result"]["saved"] == 1 and "42143" not in c.store["collection"]
+
+
+async def test_deal_of_the_day_notification_once_a_day_from_its_time(hass: HomeAssistant, entry, no_network):
+    """A rule with "Deal of the day" sends the best deal of the rule's sets once a day, from the chosen time."""
+    from datetime import datetime
+    from pytest_homeassistant_custom_component.common import async_mock_service
+    from homeassistant.util import dt as dt_util
+    from custom_components.lego_tracker.notifications import validate_rules
+
+    c = await _setup(hass, entry)
+    pn = async_mock_service(hass, "persistent_notification", "create")
+    for n, rrp, price in (("10311", 50, 30.0), ("10281", 50, 45.0)):
+        await hass.services.async_call(DOMAIN, "add_set", {"set_number": n, "rrp": rrp}, blocking=True)
+        c.store["offers"][n]["bol"] = {"url": f"https://www.bol.com/nl/nl/p/lego-{n}/1/", "history": []}
+        no_network.return_value = (Parsed(price=price, title=f"LEGO {n}"), None)
+        await c.refresh_set(n, ["bol"])
+    c.async_set_updated_data(c.compute())
+    assert c.deal_of_the_day()[0] == "10311"
+    c.store["notify_rules"] = validate_rules([{"name": "Deal of the day", "scope": {"type": "watchlist"}, "triggers": ["deal_of_day"],
+                                               "params": {"dotd_time": "09:30"}, "targets": [{"type": "persistent"}]}])
+    tz = dt_util.get_default_time_zone()
+    n0 = len(pn)
+    await c.notifier.deal_of_the_day(datetime(2026, 10, 7, 9, 0, tzinfo=tz))       # not yet
+    assert len(pn) == n0
+    await c.notifier.deal_of_the_day(datetime(2026, 10, 7, 9, 35, tzinfo=tz))
+    await hass.async_block_till_done()
+    assert len(pn) == n0 + 1 and "10311" in pn[-1].data["title"] and "€30.00" in pn[-1].data["message"]
+    await c.notifier.deal_of_the_day(datetime(2026, 10, 7, 18, 0, tzinfo=tz))      # once a day
+    assert len(pn) == n0 + 1
+    await c.notifier.deal_of_the_day(datetime(2026, 10, 8, 9, 31, tzinfo=tz))      # the next day again
+    await hass.async_block_till_done()
+    assert len(pn) == n0 + 2
+    with pytest.raises(ValueError):
+        validate_rules([{"name": "x", "triggers": ["deal_of_day"], "params": {"dotd_time": "25:99"}, "targets": [{"type": "persistent"}]}])

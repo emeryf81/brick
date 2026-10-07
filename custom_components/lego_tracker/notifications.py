@@ -38,6 +38,7 @@ TRIGGERS: dict[str, tuple[str, bool, str | None]] = {
     "back_in_stock": ("Back in stock / first price", True, None),
     "any_change": ("Any price change", True, None),
     "digest": ("Daily digest", False, None),
+    "deal_of_day": ("Deal of the day", False, "dotd_time"),
     "new_set": ("New LEGO set announced", False, None),
     "catalog_deal": ("Deal on a set you don't follow", False, None),
     "job_done": ("Job finished (refresh, link search…)", False, None),
@@ -88,7 +89,7 @@ def validate_rules(rules: Any) -> list[dict[str, Any]]:
         if not triggers:
             raise LocalizedError("{rule}: choose at least one event.", rule=name)
         p = r.get("params") or {}
-        params: dict[str, float] = {}
+        params: dict[str, Any] = {}
         for key, lo, hi in (("discount_pct", 1, 95), ("price_below", 0.01, 10000), ("drop_pct", 1, 95), ("min_score", 1, 100)):
             if key in p and p[key] not in (None, ""):
                 try:
@@ -98,6 +99,11 @@ def validate_rules(rules: Any) -> list[dict[str, Any]]:
                 if not lo <= v <= hi:
                     raise LocalizedError("{rule}: {field} must be between {lo} and {hi}.", rule=name, field=key, lo=lo, hi=hi)
                 params[key] = v
+        if "deal_of_day" in triggers:                  # the time of day the deal of the day is sent
+            when = str(p.get("dotd_time") or "09:00")[:5]
+            if not TIME_RE.match(when):
+                raise LocalizedError("{rule}: time of the deal of the day as HH:MM.", rule=name)
+            params["dotd_time"] = when
         for t in triggers:
             need = TRIGGERS[t][2]
             if need and need not in params:
@@ -419,8 +425,36 @@ class Notifier:
                                         "message": f"{title}. {message}".replace("€", "EUR ").replace("🧱", "")}, blocking=True)
         # "event": the lego_tracker_notification event was already fired
 
+    async def deal_of_the_day(self, now: datetime | None = None) -> None:
+        """Rules with "Deal of the day": once a day, from the chosen time, the best deal among the rule's sets
+        (the same set the panel shows as deal of the day). No deal yet: tried again later that day."""
+        now = now or dt_util.now()
+        today = now.strftime("%Y-%m-%d")
+        sent = self.store.setdefault("notify_sent", {})
+        for rule in self.rules:
+            if not rule.get("enabled") or "deal_of_day" not in rule["triggers"]:
+                continue
+            key = f"{rule['id']}|dotd|{today}"
+            if key in sent or now.strftime("%H:%M") < rule["params"].get("dotd_time", "09:00"):
+                continue
+            top = self.coord.deal_of_the_day(lambda n: self.in_scope(rule, n), rule["shops"])
+            if not top:
+                continue
+            sent[key] = time.time()
+            num, st = top
+            s = self.store["sets"].get(num, {})
+            price, retailer, url = self.shop_offer(num, st, rule["shops"])
+            why = [tr("−{pct}% vs RRP", pct=f"{st['discount_rrp']:.0f}")] if st.get("discount_rrp") else []
+            why += [tr("lowest price ever")] * bool(st.get("is_all_time_low")) + [tr("below your target price")] * bool(st.get("target_hit"))
+            why += [tr("deal score {score}", score=st.get("deal_score", 0))]
+            message = tr("€{price} at {shop}", price=f"{price:.2f}", shop=RETAILERS.get(retailer, ("",))[0]) + " · " + ", ".join(why)
+            await self.send(rule, f"⭐ {tr('Deal of the day')}: {num} {s.get('name') or ''}".strip(), message, url=url,
+                            image=s.get("image") if rule.get("image") else None,
+                            data={"set_number": num, "triggers": ["deal_of_day"], "price": price})
+
     async def flush_queues(self, _now: Any = None) -> None:
-        """After quiet hours: one bundled message per rule."""
+        """After quiet hours: one bundled message per rule. Also sends the deal of the day when it is time."""
+        await self.deal_of_the_day()
         queue = self.store.get("notify_queue") or {}
         now = dt_util.now()
         for rule in self.rules:

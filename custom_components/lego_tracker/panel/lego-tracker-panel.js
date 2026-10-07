@@ -115,7 +115,12 @@ const ago = (ts) => {
 };
 const dur = (sec) => (sec >= 5400 ? t("{n} h", { n: (sec / 3600).toFixed(1) }) : sec >= 90 ? t("{n} min", { n: Math.round(sec / 60) }) : t("{n} s", { n: Math.round(sec) }));
 const COLORS = ["#d01012", "#0057a6", "#00852b", "#f5a800", "#7a3c9e", "#00a3da", "#e76318", "#6c6e68"];
-const CONDITIONS = ["Sealed", "Opened", "Built", "Incomplete"];   // stored in English, shown with t()
+const CONDITIONS = ["Sealed", "Opened", "Built", "Incomplete"];
+/** Colour themes for the whole panel: [key, name, swatches]. "ha" = the colours of your Home Assistant theme. */
+const COLOR_THEMES = [["ha", "Home Assistant", ["var(--primary-color,#03a9f4)", "var(--card-background-color,#fff)", "var(--primary-background-color,#f3f4f7)"]],
+  ["lego", "LEGO", ["#d01012", "#f5c400", "#fff"]], ["ocean", "Ocean", ["#0067b8", "#e7f1fb", "#fff"]], ["forest", "Forest", ["#1b7f3b", "#e8f4ec", "#fff"]],
+  ["violet", "Violet", ["#7a3c9e", "#f1e9f6", "#fff"]], ["sunset", "Sunset", ["#e3611a", "#fdeee4", "#fff"]], ["light", "Light", ["#0057a6", "#fff", "#f3f4f7"]],
+  ["dark", "Dark", ["#5b9bff", "#1c1f26", "#111318"]]];   // stored in English, shown with t()
 const REDUCED = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 const lastAt = (pts, t) => { let r = null; for (const p of pts) { if (p[0] <= t) r = p; else break; } return r; };
 
@@ -208,6 +213,18 @@ const STYLE = `
 --lt-line:var(--divider-color,#e1e3e8);--lt-accent:var(--primary-color,#0057a6);--lt-on-accent:var(--text-primary-color,#fff);--lt-soft:color-mix(in srgb,var(--lt-accent) 10%,var(--lt-card));
 --lt-red:#d01012;--lt-green:#00852b;--lt-yellow:#f5a800;--lt-purple:#7a3c9e;--lt-radius:16px;--lt-shadow:var(--ha-card-box-shadow,0 1px 2px rgba(0,0,0,.06),0 4px 16px rgba(0,0,0,.06));
 display:block;background:var(--lt-bg);color:var(--lt-text);min-height:100vh;font-family:var(--paper-font-body1_-_font-family,Roboto,system-ui,sans-serif);-webkit-font-smoothing:antialiased}
+/* colour themes (Settings → Colours); none set = the colours of your Home Assistant theme */
+:host([data-colors="lego"]){--lt-accent:#d01012;--lt-on-accent:#fff;--lt-soft:#fff4cc}
+:host([data-colors="ocean"]){--lt-accent:#0067b8;--lt-on-accent:#fff}
+:host([data-colors="forest"]){--lt-accent:#1b7f3b;--lt-on-accent:#fff}
+:host([data-colors="violet"]){--lt-accent:#7a3c9e;--lt-on-accent:#fff}
+:host([data-colors="sunset"]){--lt-accent:#e3611a;--lt-on-accent:#fff}
+:host([data-colors="light"]){--lt-bg:#f3f4f7;--lt-card:#fff;--lt-text:#1b1c20;--lt-muted:#6b6f7a;--lt-line:#e1e3e8;--lt-accent:#0057a6;--lt-on-accent:#fff;color-scheme:light}
+:host([data-colors="dark"]){--lt-bg:#111318;--lt-card:#1c1f26;--lt-text:#e8eaf0;--lt-muted:#9aa0ad;--lt-line:#2c313b;--lt-accent:#5b9bff;--lt-on-accent:#0b1020;--lt-shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.35);color-scheme:dark}
+.colrow{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:8px;margin-top:10px}
+.colsw{display:flex;flex-direction:column;gap:6px;align-items:center;padding:10px 6px;border:2px solid var(--lt-line);border-radius:12px;background:var(--lt-card);cursor:pointer;font-size:13px}
+.colsw.on{border-color:var(--lt-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--lt-accent) 25%,transparent)}.colsw i{display:flex;gap:3px}.colsw i b{width:18px;height:18px;border-radius:50%;border:1px solid rgba(0,0,0,.12)}
+input[type=range].colrange{width:100%;accent-color:var(--lt-accent)}
 *{box-sizing:border-box}[hidden]{display:none!important}
 .wrap{max-width:1280px;margin:0 auto;padding:12px 16px 64px}
 header{display:flex;align-items:center;gap:12px;padding:6px 0 14px}
@@ -448,6 +465,7 @@ class LegoTrackerPanel extends HTMLElement {
       for (const [k, v] of Object.entries(saved.sub || {})) if (SECTIONS[k] && SECTIONS[k].subs.some(([x]) => x === v)) this.state.sub[k] = v;
     } catch (e) { /* storage unavailable */ }
     this.resetFilters();
+    this.applyColors(this.colorTheme());
     // approving a suspicious price works the same everywhere (set dialog, shops & jobs, logbook)
     this.shadowRoot.addEventListener("click", (e) => {
       const b = e.target.closest && e.target.closest(".apprb"); if (!b) return;
@@ -564,6 +582,8 @@ class LegoTrackerPanel extends HTMLElement {
   }
   set narrow(v) { this._narrow = v; }
   set panel(_) {}
+  colorTheme() { try { const c = localStorage.getItem("lego_tracker_colors"); return COLOR_THEMES.some(([k]) => k === c) ? c : "ha"; } catch (e) { return "ha"; } }
+  applyColors(key) { if (key && key !== "ha") this.dataset.colors = key; else delete this.dataset.colors; }
   persist() { try { localStorage.setItem("lego_tracker_ui", JSON.stringify({ section: this.state.section, sub: this.state.sub, cview: this.state.cview, range: this.state.range })); } catch (e) { /* ignore */ } }
 
   // ---------------------------------------------------------------- data
@@ -1775,6 +1795,7 @@ class LegoTrackerPanel extends HTMLElement {
       set: { ...base, name: t("Specific sets"), scope: { type: "sets", themes: [], sets: [] }, triggers: ["price_below", "price_drop"], params: { price_below: 50, drop_pct: 10 } },
       retire: { ...base, name: t("Retiring sets"), scope: { type: "watchlist", themes: [], sets: [] }, triggers: ["retiring_soon"] },
       digest: { ...base, name: t("Daily digest"), triggers: ["digest"], cooldown_hours: 0, image: false, link: false },
+      dotd: { ...base, name: t("Deal of the day"), scope: { type: "watchlist", themes: [], sets: [] }, triggers: ["deal_of_day"], params: { dotd_time: "09:00" }, cooldown_hours: 0 },
       problems: { ...base, name: t("Report problems"), triggers: ["problems"], targets: [{ type: "persistent" }], image: false, link: false },
     }[kind];
   }
@@ -1799,7 +1820,7 @@ class LegoTrackerPanel extends HTMLElement {
     const list = d.rules.map((r, i) => `<div class="rule ${r.enabled ? "" : "off"}" data-ri="${i}"><label class="switch" title="${t("On/off")}"><input type="checkbox" class="r_on" ${r.enabled ? "checked" : ""}><i></i></label>
       <div style="flex:1;min-width:0"><b>${esc(r.name)}</b>${d.queued[r.id] ? ` <span class="tag">🌙 ${t("{n} queued", { n: d.queued[r.id] })}</span>` : ""}<div class="sum">${this.ruleSummary(r)}</div></div>
       <div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end"><button class="btn ghost sm r_edit">✎ ${t("Edit")}</button><button class="btn ghost sm r_test" title="${t("Send a test notification")}">🔔</button><button class="btn ghost sm r_dup" title="${t("Duplicate")}">⧉</button><button class="btn danger sm r_del" title="${t("Delete")}">🗑</button></div></div>`).join("");
-    const tpl = [["deals", "🏷️ " + t("All deals")], ["watch", "👀 " + t("Watchlist lowest price")], ["theme", "🎨 " + t("Theme below an amount")], ["set", "🧱 " + t("Specific sets")], ["retire", "⏳ " + t("Retiring soon")], ["digest", "🗞️ " + t("Daily digest")], ["problems", "⚠️ " + t("Problems")]];
+    const tpl = [["deals", "🏷️ " + t("All deals")], ["watch", "👀 " + t("Watchlist lowest price")], ["theme", "🎨 " + t("Theme below an amount")], ["set", "🧱 " + t("Specific sets")], ["retire", "⏳ " + t("Retiring soon")], ["dotd", "⭐ " + t("Deal of the day")], ["digest", "🗞️ " + t("Daily digest")], ["problems", "⚠️ " + t("Problems")]];
     const log = d.log.slice(0, 15).map((l) => `<li><span class="ic">${l.queued ? "🌙" : l.ok ? "✅" : "⚠️"}</span><div><b>${esc(tx(l.title))}</b><div>${esc(tx(l.message.split("\n")[0]))}</div><div class="t">${esc(l.rule)} · ${DATE(l.ts, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div></div></li>`).join("");
     return `<div class="cols" data-nf="1"><div><div class="panel"><h3>🔔 ${t("Notification rules")}<span class="hsp"></span></h3><p>${t("Each rule decides for which sets, when, and to whom and how you get a notification. Every notification also fires the event {event} for your own automations, and ends up in the Logbook.", { event: "<code>lego_tracker_notification</code>" })}</p>
       ${list || this.emptyState("🔕", t("No rules yet. Pick a template below."))}</div>
@@ -1824,6 +1845,7 @@ class LegoTrackerPanel extends HTMLElement {
     const pc = (k, list) => `<select data-param="${k}">${opt(list.map((v) => [v, k !== "min_score" ? `${v}%` : v]), p[k] ?? list[Math.floor(list.length / 2)])}</select>`;
     const trigRow = (k) => { const tg = o.triggers[k]; const on = r.triggers.includes(k);
       const par = { discount_pct: pc("discount_pct", [10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70]), drop_pct: pc("drop_pct", [5, 10, 15, 20, 25, 30, 40, 50]), min_score: pc("min_score", [45, 50, 60, 70, 80, 90]),
+        dotd_time: `<span style="display:flex;gap:4px;align-items:center">${t("at")} <select data-param="dotd_time" data-str="1">${opt(Array.from({ length: 48 }, (_, i) => { const v = `${String(Math.floor(i / 2)).padStart(2, "0")}:${i % 2 ? "30" : "00"}`; return [v, v]; }), p.dotd_time || "09:00")}</select></span>`,
         price_below: `<span style="display:flex;gap:4px;align-items:center">€ <input data-param="price_below" type="number" min="1" step="1" value="${esc(p.price_below ?? "")}" placeholder="${t("amount")}" style="width:90px"></span>` }[tg.param] || "";
       return `<div class="trig"><input type="checkbox" data-trig="${k}" ${on ? "checked" : ""}><label style="cursor:pointer" data-trigl="${k}">${esc(t(tg.label))}${tg.per_set ? "" : ` <span class="muted" style="font-size:12px">(${t("general")})</span>`}</label><div>${par}</div></div>`; };
     const perSet = Object.keys(o.triggers).filter((k) => o.triggers[k].per_set), general = Object.keys(o.triggers).filter((k) => !o.triggers[k].per_set);
@@ -1876,7 +1898,7 @@ class LegoTrackerPanel extends HTMLElement {
       const v = (id) => (root.querySelector("#" + id) || {}).value;
       if ($("n_name")) r.name = $("n_name").value; if ($("n_enabled")) r.enabled = $("n_enabled").checked;
       root.querySelectorAll("[data-trig]").forEach((c) => { const k = c.dataset.trig; r.triggers = r.triggers.filter((x) => x !== k); if (c.checked) r.triggers.push(k); });
-      root.querySelectorAll("[data-param]").forEach((c) => { r.params[c.dataset.param] = c.value === "" ? undefined : +c.value; });
+      root.querySelectorAll("[data-param]").forEach((c) => { r.params[c.dataset.param] = c.value === "" ? undefined : c.dataset.str ? c.value : +c.value; });
       root.querySelectorAll(".tgt").forEach((el) => { const tg = r.targets[+el.dataset.ti]; el.querySelectorAll("[data-tf]").forEach((f) => { if (f.dataset.tf === "type") return; tg[f.dataset.tf] = f.dataset.tf === "to" ? f.value.split(/[,;\s]+/).filter(Boolean) : f.value; }); });
       if ($("n_cool")) r.cooldown_hours = +v("n_cool");
       if ($("n_qon")) r.quiet = v("n_qon") ? { from: v("n_qf") || "22:00", to: v("n_qt") || "07:00" } : null;
@@ -1966,7 +1988,7 @@ class LegoTrackerPanel extends HTMLElement {
       <td>${x.builtin ? "" : `<button class="btn danger sm s_del" title="${t("Remove shop")}">🗑</button>`}</td></tr>`).join("");
     const langs = st.languages || {}, mode = d.mode, dev = st.dev || {};
     const perHour = (h) => { const n = (this.state.data.schedule || {}).total || this.sets.length; return n ? Math.round((n / h) * 10) / 10 : 0; };
-    return `<div class="panel"><h3>🌐 ${t("Language")}</h3><div class="form" style="max-width:520px"><label>${t("Language of the panel, notifications and userscript")}<select id="o_lang"><option value="auto" ${st.language === "auto" ? "selected" : ""}>${t("Automatic (Home Assistant language)")}</option>${Object.entries(langs).map(([k, l]) => `<option value="${k}" ${st.language === k ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label></div></div>
+    return `${this.colorsPanel()}<div class="panel"><h3>🌐 ${t("Language")}</h3><div class="form" style="max-width:520px"><label>${t("Language of the panel, notifications and userscript")}<select id="o_lang"><option value="auto" ${st.language === "auto" ? "selected" : ""}>${t("Automatic (Home Assistant language)")}</option>${Object.entries(langs).map(([k, l]) => `<option value="${k}" ${st.language === k ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label></div></div>
       <div class="panel"><h3>🔔 ${t("Notifications")}</h3><p class="muted" style="font-size:13px">${t("What counts as a deal, and which themes, prices and sets are left out, is set under Deals → Settings.")} <a data-goto="deals/dset" style="cursor:pointer">🏷️ ${t("Deal settings")} →</a></p>
         <div class="form"><label>${t("Notifications")}<a class="btn ghost sm" data-goto="manage/notify" style="cursor:pointer;margin-top:4px;align-self:flex-start">🔔 ${t("Go to Notifications")}</a><input id="o_notify" type="hidden" value="${esc(st.notify_service)}"></label>
         <label>${t("Daily digest at")}<input id="o_digest" type="time" value="${esc(st.digest_time)}"></label></div></div>
@@ -2268,7 +2290,26 @@ class LegoTrackerPanel extends HTMLElement {
       });
     }
   }
+  /** Settings → Colours: a slider (and swatches) to switch the colours of the whole panel, in this browser. */
+  colorsPanel() {
+    const cur = this.colorTheme(), i = COLOR_THEMES.findIndex(([k]) => k === cur);
+    return `<div class="panel"><h3>🎨 ${t("Colours")}</h3><p>${t("Slide to switch the colours of the whole panel. “Home Assistant” (the default) follows the theme of your Home Assistant; the choice is kept in this browser.")}</p>
+      <label style="display:block"><b id="col_name">${esc(t(COLOR_THEMES[i][1]))}</b><input type="range" class="colrange" id="col_range" min="0" max="${COLOR_THEMES.length - 1}" step="1" value="${i}" aria-label="${esc(t("Colours"))}"></label>
+      <div class="colrow">${COLOR_THEMES.map(([k, l, sw], j) => `<button class="colsw${k === cur ? " on" : ""}" data-col="${j}" type="button"><i>${sw.map((c) => `<b style="background:${c}"></b>`).join("")}</i>${esc(t(l))}</button>`).join("")}</div></div>`;
+  }
+  bindColors(root) {
+    const rng = root.querySelector("#col_range"); if (!rng) return;
+    const pick = (j) => {
+      const [k, l] = COLOR_THEMES[j];
+      try { if (k === "ha") localStorage.removeItem("lego_tracker_colors"); else localStorage.setItem("lego_tracker_colors", k); } catch (e) { /* private window */ }
+      this.applyColors(k); rng.value = j; root.querySelector("#col_name").textContent = t(l);
+      root.querySelectorAll(".colsw").forEach((b) => b.classList.toggle("on", +b.dataset.col === j));
+    };
+    rng.addEventListener("input", () => pick(+rng.value));
+    root.querySelectorAll(".colsw").forEach((b) => b.onclick = () => pick(+b.dataset.col));
+  }
   bindSettings(root, $) {
+    this.bindColors(root);
     const lines = (v) => v.split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean);
     let ft;
     const ftest = () => { clearTimeout(ft); ft = setTimeout(async () => {

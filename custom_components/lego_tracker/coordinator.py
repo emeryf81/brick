@@ -332,6 +332,23 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def watch_limit(self) -> int | None:
         return None if self.dev(CONF_DEV_WATCH_UNLIMITED) else WATCH_LIMIT
 
+    def deal_of_the_day(self, include: Any = None, shops: list[str] | None = None) -> tuple[str, dict[str, Any]] | None:
+        """The best deal right now (as the panel shows it under Deals → Today): a set that counts as a deal,
+        highest deal score first. include(num): which sets may count (default: your watchlist)."""
+        data, rules = self.data or self.compute(), self.deal_rules
+        best = None
+        for num, st in data["statuses"].items():
+            if num not in self.store["sets"] or not (include(num) if include else self.is_watched(num)):
+                continue
+            if st.get("best_price") is None or self.deal_blocked(num, st) or (shops and st.get("best_retailer") not in shops):
+                continue
+            deal = (rules["atl"] and st.get("is_all_time_low")) or (rules["target"] and st.get("target_hit")) \
+                or st.get("deal_score", 0) >= rules["min_score"] or (st.get("discount_rrp") or 0) >= rules["threshold"]
+            key = (st.get("deal_score", 0), st.get("discount_rrp") or 0)
+            if deal and (best is None or key > best[0]):
+                best = (key, num, st)
+        return (best[1], best[2]) if best else None
+
     @property
     def deal_rules(self) -> dict[str, Any]:
         """What counts as a deal (the panel's Deals view and badges)."""
