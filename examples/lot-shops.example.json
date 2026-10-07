@@ -169,5 +169,14 @@
         "*": "https://www.brickeconomy.com/set/{number}-1/"
       }
     }
-  ]
+  ],
+  "data_sources": {
+    "brickset_api": "https://brickset.com/api/v3.asmx/getSets",
+    "brickset_page": "https://brickset.com/sets/{number}-1",
+    "rebrickable_api": "https://rebrickable.com/api/v3/lego",
+    "set_database_sets": "https://cdn.rebrickable.com/media/downloads/sets.csv.gz",
+    "set_database_themes": "https://cdn.rebrickable.com/media/downloads/themes.csv.gz",
+    "bol_api_token": "https://login.bol.com/token",
+    "bol_api": "https://api.bol.com/marketing/catalog/v1"
+  }
 }

@@ -786,7 +786,10 @@ def test_shop_settings_file_is_checked_and_drives_every_address():
                      (lambda d: d["shops"][0].update(id="lego_shop"), "must have the id lego_com"),
                      (lambda d: d["comparison_sites"][0]["start"].update(BE="https://evil.example/?q={query}"), "on one of its hosts"),
                      (lambda d: d["comparison_sites"][3].update(langs="en"), "hosts and start addresses"),
-                     (lambda d: d["comparison_sites"][0].update(hosts="www.kieskeurig.be"), "hosts and start addresses")):
+                     (lambda d: d["comparison_sites"][0].update(hosts="www.kieskeurig.be"), "hosts and start addresses"),
+                     (lambda d: d["data_sources"].update(brickset_page="https://brickset.com/sets/"), "must be an https:// address"),
+                     (lambda d: d["data_sources"].update(rebrickable_api="http://rebrickable.com/api"), "must be an https:// address"),
+                     (lambda d: d["data_sources"].update(evil="https://x.example/"), "Unknown data source")):
         d = copy.deepcopy(example)
         bad(d)
         with pytest.raises(ValueError, match=why):
@@ -802,11 +805,13 @@ def test_shop_settings_file_is_checked_and_drives_every_address():
         "https://shopping.producthero.com/en/product/05702017416281?country=it"
     assert compare.first_url("producthero", "10311", "nl-be") is None                 # needs an EAN
     assert compare.first_url("brickeconomy", "10311") == "https://www.brickeconomy.com/set/10311-1/"
+    assert shops.source_url("brickset_page") == "https://brickset.com/sets/{number}-1" and set(ok["data_sources"]) == set(shops.DATA_SOURCES)
     assert compare.is_compare_url("https://www.kieskeurig.nl/x") and compare.shop_retailer("Amazon BE", None, {}) == "amazon_be"
     # without settings: no shops, no comparison sites, no addresses at all
     try:
         shops.raw_apply_shop_options({})
         assert shops.RETAILERS == {} and compare.SOURCES == {} and not shops.ready()
         assert parsers.search_url("amazon_be", "10311") is None and parsers.lego_product_url("10311") is None
+        assert shops.SOURCES == {} and shops.source_url("brickset_api") is None
     finally:
         shops.apply_shop_options({})

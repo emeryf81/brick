@@ -3,9 +3,10 @@
 Official route to bol.com prices: no bot protection, no scraping. Needs a client id + secret from
 the bol.com affiliate program (Partnerplatform → API credentials).
 
-- token:  POST https://login.bol.com/token?grant_type=client_credentials (HTTP basic auth)
-- search: GET  https://api.bol.com/marketing/catalog/v1/products/search?search-term=…&country-code=NL|BE
-- offer:  GET  https://api.bol.com/marketing/catalog/v1/products/{ean}/offers/best?country-code=NL|BE
+The addresses come from the shop settings ("bol_api_token", "bol_api"):
+- token:  POST <bol_api_token>?grant_type=client_credentials (HTTP basic auth)
+- search: GET  <bol_api>/products/search?search-term=…&country-code=NL|BE
+- offer:  GET  <bol_api>/products/{ean}/offers/best?country-code=NL|BE
 
 The response parsing is deliberately tolerant (walks the JSON for product-like and price-like
 objects) so small schema differences don't break it.
@@ -20,8 +21,6 @@ import aiohttp
 
 from .i18n import T
 
-TOKEN_URL = "https://login.bol.com/token"
-API = "https://api.bol.com/marketing/catalog/v1"
 TIMEOUT = aiohttp.ClientTimeout(total=20)
 
 
@@ -107,8 +106,11 @@ def products(data: Any) -> list[dict[str, Any]]:
 
 
 class BolApi:
-    def __init__(self, session: aiohttp.ClientSession, client_id: str, client_secret: str, country: str = "NL") -> None:
+    def __init__(self, session: aiohttp.ClientSession, client_id: str, client_secret: str, country: str = "NL", *,
+                 token_url: str, api_url: str) -> None:
+        """token_url / api_url: the "bol_api_token" and "bol_api" addresses from the shop settings."""
         self._session, self._id, self._secret = session, client_id, client_secret
+        self._token_url, self._api = token_url, api_url.rstrip("/")
         self.country = "BE" if country.upper() == "BE" else "NL"
         self._token: str | None = None
         self._expires = 0.0
@@ -118,7 +120,7 @@ class BolApi:
             return self._token
         basic = base64.b64encode(f"{self._id}:{self._secret}".encode()).decode()
         try:
-            async with self._session.post(TOKEN_URL, params={"grant_type": "client_credentials"}, timeout=TIMEOUT,
+            async with self._session.post(self._token_url, params={"grant_type": "client_credentials"}, timeout=TIMEOUT,
                                           headers={"Authorization": f"Basic {basic}", "Accept": "application/json"}) as r:
                 if r.status in (400, 401, 403):
                     raise BolApiError(T("bol.com API: client id or secret not accepted"))
@@ -137,7 +139,7 @@ class BolApi:
         for attempt in (1, 2):
             token = await self._auth()
             try:
-                async with self._session.get(f"{API}{path}", params={"country-code": self.country, **params}, timeout=TIMEOUT,
+                async with self._session.get(f"{self._api}{path}", params={"country-code": self.country, **params}, timeout=TIMEOUT,
                                              headers={"Authorization": f"Bearer {token}", "Accept": "application/json",
                                                       "Accept-Language": "nl"}) as r:
                     if r.status == 401 and attempt == 1:   # expired token: log in again once

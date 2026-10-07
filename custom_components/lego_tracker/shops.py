@@ -30,7 +30,12 @@ SEARCH: dict[str, str] = dict(DEFAULT_SEARCH)      # effective search template p
 LOCALE = {"lego": DEFAULT_LEGO_LOCALE, "bol": "nl"}  # "bol": which bol.com site is asked, "nl" (bol.com/nl/nl) or "be"
 BOL_PATH_RE = re.compile(r"(bol\.com)/(?:nl|be)/nl/", re.I)
 
+# other websites in the settings file: set data, the set database download and the bol.com API
+DATA_SOURCES = {"brickset_api": "Brickset API", "brickset_page": "Brickset set page", "rebrickable_api": "Rebrickable API",
+                "set_database_sets": "Set database (sets)", "set_database_themes": "Set database (themes)",
+                "bol_api_token": "bol.com API login", "bol_api": "bol.com API"}
 PROFILE: dict[str, dict[str, Any]] = {}            # shop id -> its entry in the imported settings file
+SOURCES: dict[str, str] = {}                        # data source key -> its address in the settings file
 COMPARE: dict[str, dict[str, Any]] = {}            # internal source id -> comparison site entry
 ALIASES: list[tuple[str, str]] = []                 # (shop name as comparison sites write it, shop id), longest first
 STATE = {"profile": False, "legal": False}
@@ -123,8 +128,19 @@ def validate_settings(data: Any) -> dict[str, Any]:
         sites.append({"id": sid, "name": str(raw.get("name") or sid)[:40], "hosts": hosts,
                       "start": {str(k).upper() if k != "*" else "*": v for k, v in start.items()},
                       "langs": [x.lower() for x in raw_langs or []][:10]})
+    raw_sources = data.get("data_sources") or {}
+    if not isinstance(raw_sources, dict):
+        raise LocalizedError("data_sources must be an object of addresses.")
+    sources = {}
+    for key, url in raw_sources.items():
+        if key not in DATA_SOURCES:
+            raise LocalizedError("Unknown data source {key} (one of: {keys}).", key=key, keys=", ".join(DATA_SOURCES))
+        if not isinstance(url, str) or not url.startswith("https://") or " " in url or not urlparse(url).hostname \
+                or (key == "brickset_page" and "{number}" not in url):
+            raise LocalizedError("Data source {key}: must be an https:// address.", key=key)
+        sources[key] = url
     locale = str(data.get("lego_locale") or "").lower()
-    out = {"format": SETTINGS_FORMAT, "version": SETTINGS_VERSION, "shops": shops, "comparison_sites": sites}
+    out = {"format": SETTINGS_FORMAT, "version": SETTINGS_VERSION, "shops": shops, "comparison_sites": sites, "data_sources": sources}
     if re.fullmatch(r"[a-z]{2}-[a-z]{2}", locale):
         out["lego_locale"] = locale
     return out
@@ -154,6 +170,11 @@ def ready() -> bool:
     return STATE["profile"] and STATE["legal"]
 
 
+def source_url(key: str) -> str | None:
+    """The address of a data source from the shop settings, only when they are imported and their terms accepted."""
+    return SOURCES.get(key) if ready() else None
+
+
 def profile_ids() -> list[str]:
     return list(PROFILE)
 
@@ -178,6 +199,8 @@ def apply_shop_options(options: dict[str, Any]) -> None:
     PROFILE.clear()
     COMPARE.clear()
     ALIASES.clear()
+    SOURCES.clear()
+    SOURCES.update((profile or {}).get("data_sources", {}))
     for shop in (profile or {}).get("shops", []):
         PROFILE[shop["id"]] = shop
         RETAILERS[shop["id"]] = (shop["name"], "EUR")
@@ -232,6 +255,7 @@ def export_settings(options: dict[str, Any]) -> dict[str, Any]:
         shops.append(s)
     out["shops"] = shops
     out["comparison_sites"] = profile.get("comparison_sites", [])
+    out["data_sources"] = profile.get("data_sources", {})
     out["custom_shops"] = [s for s in options.get("custom_shops", []) or []]
     return out
 

@@ -3131,6 +3131,16 @@ async def test_no_shop_is_contacted_before_shop_settings_are_imported_and_accept
         assert req.await_count == 0
     with pytest.raises(ValueError, match="import the shop settings"):
         c.manual_gate("prices")
+    # set data, the set database and the bol.com API are not asked either
+    from custom_components.lego_tracker import client as cl
+    session = AsyncMock()
+    assert await cl.lookup_metadata(session, "key1", "key2", "10281") == ({}, None) and not session.get.called
+    assert (await cl.test_metadata_source(session, "brickset", "key1"))[0] is False
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "bol_client_id": "a", "bol_client_secret": "b"})
+    assert c.bol_api is None and (await c.test_bol("a", "b"))[0] is False
+    c.setdb_info.update(busy=False, ts=0)
+    c.setdb_tick()
+    assert c.setdb_info["busy"] is False
     example = json.loads((Path(__file__).parent.parent / "examples" / "lot-shops.example.json").read_text("utf-8"))
     ws = await hass_ws_client(hass)
     await ws.send_json({"id": 1, "type": "lego_tracker/shop_settings/import", "settings": example, "accept": False})

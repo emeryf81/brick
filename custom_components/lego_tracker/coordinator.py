@@ -40,7 +40,7 @@ from .notifications import Notifier, default_rules
 from .bol_api import BolApi, BolApiError
 from . import catalog, sitemaps, compare, setdb, scan
 from .shops import (CONF_LEGAL, CONF_SHOP_PROFILE, LEGAL_VERSION, all_domains, bol_site, bol_site_url, domain_of, profile_ids,
-                    reader_of, ready, site_root)
+                    reader_of, ready, site_root, source_url)
 from .parsers import Parsed, title_check, wrong_product
 from .shops import SEARCH, valid_search
 from .parsers import BUILTIN_WORDS, KNOCKOFF_RE, find_search_result, is_search_url, search_url, accessory_word, set_custom_words, clean_title, normalize_url, retailer_from_url, url_key
@@ -748,10 +748,12 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def bol_api(self) -> BolApi | None:
         """The official bol.com API when the user entered affiliate credentials (else: scraping)."""
         cid, secret = self.opt(self.entry, CONF_BOL_CLIENT_ID, ""), self.opt(self.entry, CONF_BOL_CLIENT_SECRET, "")
-        if not (cid and secret) or not ready():
+        token_url, api_url = source_url("bol_api_token"), source_url("bol_api")
+        if not (cid and secret and token_url and api_url):     # source_url: only with shop settings + accepted terms
             return None
         if self._bol_api is None:
-            self._bol_api = BolApi(async_get_clientsession(self.hass), cid, secret, self.bol_country)
+            self._bol_api = BolApi(async_get_clientsession(self.hass), cid, secret, self.bol_country,
+                                   token_url=token_url, api_url=api_url)
         return self._bol_api
 
     async def _bol_match(self, num: str, url: str | None = None) -> dict[str, Any] | None:
@@ -2263,7 +2265,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         sec = secret or self.opt(self.entry, CONF_BOL_CLIENT_SECRET, "")
         if not (cid and sec):
             return False, T("no key entered")
-        api = BolApi(async_get_clientsession(self.hass), cid, sec, self.bol_country)
+        token_url, api_url = source_url("bol_api_token"), source_url("bol_api")
+        if not (token_url and api_url):
+            return False, T("this source is not in your shop settings (or their terms are not accepted)")
+        api = BolApi(async_get_clientsession(self.hass), cid, sec, self.bol_country, token_url=token_url, api_url=api_url)
         try:
             found = [p for p in await api.search("LEGO 10281") if title_check(p["title"], "10281")[0] == "ok"]
         except BolApiError as err:
@@ -2602,7 +2607,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     @callback
     def setdb_tick(self, _now: Any = None) -> None:
         """Every few hours: when the set database is a day old, download it again (in the background)."""
-        if self.setdb_info["busy"] or time.time() - self.setdb_info["ts"] < setdb.REFRESH_HOURS * 3600:
+        if self.setdb_info["busy"] or time.time() - self.setdb_info["ts"] < setdb.REFRESH_HOURS * 3600 \
+                or not (source_url("set_database_sets") and source_url("set_database_themes")):
             return
         self.setdb_info["busy"] = True
         self.entry.async_create_background_task(self.hass, self.refresh_setdb(), f"{DOMAIN}_setdb")
@@ -2625,7 +2631,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.setdb_info["busy"] = True
         try:
             try:
-                sets_gz, themes_gz = await self._download(setdb.SETS_URL), await self._download(setdb.THEMES_URL)
+                sets_url, themes_url = source_url("set_database_sets"), source_url("set_database_themes")
+                if not (sets_url and themes_url):
+                    raise ValueError(T("the set database is not in your shop settings (or their terms are not accepted)"))
+                sets_gz, themes_gz = await self._download(sets_url), await self._download(themes_url)
                 new = await self.hass.async_add_executor_job(setdb.parse, sets_gz, themes_gz)
                 if len(new) < 1000:
                     raise ValueError(f"only {len(new)} sets in the download")

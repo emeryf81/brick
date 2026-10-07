@@ -2078,8 +2078,8 @@ class LegoTrackerPanel extends HTMLElement {
         <p>${t("The search URL decides how “Find links” finds a product; every shop has a default that you can change. Easiest: search the shop for e.g. “lego 10311”, copy the address bar and paste it here — the set number is replaced by {query} automatically. {query} = “LEGO + set number”, {number} = the set number, {locale} = the LEGO.com country. ↺ restores the default.", { query: "<code>{query}</code>", number: "<code>{number}</code>", locale: "<code>{locale}</code>" })}</p>
         <div class="form" style="max-width:420px"><label>${t("LEGO.com country (language-country)")}<input id="o_locale" value="${esc(st.lego_locale || "nl-be")}" placeholder="nl-be"></label></div>
         <div class="tscroll"><table class="tbl"><tr><th>${t("Shop")}</th><th>${t("Status")}</th><th>${t("Pause")}</th><th>${t("Search URL")}</th><th></th></tr>${shopRows}</table></div>
-        <h3 style="margin-top:16px">＋ ${t("Add your own shop")}</h3><div class="form"><label>${t("Name")}<input id="n_name" placeholder="${t("e.g. {example}", { example: "Intertoys" })}"></label><label>${t("Domain")}<input id="n_domain" placeholder="intertoys.be"></label>
-        <label style="grid-column:span 2">${t("Search URL")}<input id="n_search" placeholder="https://www.intertoys.be/zoeken?q=lego+10311"><div class="hint muted" id="n_search_prev"></div></label></div>
+        <h3 style="margin-top:16px">＋ ${t("Add your own shop")}</h3><div class="form"><label>${t("Name")}<input id="n_name" placeholder="${t("e.g. {example}", { example: "Example Shop" })}"></label><label>${t("Domain")}<input id="n_domain" placeholder="example-shop.be"></label>
+        <label style="grid-column:span 2">${t("Search URL")}<input id="n_search" placeholder="https://www.example-shop.be/search?q=lego+10311"><div class="hint muted" id="n_search_prev"></div></label></div>
         <p style="font-size:12px">${t("Prices are read from the standard product data (JSON-LD/meta) that most web shops have.")}</p><button class="btn ghost" id="n_add">＋ ${t("Add to the list")}</button></div>
       <div class="panel"><h3>🚫 ${t("Product filter")}</h3>
         <p>${t("A product whose title contains one of these words is never taken as the set (e.g. an LED kit or display case for that set number): it is skipped everywhere — shop searches, link check and comparison sites — and the next result with the set number counts.")}</p>
@@ -2230,7 +2230,7 @@ class LegoTrackerPanel extends HTMLElement {
           const j = JSON.parse(await f.text());
           if (!j || j.format !== "lot-shop-settings" || !Array.isArray(j.shops)) throw new Error("format");
           payload = j; q("ss_name").textContent = f.name;
-          q("ss_info").innerHTML = `<p><b>${t("{n} shops", { n: j.shops.length })}:</b> ${j.shops.map((x) => esc(x.name || x.id)).join(", ")}${(j.comparison_sites || []).length ? `<br><b>${t("{n} comparison sites", { n: j.comparison_sites.length })}:</b> ${j.comparison_sites.map((x) => esc(x.name || x.id)).join(", ")}` : ""}</p>`;
+          q("ss_info").innerHTML = `<p><b>${t("{n} shops", { n: j.shops.length })}:</b> ${j.shops.map((x) => esc(x.name || x.id)).join(", ")}${(j.comparison_sites || []).length ? `<br><b>${t("{n} comparison sites", { n: j.comparison_sites.length })}:</b> ${j.comparison_sites.map((x) => esc(x.name || x.id)).join(", ")}` : ""}${Object.keys(j.data_sources || {}).length ? `<br><b>${t("Other sources (set data, set database, API)")}:</b> ${Object.values(j.data_sources).map((u) => { try { return esc(new URL(u).hostname); } catch (e) { return "?"; } }).filter((v, i, a) => a.indexOf(v) === i).join(", ")}` : ""}</p>`;
         } catch (e) { payload = null; q("ss_info").innerHTML = ""; this.toast(t("This is not a shop settings file for this integration."), "err"); }
         sync();
       };
@@ -2484,7 +2484,7 @@ class LegoTrackerPanel extends HTMLElement {
     $("n_add").addEventListener("click", () => {
       syncShops();
       const name = $("n_name").value.trim(), domain = $("n_domain").value.trim().replace(/^https?:\/\/(www\.)?/, "").split("/")[0].toLowerCase(), search = this.toTemplate($("n_search").value);
-      if (!name || !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(domain)) return this.toast(t("Enter a name and a valid domain (e.g. intertoys.be)"), "err");
+      if (!name || !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(domain)) return this.toast(t("Enter a name and a valid domain (e.g. example-shop.be)"), "err");
       if (search && (!search.startsWith("https://") || !/\{(query|number)\}/.test(search) || !search.includes(domain))) return this.toast(t("Search URL: https://, on the shop's domain and with {query}", { query: "{query}" }), "err");
       const id = "c_" + (name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || "shop").slice(0, 30);
       if (d.shops.some((x) => x.id === id)) return this.toast(t("This shop is already in the list"), "err");

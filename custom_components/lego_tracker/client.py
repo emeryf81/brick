@@ -14,7 +14,7 @@ import aiohttp
 
 from .models import normalize_set_number
 from .i18n import T
-from .shops import bol_site_url, domain_of, home_of, ready, reader_of
+from .shops import bol_site_url, domain_of, home_of, ready, reader_of, source_url
 from .parsers import Parsed, find_search_result, is_search_url, lego_number, title_check, lego_product_url, parse_brickset_page, parse_page, search_url, url_key
 
 _LOGGER = logging.getLogger(__name__)
@@ -454,11 +454,11 @@ class Fetcher:
 
 async def brickset_lookup(session: aiohttp.ClientSession, api_key: str, set_number: str) -> dict[str, Any] | None:
     """Metadata from Brickset API v3 (free key). Returns None on any problem."""
-    if not api_key:
+    if not api_key or not (url := source_url("brickset_api")):
         return None
     params = {"apiKey": api_key, "userHash": "", "params": json.dumps({"setNumber": f"{normalize_set_number(set_number)}-1"})}
     try:
-        async with session.get("https://brickset.com/api/v3.asmx/getSets", params=params,
+        async with session.get(url, params=params,
                                timeout=aiohttp.ClientTimeout(total=20)) as resp:
             data = await resp.json(content_type=None)
     except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
@@ -487,10 +487,10 @@ _RB_THEMES: dict[int, dict[str, Any]] = {}
 
 async def rebrickable_lookup(session: aiohttp.ClientSession, api_key: str, set_number: str) -> dict[str, Any] | None:
     """Metadata from the Rebrickable API v3 (free key at rebrickable.com/api). No RRP there."""
-    if not api_key:
+    if not api_key or not (base := source_url("rebrickable_api")):
         return None
+    base = base.rstrip("/")
     headers = {"Authorization": f"key {api_key}", "Accept": "application/json"}
-    base = "https://rebrickable.com/api/v3/lego"
     try:
         async with session.get(f"{base}/sets/{normalize_set_number(set_number)}-1/", headers=headers,
                                timeout=aiohttp.ClientTimeout(total=20)) as resp:
@@ -521,7 +521,9 @@ async def rebrickable_lookup(session: aiohttp.ClientSession, api_key: str, set_n
 
 async def brickset_page_lookup(session: aiohttp.ClientSession, set_number: str) -> dict[str, Any] | None:
     """Fallback without any key: the public brickset.com set page."""
-    url = f"https://brickset.com/sets/{normalize_set_number(set_number)}-1"
+    if not (tpl := source_url("brickset_page")):
+        return None
+    url = tpl.replace("{number}", normalize_set_number(set_number))
     try:
         async with session.get(url, headers=BROWSER_HEADERS, timeout=aiohttp.ClientTimeout(total=20)) as resp:
             if resp.status != 200:
@@ -545,7 +547,8 @@ async def lookup_metadata(session: aiohttp.ClientSession, brickset_key: str, reb
         sources.append(("Brickset", lambda: brickset_lookup(session, brickset_key, set_number)))
     if rebrickable_key:
         sources.append(("Rebrickable", lambda: rebrickable_lookup(session, rebrickable_key, set_number)))
-    sources.append(("brickset.com", lambda: brickset_page_lookup(session, set_number)))
+    if source_url("brickset_page"):
+        sources.append(("brickset.com", lambda: brickset_page_lookup(session, set_number)))
     for name, fetch in sources:
         if all(merged.get(k) for k in wanted if k not in ("subtheme", "exit_date")):
             break
@@ -571,6 +574,8 @@ async def test_metadata_source(session: aiohttp.ClientSession, source: str, key:
     fn = {"brickset": brickset_lookup, "rebrickable": rebrickable_lookup}[source]
     if not key:
         return False, T("no key entered")
+    if not source_url(f"{source}_api"):
+        return False, T("this source is not in your shop settings (or their terms are not accepted)")
     data = await fn(session, key, "10281")
     if data and data.get("name"):
         return True, T("works: 10281 = {name}", name=data["name"])
