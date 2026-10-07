@@ -16,7 +16,7 @@ from .const import (
     CONF_DEV_FREE_CYCLE,
 )
 from .i18n import DEFAULT_LANGUAGE, LANGUAGES
-from .shops import CONF_SETUP_VERSION, profile_ids
+from .shops import CONF_KEY_HOSTS, CONF_SETUP_VERSION, KEY_SOURCES, profile_ids, source_hosts
 
 
 def _mode(d: dict[str, Any]) -> str:
@@ -120,7 +120,16 @@ class LegoTrackerOptionsFlow(OptionsFlow):
         if user_input is not None:
             try:
                 # merge: settings made in the panel (custom shops, keys, pauses…) must survive
-                return self.async_create_entry(data={**self.config_entry.options, **_clean(user_input)})
+                new = {**self.config_entry.options, **_clean(user_input)}
+                hosts = dict(new.get(CONF_KEY_HOSTS) or {})   # a key you enter belongs to the addresses in force now
+                for key, sources in KEY_SOURCES.items():
+                    if new.get(key) != self.config_entry.options.get(key):
+                        if new.get(key):
+                            hosts[key] = source_hosts(sources)
+                        else:
+                            hosts.pop(key, None)
+                new[CONF_KEY_HOSTS] = hosts
+                return self.async_create_entry(data=new)
             except InvalidTimes:
                 errors[CONF_REFRESH_TIMES] = "invalid_times"
         return self.async_show_form(step_id="init", data_schema=_schema({**self.config_entry.options, **(user_input or {})}),

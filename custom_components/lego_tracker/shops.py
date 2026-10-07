@@ -160,6 +160,44 @@ def previous_settings(options: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
 
+# API keys and the data sources they are sent to: a key is only ever sent to the host(s) it was entered or used with
+CONF_KEY_HOSTS = "key_hosts"
+KEY_SOURCES = {"brickset_api_key": ("brickset_api",), "rebrickable_api_key": ("rebrickable_api",),
+               "bol_client_id": ("bol_api_token", "bol_api"), "bol_client_secret": ("bol_api_token", "bol_api")}
+
+
+def source_hosts(sources: tuple[str, ...], profile: dict[str, Any] | None = None) -> list[str]:
+    """The hosts of these data sources: in a settings file, or (without one) in the settings in force."""
+    data = (profile or {}).get("data_sources") or {} if profile is not None else SOURCES
+    return [(urlparse(data[s]).hostname or "").lower() if data.get(s) else "" for s in sources]
+
+
+def keys_for_moved_sources(options: dict[str, Any], profile: dict[str, Any]) -> set[str]:
+    """Stored API keys that an imported file would send to another host than the one they were entered or used with,
+    or that have no known host at all: they are removed, so importing a file can never hand a key to a new address
+    (you enter it again if you trust the new address)."""
+    known = options.get(CONF_KEY_HOSTS) or {}
+    out = set()
+    for key, sources in KEY_SOURCES.items():
+        if not options.get(key):
+            continue
+        before = known.get(key) or source_hosts(sources, options.get(CONF_SHOP_PROFILE) or {})
+        if not any(before) or before != source_hosts(sources, profile):
+            out.add(key)
+    return out
+
+
+def key_hosts(profile: dict[str, Any] | None, options: dict[str, Any]) -> dict[str, list[str]]:
+    """The hosts every stored key may be sent to (recorded at import, at the carry-over and when you enter a key)."""
+    return {key: source_hosts(sources, profile) for key, sources in KEY_SOURCES.items() if options.get(key)}
+
+
+def key_allowed(options: dict[str, Any], key: str) -> bool:
+    """May this stored key be sent to the sources in force? Only to the hosts it was recorded with."""
+    recorded = (options.get(CONF_KEY_HOSTS) or {}).get(key)
+    return bool(recorded) and any(recorded) and recorded == source_hosts(KEY_SOURCES[key])
+
+
 def legal_ok(options: dict[str, Any]) -> bool:
     legal = options.get(CONF_LEGAL) or {}
     return bool(legal.get("accepted")) and legal.get("version") == LEGAL_VERSION

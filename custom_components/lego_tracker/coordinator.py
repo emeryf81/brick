@@ -40,7 +40,7 @@ from .notifications import Notifier, default_rules
 from .bol_api import BolApi, BolApiError
 from . import catalog, sitemaps, compare, setdb, scan
 from .shops import (CONF_LEGAL, CONF_SHOP_PROFILE, LEGAL_VERSION, all_domains, bol_site, bol_site_url, domain_of, profile_ids,
-                    reader_of, ready, site_root, source_url)
+                    reader_of, ready, site_root, source_url, CONF_KEY_HOSTS, KEY_SOURCES, key_allowed, source_hosts)
 from .parsers import Parsed, title_check, wrong_product
 from .shops import SEARCH, valid_search
 from .parsers import BUILTIN_WORDS, KNOCKOFF_RE, find_search_result, is_search_url, search_url, accessory_word, set_custom_words, clean_title, normalize_url, retailer_from_url, url_key
@@ -747,7 +747,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     @property
     def bol_api(self) -> BolApi | None:
         """The official bol.com API when the user entered affiliate credentials (else: scraping)."""
-        cid, secret = self.opt(self.entry, CONF_BOL_CLIENT_ID, ""), self.opt(self.entry, CONF_BOL_CLIENT_SECRET, "")
+        cid, secret = self.api_key(CONF_BOL_CLIENT_ID), self.api_key(CONF_BOL_CLIENT_SECRET)
         token_url, api_url = source_url("bol_api_token"), source_url("bol_api")
         if not (cid and secret and token_url and api_url):     # source_url: only with shop settings + accepted terms
             return None
@@ -1985,9 +1985,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Fill in a set's RRP, image, name and other details from LEGO.com first, then the metadata sources."""
         s = self.store["sets"][num]
         lego_changed = await self.lego_lookup(num, force=force, wake=wake)       # 1st source: RRP, image, name
-        meta, source = await lookup_metadata(async_get_clientsession(self.hass),
-                                             self.opt(self.entry, CONF_BRICKSET_KEY, ""),
-                                             self.opt(self.entry, CONF_REBRICKABLE_KEY, ""), num)
+        meta, source = await lookup_metadata(async_get_clientsession(self.hass), self.api_key(CONF_BRICKSET_KEY),
+                                             self.api_key(CONF_REBRICKABLE_KEY), num)
         await asyncio.sleep(1.0)   # be gentle with the metadata sources
         if not meta:
             return {"updated": 1} if lego_changed else {"errors": 1}
@@ -2026,6 +2025,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     # ---------------------------------------------------------------- settings
     SECRET_KEYS = (CONF_BRICKSET_KEY, CONF_REBRICKABLE_KEY, CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET)
+
+    def api_key(self, key: str) -> str:
+        """A stored API key, but only for the address it was entered or used with (never one an imported file chose)."""
+        return self.opt(self.entry, key, "") if key_allowed(dict(self.entry.options), key) else ""
 
     def shop_settings_info(self) -> dict[str, Any]:
         """Shop settings imported? Terms accepted (when, which version)? Without both, no shop is contacted."""
@@ -2190,6 +2193,12 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if val and not re.fullmatch(r"[A-Za-z0-9_\-]{8,128}" if key in (CONF_BRICKSET_KEY, CONF_REBRICKABLE_KEY) else r"[\x21-\x7e]{8,256}", val):
                     raise LocalizedError("{field}: invalid key", field=key)
                 opts[key] = val
+                hosts = dict(opts.get(CONF_KEY_HOSTS) or {})   # a key you enter belongs to the addresses in force now
+                if val:
+                    hosts[key] = source_hosts(KEY_SOURCES[key])
+                else:
+                    hosts.pop(key, None)
+                opts[CONF_KEY_HOSTS] = hosts
         if "custom_shops" in fields:
             shops, seen = [], set()
             for shop in fields["custom_shops"] or []:
@@ -2264,8 +2273,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def test_bol(self, client_id: str | None = None, secret: str | None = None) -> tuple[bool, str]:
         """Settings test button: log in and look up set 10281 in the bol.com catalog."""
-        cid = client_id or self.opt(self.entry, CONF_BOL_CLIENT_ID, "")
-        sec = secret or self.opt(self.entry, CONF_BOL_CLIENT_SECRET, "")
+        cid = client_id or self.api_key(CONF_BOL_CLIENT_ID)        # typed in now, or stored for these addresses
+        sec = secret or self.api_key(CONF_BOL_CLIENT_SECRET)
         if not (cid and sec):
             return False, T("no key entered")
         token_url, api_url = source_url("bol_api_token"), source_url("bol_api")
@@ -2534,9 +2543,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             meta, source = {}, "LEGO.com"                     # nothing to look up online
             self.log("info", "enrich", T("set data from the built-in catalogue"), set_number=num, source="catalog")
         else:
-            meta, source = await lookup_metadata(async_get_clientsession(self.hass),
-                                                 self.opt(self.entry, CONF_BRICKSET_KEY, ""),
-                                                 self.opt(self.entry, CONF_REBRICKABLE_KEY, ""), num)
+            meta, source = await lookup_metadata(async_get_clientsession(self.hass), self.api_key(CONF_BRICKSET_KEY),
+                                                 self.api_key(CONF_REBRICKABLE_KEY), num)
         if name:
             s["name_source"] = "user"
         elif meta.get("name") and self._name_replaceable(s):

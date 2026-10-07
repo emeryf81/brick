@@ -24,7 +24,8 @@ from .const import (
 )
 from .coordinator import LegoCoordinator
 from .i18n import T
-from .shops import CONF_SETUP_VERSION, CONF_SHOP_PROFILE, apply_shop_options, domain_of, previous_settings, profile_ids
+from .shops import (CONF_KEY_HOSTS, CONF_SETUP_VERSION, CONF_SHOP_PROFILE, apply_shop_options, domain_of, key_hosts,
+                    previous_settings, profile_ids)
 from .csv_import import analyze_csv, apply_import, importable_rows
 from .models import normalize_set_number
 from .websocket_api import async_register_websocket
@@ -118,6 +119,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # shops it didn't know yet are switched on once, as a new shop always was
         hass.config_entries.async_update_entry(entry, options={
             **entry.options, CONF_SHOP_PROFILE: previous, CONF_SETUP_VERSION: 1,
+            CONF_KEY_HOSTS: key_hosts(previous, dict(entry.options)),     # the keys you had were used with these
             CONF_KNOWN_SHOPS: entry.options.get(CONF_KNOWN_SHOPS) or ["lego_com", "amazon_nl", "amazon_de", "amazon_be", "bol", "kruidvat_be"]})
     apply_shop_options(dict(entry.options))
     # Shops new in the imported shop settings are switched on once; afterwards the user's choice wins.

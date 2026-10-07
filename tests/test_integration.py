@@ -3240,3 +3240,29 @@ async def test_imported_settings_never_send_an_api_key_to_a_new_address(hass: Ho
     await ws.receive_json()
     await hass.async_block_till_done()
     assert (await (await http.get("/api/lego_tracker/relay?mode=check")).json()) == {"ready": False}
+
+
+@pytest.mark.no_shop_settings
+async def test_a_key_without_a_known_address_is_removed_at_the_first_import(hass: HomeAssistant, entry, hass_ws_client, no_network):
+    """A new installation with keys entered before any shop settings: the first import can't tell where they belong,
+    so they are removed (enter them again); a key entered afterwards is bound to the addresses then in force, and a
+    key is never handed to a source whose address differs from the recorded one."""
+    import json
+    from pathlib import Path
+    from custom_components.lego_tracker import shops
+
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "setup_version": 1, "brickset_api_key": "k1abcdefgh"})
+    await _setup(hass, entry)
+    example = json.loads((Path(__file__).parent.parent / "examples" / "lot-shops.example.json").read_text("utf-8"))
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/shop_settings/import", "settings": example, "accept": True})
+    assert (await ws.receive_json())["success"]
+    await hass.async_block_till_done()
+    assert "brickset_api_key" not in entry.options
+    await ws.send_json({"id": 2, "type": "lego_tracker/settings/set", "fields": {"brickset_api_key": "k2abcdefgh"}})
+    assert (await ws.receive_json())["success"]
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][entry.entry_id]
+    assert entry.options["key_hosts"]["brickset_api_key"] == ["brickset.com"] and c.api_key("brickset_api_key") == "k2abcdefgh"
+    shops.SOURCES["brickset_api"] = "https://elsewhere.example/api"          # the address in force changed some other way
+    assert c.api_key("brickset_api_key") == ""
