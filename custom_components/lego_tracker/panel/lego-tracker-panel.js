@@ -818,7 +818,7 @@ class LegoTrackerPanel extends HTMLElement {
   }
   filtered(list) {
     const { q, theme, subtheme, cond } = this.state.f;
-    let out = list.filter((s) => (!theme || (s.theme || "Unknown") === theme) && (!subtheme || s.subtheme === subtheme) && (!cond || (s.collection && (s.collection.condition || "Unknown") === cond)));
+    let out = list.filter((s) => (!theme || (s.theme || "Unknown") === theme) && (!subtheme || s.subtheme === subtheme) && (!cond || (s.collection && this.conditions(s).includes(cond))));
     if (this.state.f.ret100) out = out.filter((s) => this.ret100(s));
     const { shop, price, status, year, loc } = this.state.f;
     if (shop) out = out.filter((s) => s.best_retailer === shop);
@@ -1014,6 +1014,8 @@ class LegoTrackerPanel extends HTMLElement {
       requestAnimationFrame(step);
     });
   }
+  /** The conditions of your copies of a set (every copy counts; "Unknown" when none is known). */
+  conditions(s) { const c = s.collection || {}, list = c.copies && c.copies.length ? c.copies.map((k) => k.condition) : [c.condition]; return [...new Set(list.map((x) => x || "Unknown"))]; }
   /** Where your copies of a set are (the set's location and those of its copies). */
   locations(s) { const c = s.collection || {}; return [...new Set([c.location, ...(c.copies || []).map((k) => k.location)].filter(Boolean))]; }
   /** Extra filters as drop-downs (shop, price, status, year, location): only choices that occur in the list, with counts. */
@@ -1035,7 +1037,7 @@ class LegoTrackerPanel extends HTMLElement {
     const counts = {}; list.forEach((s) => { const th = s.theme || "Unknown"; counts[th] = (counts[th] || 0) + 1; });
     const themes = Object.keys(counts).sort();
     const subs = {}; if (f.theme) list.filter((s) => s.theme === f.theme && s.subtheme).forEach((s) => { subs[s.subtheme] = (subs[s.subtheme] || 0) + 1; });
-    const conds = {}; if (cond) list.forEach((s) => { const c = (s.collection && s.collection.condition) || "Unknown"; conds[c] = (conds[c] || 0) + 1; });
+    const conds = {}; if (cond) list.forEach((s) => this.conditions(s).forEach((c) => { conds[c] = (conds[c] || 0) + 1; }));
     return `<div class="fbar"><div class="search"><input id="q" placeholder="${t("Search by number, name, theme…")}  ( / )" value="${esc(f.q)}" autocomplete="off"></div>
       <select id="sort" aria-label="${t("Sort")}">${sorts.map(([k, l]) => `<option value="${k}" ${f.sort === k ? "selected" : ""}>${t(l)}</option>`).join("")}</select>
       ${threshold ? `<label class="thr">${t("Discount")} ≥ <b id="thrv">${this.state.threshold}%</b><input id="thr" type="range" min="5" max="70" step="5" value="${this.state.threshold}"></label>` : ""}

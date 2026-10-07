@@ -257,6 +257,8 @@ class Fetcher:
         async with lock:
             await self._wait_turn(site, search)
             origin = home_of(retailer)
+            if not ready():      # withdrawn while waiting for this site's turn
+                raise NotReady(T("no shop settings imported (or their terms not accepted): nothing is fetched"))
             if origin and retailer not in self._warmed:   # look like a visitor: home page first
                 self._warmed.add(retailer)
                 try:
@@ -265,6 +267,8 @@ class Fetcher:
                     pass
                 await asyncio.sleep(2 + random.random() * 2)
             await asyncio.sleep(self.min_delay + random.random() * 3)
+            if not ready():      # withdrawn while waiting for this site's turn
+                raise NotReady(T("no shop settings imported (or their terms not accepted): nothing is fetched"))
             try:
                 return await self._request(retailer, url, referer=None if binary else origin, binary=binary)
             finally:

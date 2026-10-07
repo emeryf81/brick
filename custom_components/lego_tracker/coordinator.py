@@ -928,9 +928,11 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 e["name"] = new
 
     def _fix_lego_rrp(self) -> None:
-        """Once (0.10.1): earlier versions took every LEGO.com price as the RRP, so a promotion could become it.
-        The RRP of a set from LEGO.com becomes the price LEGO.com showed most often (its regular price: a
-        promotion is short), the highest one on a tie. Your own RRPs are left alone."""
+        """Once (1.0.0): earlier versions took every LEGO.com price as the RRP, so a promotion could become it.
+        A promotion is always below the regular price, so the regular price is the highest price LEGO.com showed
+        at least twice (or the only price it showed). The RRP is only ever raised to it, never lowered: a
+        promotion that was checked more often than the regular price can't replace a correct RRP. Your own RRPs
+        are left alone."""
         if self.store.get("rrp_fixed") == 1:
             return
         fixed = 0
@@ -942,8 +944,9 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             count: dict[float, int] = {}
             for p in prices:
                 count[p] = count.get(p, 0) + 1
-            regular = max(count, key=lambda p: (count[p], p))
-            if s.get("rrp") is None or abs(regular - float(s["rrp"])) >= 0.01:
+            seen_twice = [p for p, n in count.items() if n >= 2]
+            regular = max(seen_twice) if seen_twice else max(prices) if len(count) == 1 else None
+            if regular is not None and (s.get("rrp") is None or regular - float(s["rrp"]) >= 0.01):
                 self.log("info", "meta", T("RRP corrected: €{old} → €{new} (the regular LEGO.com price, not a promotion)",
                                            old=f"{float(s.get('rrp') or 0):.2f}", new=f"{regular:.2f}"), set_number=num, source="server")
                 s["rrp"] = regular

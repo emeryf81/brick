@@ -3101,7 +3101,7 @@ async def test_rrp_is_the_first_lego_price_and_stays(hass: HomeAssistant, entry,
     s["rrp"], s["rrp_source"] = 129.0, "user"
     c._apply_lego("21066", Parsed(139.99, "NYC", list_price=139.99))
     assert s["rrp"] == 129.0
-    # correction of RRPs earlier versions moved: the price LEGO.com showed most often
+    # correction of RRPs earlier versions moved: the highest price LEGO.com showed at least twice
     s["rrp"], s["rrp_source"] = 99.99, "LEGO.com"
     c.store["offers"]["21066"]["lego_com"] = {"url": "https://www.lego.com/nl-be/product/21066",
                                              "history": [[1, 139.99], [2, 139.99], [3, 99.99], [4, 139.99]]}
@@ -3111,6 +3111,17 @@ async def test_rrp_is_the_first_lego_price_and_stays(hass: HomeAssistant, entry,
     s["rrp"] = 120.0
     c._fix_lego_rrp()                                                        # only once
     assert s["rrp"] == 120.0
+    # a promotion checked more often than the regular price never replaces a correct RRP
+    s["rrp"] = 139.99
+    c.store["offers"]["21066"]["lego_com"]["history"] = [[1, 99.99], [2, 99.99], [3, 99.99], [4, 139.99]]
+    c.store.pop("rrp_fixed", None)
+    c._fix_lego_rrp()
+    assert s["rrp"] == 139.99
+    s["rrp"] = 99.99                                     # the promotion became the RRP: the regular price seen twice wins
+    c.store["offers"]["21066"]["lego_com"]["history"] += [[5, 139.99]]
+    c.store.pop("rrp_fixed", None)
+    c._fix_lego_rrp()
+    assert s["rrp"] == 139.99
 
 
 @pytest.mark.no_shop_settings
