@@ -1531,7 +1531,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Shop pages the user's own browser should fetch (userscript relay): links that failed on the
         server or weren't fetched in the last 20 h, oldest first. bol.com via the API is left out."""
         items: list[tuple[float, dict[str, Any]]] = []
-        if self.relay_enabled:
+        if self.relay_enabled and ready():          # no shop settings or terms: the browser fetches nothing either
             day = time.time() - 20 * 3600
             for num, offers in self.store["offers"].items():
                 if num not in self.store["sets"]:
@@ -1692,7 +1692,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         now = time.time()
         searched = self.store.setdefault("relay_searched", {})
         items: list[tuple[int, float, dict[str, Any]]] = []
-        if not self.relay_enabled:
+        if not self.relay_enabled or not ready():   # no shop settings or terms: the browser fetches nothing either
             return {"enabled": False, "items": [], "total": 0, "counts": {}}
         live_shops = [r for r in self.retailers if r in RETAILERS]
         for num, s in self.store["sets"].items():

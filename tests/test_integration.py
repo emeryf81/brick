@@ -3168,6 +3168,9 @@ async def test_an_installation_from_before_1_0_keeps_its_shops_after_accepting_o
     assert c.retailers == ["bol", "amazon_nl", "dreamland_be", "smyths_be"] and not shops.ready()   # your choice stays, newer shops on
     assert c.shop_settings_info()["imported"] and not c.shop_settings_info()["ready"]
     assert c._live_retailers(False) == []
+    page = {"10281": {"set_number": "10281"}}, {"10281": {"amazon_nl": {"url": "https://www.amazon.nl/dp/B000000001"}}}
+    c.store["sets"].update(page[0]); c.store["offers"].update(page[1])
+    assert c.relay_items()["items"] == [] and c.continuous_items()["items"] == []        # the browser fetches nothing either
     ws = await hass_ws_client(hass)
     await ws.send_json({"id": 1, "type": "lego_tracker/shop_settings/accept", "accept": False})
     assert "Accept the terms" in (await ws.receive_json())["error"]["message"]
@@ -3176,6 +3179,8 @@ async def test_an_installation_from_before_1_0_keeps_its_shops_after_accepting_o
     await hass.async_block_till_done()
     c = hass.data[DOMAIN][entry.entry_id]
     assert shops.ready() and c._live_retailers(False) == ["bol", "amazon_nl", "dreamland_be", "smyths_be"]
+    c.store["sets"].update(page[0]); c.store["offers"].update(page[1])
+    assert c.relay_items()["items"] and c.continuous_items()["items"]
     # withdrawn: never carried over again
     await ws.send_json({"id": 3, "type": "lego_tracker/shop_settings/withdraw"})
     await ws.receive_json()

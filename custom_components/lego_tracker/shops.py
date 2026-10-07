@@ -108,16 +108,21 @@ def validate_settings(data: Any) -> dict[str, Any]:
     for raw in data.get("comparison_sites") or []:
         if not isinstance(raw, dict):
             continue
-        sid, hosts = str(raw.get("id") or "").strip(), [h for h in (str(x).lower().strip() for x in raw.get("hosts") or []) if h]
+        sid = str(raw.get("id") or "").strip()
+        raw_hosts, raw_langs = raw.get("hosts"), raw.get("langs")
+        if not isinstance(raw_hosts, list) or not all(isinstance(x, str) for x in raw_hosts) or (
+                raw_langs is not None and (not isinstance(raw_langs, list) or not all(isinstance(x, str) for x in raw_langs))):
+            raise LocalizedError("Comparison site {id}: an id, hosts and start addresses are needed.", id=sid or "?")
+        hosts = [h for h in (x.lower().strip() for x in raw_hosts) if h]
         start = raw.get("start") if isinstance(raw.get("start"), dict) else {}
         if not re.fullmatch(r"[a-z][a-z0-9_]{1,39}", sid) or not hosts or not start or sid in {s["id"] for s in sites}:
             raise LocalizedError("Comparison site {id}: an id, hosts and start addresses are needed.", id=sid or "?")
-        for cc, tpl in start.items():
+        for tpl in start.values():
             if not isinstance(tpl, str) or not tpl.startswith("https://") or (urlparse(tpl).hostname or "") not in hosts:
                 raise LocalizedError("Comparison site {id}: every start address must be https:// on one of its hosts.", id=sid)
         sites.append({"id": sid, "name": str(raw.get("name") or sid)[:40], "hosts": hosts,
                       "start": {str(k).upper() if k != "*" else "*": v for k, v in start.items()},
-                      "langs": [str(x).lower() for x in raw.get("langs") or []][:10]})
+                      "langs": [x.lower() for x in raw_langs or []][:10]})
     locale = str(data.get("lego_locale") or "").lower()
     out = {"format": SETTINGS_FORMAT, "version": SETTINGS_VERSION, "shops": shops, "comparison_sites": sites}
     if re.fullmatch(r"[a-z]{2}-[a-z]{2}", locale):

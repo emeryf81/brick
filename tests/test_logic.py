@@ -784,7 +784,9 @@ def test_shop_settings_file_is_checked_and_drives_every_address():
                      (lambda d: d["shops"][1].update(search="https://evil.example/s?k={query}"), "must be an https:// address"),
                      (lambda d: d["shops"][1].update(id="c_amazon"), "not starting with c_"),
                      (lambda d: d["shops"][0].update(id="lego_shop"), "must have the id lego_com"),
-                     (lambda d: d["comparison_sites"][0]["start"].update(BE="https://evil.example/?q={query}"), "on one of its hosts")):
+                     (lambda d: d["comparison_sites"][0]["start"].update(BE="https://evil.example/?q={query}"), "on one of its hosts"),
+                     (lambda d: d["comparison_sites"][3].update(langs="en"), "hosts and start addresses"),
+                     (lambda d: d["comparison_sites"][0].update(hosts="www.kieskeurig.be"), "hosts and start addresses")):
         d = copy.deepcopy(example)
         bad(d)
         with pytest.raises(ValueError, match=why):
