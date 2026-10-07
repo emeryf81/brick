@@ -1933,11 +1933,15 @@ async def test_ticker_market_tick_and_shop_link(hass: HomeAssistant, entry, no_n
     await hass.async_block_till_done()
     assert len(calls) == 1                                       # next one waits (spread over the day)
 
-    # notifications link to the product page of the cheapest shop, not a comparison page
+    # notifications link to the cheapest shop itself: its product page when there is one, never another
+    # (dearer) shop's page; a price only a comparison site knows keeps its comparison link
     c.store["offers"]["10281"] = {
         "bol": {"url": "https://www.bol.com/nl/nl/p/x/1/", "available": True, "last_price": 39.99, "history": []},
         "amazon_nl": {"url": "https://www.kieskeurig.be/lego/product/123", "available": True, "last_price": 35.0, "history": []}}
-    assert c.notifier.shop_link("10281", {"best_url": "https://www.kieskeurig.be/lego/product/123"}) == "https://www.bol.com/nl/nl/p/x/1/"
+    st = {"best_price": 35.0, "best_retailer": "amazon_nl", "best_url": "https://www.kieskeurig.be/lego/product/123"}
+    assert c.notifier.shop_link("10281", st) == "https://www.kieskeurig.be/lego/product/123"
+    c.store["offers"]["10281"]["amazon_nl"]["url"] = "https://www.amazon.nl/dp/B0AAAAAAAA"
+    assert c.notifier.shop_link("10281", st) == "https://www.amazon.nl/dp/B0AAAAAAAA"
 
 
 async def test_market_value_via_userscript_when_server_fails(hass: HomeAssistant, entry, no_network, hass_client):
