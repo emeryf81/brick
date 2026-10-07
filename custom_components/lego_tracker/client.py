@@ -77,6 +77,14 @@ def registrable(host: str) -> str:
     return ".".join(labels[-keep:])
 
 
+def redirect_home(retailer: str, url: str) -> str:
+    """The site a request (and its redirects) must stay on: a shop's own domain for its pages (so a suffix like
+    ne.jp or co.uk is never "the site"); for comparison sites, which have no shop domain, the registrable part."""
+    host = (urlparse(url).hostname or "").lower().rstrip(".")
+    dom = (domain_of(retailer) or "").lower()
+    return dom if dom and (host == dom or host.endswith("." + dom)) else registrable(host)
+
+
 def check_url(url: str, home: str) -> None:
     """Only http(s), and only the site the request started on (its own subdomains included)."""
     p = urlparse(url)
@@ -176,7 +184,7 @@ class Fetcher:
         if referer:
             headers.update({"Referer": referer, "Sec-Fetch-Site": "same-origin"})
         sess = self._session(retailer)
-        home = registrable(urlparse(url).hostname or "")
+        home = redirect_home(retailer, url)
         for _hop in range(MAX_REDIRECTS + 1):
             check_url(url, home)
             if self._curl_ok:
