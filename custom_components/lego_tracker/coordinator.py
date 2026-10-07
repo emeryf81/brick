@@ -130,6 +130,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._drop_old_source_links()
         self._bol_links_to_site()
         self._amazon_no_price_is_out_of_stock()
+        self._fix_lego_rrp()
         self._fix_lost_commas()
         self._rename_market_source()
         self._watch_dates(first=True)
@@ -920,6 +921,29 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for e in (self.store.get("compare", {}).get("brickeconomy") or {}).values():
             if e.get("name") == old:
                 e["name"] = new
+
+    def _fix_lego_rrp(self) -> None:
+        """Once (0.10.1): earlier versions took every LEGO.com price as the RRP, so a promotion could become it.
+        The RRP of a set from LEGO.com becomes the price LEGO.com showed most often (its regular price: a
+        promotion is short), the highest one on a tie. Your own RRPs are left alone."""
+        if self.store.get("rrp_fixed") == 1:
+            return
+        fixed = 0
+        for num, s in self.store["sets"].items():
+            o = (self.store["offers"].get(num) or {}).get("lego_com") or {}
+            prices = [round(float(p), 2) for _, p in o.get("history") or [] if p]
+            if s.get("rrp_source") != "LEGO.com" or not prices:
+                continue
+            count: dict[float, int] = {}
+            for p in prices:
+                count[p] = count.get(p, 0) + 1
+            regular = max(count, key=lambda p: (count[p], p))
+            if s.get("rrp") is None or abs(regular - float(s["rrp"])) >= 0.01:
+                self.log("info", "meta", T("RRP corrected: €{old} → €{new} (the regular LEGO.com price, not a promotion)",
+                                           old=f"{float(s.get('rrp') or 0):.2f}", new=f"{regular:.2f}"), set_number=num, source="server")
+                s["rrp"] = regular
+                fixed += 1
+        self.store["rrp_fixed"] = 1
 
     AMAZON_NO_PRICE = ("price not found on the page",)
 
@@ -1860,23 +1884,23 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _lego_hold(self, num: str, offer: dict[str, Any], parsed: Any) -> tuple[float, str] | None:
         """LEGO.com shows the set as temporarily unavailable (sold out, not retired): no new price is taken.
-        The LEGO price you had stays ('kept'); without one, the regular price (RRP) of the set is used: the
-        one the page itself shows, else the RRP from another source ('rrp'). None: nothing to hold."""
+        The LEGO price is the set's RRP (never a promotion price that happened to be the last one); without an
+        RRP, the regular price the page shows ('rrp'). None: nothing to hold."""
         if not (parsed and parsed.unavailable and parsed.reason == "sold_out" and parsed.price is None):
             return None
         if offer.get("manual_price"):
             return None
-        if (last := offer.get("last_price")) is not None:
-            return float(last), "kept"
-        rrp = parsed.list_price or self.store["sets"][num].get("rrp")
+        rrp = self.store["sets"][num].get("rrp") or parsed.list_price
         return (round(float(rrp), 2), "rrp") if rrp else None
 
     def _apply_lego(self, num: str, parsed: Any) -> bool:
         """LEGO.com is the first source for RRP, image and name. Values the user typed win."""
         s = self.store["sets"][num]
         before = (s.get("rrp"), s.get("image"), s.get("name"), s.get("retiring"))
-        if parsed.list_price and s.get("rrp_source") != "user":
-            s["rrp"], s["rrp_source"] = round(parsed.list_price, 2), "LEGO.com"
+        # the RRP is the regular price LEGO.com shows the first time and stays that: a later promotion (or a
+        # price that changes) never moves it. A value you typed yourself always wins.
+        if parsed.list_price and s.get("rrp_source") not in ("LEGO.com", "user"):
+            s["rrp"], s["rrp_source"] = round(max(parsed.list_price, parsed.price or 0), 2), "LEGO.com"
         if parsed.list_price and (o := self.store["offers"].get(num, {}).get("lego_com")) and o.get("history"):
             # LEGO.com never sells far below its own regular price: such points were another product's price
             # (older versions read a recommended product on a sold-out page)

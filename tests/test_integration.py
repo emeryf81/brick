@@ -2766,8 +2766,8 @@ def test_series_keeps_own_imported_value_for_opened_copies():
 
 
 async def test_lego_temporarily_unavailable_keeps_the_lego_price(hass: HomeAssistant, entry, no_network):
-    """LEGO.com says 'temporarily unavailable': no new LEGO price; the one we had stays. Without one, the
-    regular price (RRP) is used: the page's own, else the RRP from another source. A warning, not an error."""
+    """LEGO.com says 'temporarily unavailable': no new LEGO price; the LEGO price is the set's RRP (never the
+    promotion price we happened to have). Without an RRP, the page's regular price. A warning, not an error."""
     c = await _setup(hass, entry)
     await c.add_set("10281", name="Bonsai", rrp=49.99, discover=False)
     o = c.store["offers"].setdefault("10281", {})["lego_com"] = {"url": "https://www.lego.com/nl-be/product/bonsai-tree-10281", "history": []}
@@ -2778,9 +2778,9 @@ async def test_lego_temporarily_unavailable_keeps_the_lego_price(hass: HomeAssis
     no_network.return_value = (away, None)
     await c.refresh_set("10281", ["lego_com"])
     await c.refresh_set("10281", ["lego_com"])
-    assert o["last_price"] == 44.99 and o["available"] and o["unavailable"] == "sold_out" and o["error"] is None
-    assert [e["message"] for e in c.store["activity"] if e.get("unavailable")] == ["temporarily unavailable: last price €44.99 kept"]
-    assert c.compute()["statuses"]["10281"]["best_price"] == 44.99
+    assert o["last_price"] == 49.99 and o["available"] and o["unavailable"] == "sold_out" and o["error"] is None
+    assert [e["message"] for e in c.store["activity"] if e.get("unavailable")] == ["temporarily unavailable: regular price €49.99 used"]
+    assert c.compute()["statuses"]["10281"]["best_price"] == 49.99
     # never had a price: the regular price from the page, else the set's RRP from elsewhere
     del c.store["offers"]["10281"]["lego_com"]
     o = c.store["offers"]["10281"]["lego_com"] = {"url": "https://www.lego.com/nl-be/product/bonsai-tree-10281", "history": []}
@@ -3081,3 +3081,30 @@ async def test_old_amazon_no_price_errors_become_out_of_stock(hass: HomeAssistan
     assert "10281|bol" in c.open_error_keys()
     c._track_errors()
     assert not any(k == "10281|amazon_nl" for _, k, _ in c.store["err_track"]["solved"])
+
+
+async def test_rrp_is_the_first_lego_price_and_stays(hass: HomeAssistant, entry, no_network):
+    """The RRP is the regular price LEGO.com shows the first time: a later promotion or price change never
+    moves it, your own RRP always wins, and RRPs that earlier versions moved are corrected once."""
+    c = await _setup(hass, entry)
+    await c.add_set("21066", name="NYC", discover=False)
+    s = c.store["sets"]["21066"]
+    s.pop("rrp", None), s.pop("rrp_source", None)
+    c._apply_lego("21066", Parsed(139.99, "NYC", list_price=139.99))
+    assert (s["rrp"], s["rrp_source"]) == (139.99, "LEGO.com")
+    c._apply_lego("21066", Parsed(99.99, "NYC", list_price=99.99))           # a promotion without a list price
+    c._apply_lego("21066", Parsed(149.99, "NYC", list_price=149.99))         # a later price change
+    assert s["rrp"] == 139.99
+    s["rrp"], s["rrp_source"] = 129.0, "user"
+    c._apply_lego("21066", Parsed(139.99, "NYC", list_price=139.99))
+    assert s["rrp"] == 129.0
+    # correction of RRPs earlier versions moved: the price LEGO.com showed most often
+    s["rrp"], s["rrp_source"] = 99.99, "LEGO.com"
+    c.store["offers"]["21066"]["lego_com"] = {"url": "https://www.lego.com/nl-be/product/21066",
+                                             "history": [[1, 139.99], [2, 139.99], [3, 99.99], [4, 139.99]]}
+    c.store.pop("rrp_fixed", None)
+    c._fix_lego_rrp()
+    assert s["rrp"] == 139.99 and c.store["rrp_fixed"] == 1
+    s["rrp"] = 120.0
+    c._fix_lego_rrp()                                                        # only once
+    assert s["rrp"] == 120.0
