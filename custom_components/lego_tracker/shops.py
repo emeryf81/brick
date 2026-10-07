@@ -1,40 +1,63 @@
-"""Shop registry: built-in shops plus Dreamland and user-defined shops (generic parser).
+"""Shop registry, built from the shop settings file the user imports (plus shops added by hand).
 
-RETAILERS (label, currency) and GENERIC_SHOPS (domain, search template) are module-level dicts
-shared by the whole integration; apply_shop_options() syncs them with the config entry options.
+The integration contains no list of shops or websites: until a settings file is imported and its terms are
+accepted, there are no shops and nothing is fetched (see ready()). RETAILERS (label, currency), GENERIC_SHOPS
+(domain, search template) and SEARCH are module-level dicts shared by the whole integration; apply_shop_options()
+rebuilds them from the config entry options.
 """
 from __future__ import annotations
 
 import re
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlparse
 from typing import Any
 
 from .i18n import LocalizedError
-from .const import BUILTIN_RETAILERS, DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, GENERIC_SHOPS, RETAILERS
+from .const import DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, GENERIC_SHOPS, RETAILERS
+
+SETTINGS_FORMAT = "lot-shop-settings"
+SETTINGS_VERSION = 1
+LEGAL_VERSION = 1                 # raise when the terms change: everyone accepts them again at the next import
+CONF_SHOP_PROFILE = "shop_profile"
+CONF_LEGAL = "legal"
+CONF_SETUP_VERSION = "setup_version"   # 1: installed (or settings withdrawn) since shop settings exist: nothing to carry over
+# how a shop's pages are read (the page structure the parser knows), not a website
+READERS = ("lego", "amazon", "bol", "kruidvat", "generic")
+FIXED_IDS = {"lego": "lego_com", "bol": "bol"}   # readers with their own logic (RRP, API): one shop each, this id
+MARKET_VALUE = "market_value"     # the comparison entry with market values and retirement dates
+_COMPARE_IDS = {MARKET_VALUE: "brickeconomy"}      # settings id -> internal source id (stored data keeps its key)
 
 SEARCH: dict[str, str] = dict(DEFAULT_SEARCH)      # effective search template per shop
 LOCALE = {"lego": DEFAULT_LEGO_LOCALE, "bol": "nl"}  # "bol": which bol.com site is asked, "nl" (bol.com/nl/nl) or "be"
 BOL_PATH_RE = re.compile(r"(bol\.com)/(?:nl|be)/nl/", re.I)
 
-_BUILTIN_GENERIC = {k: dict(v) for k, v in GENERIC_SHOPS.items()}
-FIXED_DOMAINS = {"lego_com": "lego.com", "amazon_nl": "amazon.nl", "amazon_de": "amazon.de", "amazon_be": "amazon.com.be",
-                 "bol": "bol.com", "kruidvat_be": "kruidvat.be"}
+PROFILE: dict[str, dict[str, Any]] = {}            # shop id -> its entry in the imported settings file
+COMPARE: dict[str, dict[str, Any]] = {}            # internal source id -> comparison site entry
+ALIASES: list[tuple[str, str]] = []                 # (shop name as comparison sites write it, shop id), longest first
+STATE = {"profile": False, "legal": False}
 
 
 def shop_id(name: str) -> str:
     return "c_" + (re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "shop")[:30]
 
 
+def _domain(value: Any) -> str:
+    return re.sub(r"^https?://(www\.)?", "", str(value or "").strip().lower()).split("/")[0]
+
+
+def _on(url: str, domain: str) -> bool:
+    host = (urlparse(url.replace("{query}", "x").replace("{number}", "1").replace("{locale}", "nl-be")).hostname or "").lower()
+    return host == domain or host.endswith("." + domain)
+
+
 def validate_custom_shop(shop: dict[str, Any]) -> dict[str, str]:
     name = str(shop.get("name", "")).strip()[:40]
-    domain = re.sub(r"^https?://(www\.)?", "", str(shop.get("domain", "")).strip().lower()).split("/")[0]
+    domain = _domain(shop.get("domain"))
     search = str(shop.get("search", "")).strip()
     if not name:
         raise LocalizedError("Give the shop a name.")
     if not re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+", domain):
         raise LocalizedError("Invalid domain {domain} (e.g. dreamland.be).", domain=domain)
-    host = (urlparse(search.replace("{query}", "x").replace("{number}", "1").replace("{locale}", "nl-be")).hostname or "").lower()
-    if search and (not valid_search(search) or not (host == domain or host.endswith("." + domain))):   # the shop's own host
+    if search and (not valid_search(search) or not _on(search, domain)):   # the shop's own host
         raise LocalizedError("The search URL must start with https://, be on the shop's domain and contain {query} or {number}.")
     return {"id": str(shop.get("id") or shop_id(name)), "name": name, "domain": domain, "search": search}
 
@@ -43,16 +66,131 @@ def valid_search(tpl: str) -> bool:
     return tpl.startswith("https://") and ("{query}" in tpl or "{number}" in tpl) and " " not in tpl
 
 
+def _https_on(url: Any, domain: str) -> bool:
+    return isinstance(url, str) and url.startswith("https://") and " " not in url and _on(url, domain)
+
+
+def validate_settings(data: Any) -> dict[str, Any]:
+    """A shop settings file, checked and cleaned. Raises LocalizedError with what is wrong."""
+    if not isinstance(data, dict) or data.get("format") != SETTINGS_FORMAT:
+        raise LocalizedError("This is not a shop settings file for this integration.")
+    if data.get("version") != SETTINGS_VERSION:
+        raise LocalizedError("Shop settings file version {version} is not supported.", version=data.get("version"))
+    shops, seen = [], set()
+    for raw in data.get("shops") or []:
+        if not isinstance(raw, dict):
+            raise LocalizedError("Every shop must be an object with id, name, domain and reader.")
+        rid, name, domain = str(raw.get("id") or "").strip(), str(raw.get("name") or "").strip()[:40], _domain(raw.get("domain"))
+        if not re.fullmatch(r"[a-z][a-z0-9_]{1,39}", rid) or rid.startswith("c_") or rid in seen:
+            raise LocalizedError("Shop id {id}: use lowercase letters, digits and _, unique, not starting with c_.", id=rid)
+        if not name or not re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+", domain):
+            raise LocalizedError("Shop {id}: a name and a valid domain are needed.", id=rid)
+        reader = raw.get("reader") or "generic"
+        if reader not in READERS:
+            raise LocalizedError("Shop {id}: unknown reader {reader} (one of: {readers}).", id=rid, reader=reader, readers=", ".join(READERS))
+        if (fixed := FIXED_IDS.get(reader)) and rid != fixed:
+            raise LocalizedError("Shop {id}: a shop read as {reader} must have the id {fixed}.", id=rid, reader=reader, fixed=fixed)
+        shop = {"id": rid, "name": name, "domain": domain, "reader": reader}
+        for key in ("search", "home", "product"):
+            if (v := raw.get(key)) in (None, ""):
+                continue
+            if not _https_on(v, domain) or (key == "search" and not valid_search(v)) or (key == "product" and "{number}" not in v):
+                raise LocalizedError("Shop {id}: {field} must be an https:// address on {domain}.", id=rid, field=key, domain=domain)
+            shop[key] = v
+        shop["aliases"] = [a for a in (str(x).strip().lower()[:40] for x in raw.get("aliases") or []) if len(a) >= 3][:20]
+        seen.add(rid)
+        shops.append(shop)
+    if not shops:
+        raise LocalizedError("The shop settings file contains no shops.")
+    if len(shops) > 50:
+        raise LocalizedError("At most 50 shops in one settings file.")
+    sites = []
+    for raw in data.get("comparison_sites") or []:
+        if not isinstance(raw, dict):
+            continue
+        sid, hosts = str(raw.get("id") or "").strip(), [h for h in (str(x).lower().strip() for x in raw.get("hosts") or []) if h]
+        start = raw.get("start") if isinstance(raw.get("start"), dict) else {}
+        if not re.fullmatch(r"[a-z][a-z0-9_]{1,39}", sid) or not hosts or not start or sid in {s["id"] for s in sites}:
+            raise LocalizedError("Comparison site {id}: an id, hosts and start addresses are needed.", id=sid or "?")
+        for cc, tpl in start.items():
+            if not isinstance(tpl, str) or not tpl.startswith("https://") or (urlparse(tpl).hostname or "") not in hosts:
+                raise LocalizedError("Comparison site {id}: every start address must be https:// on one of its hosts.", id=sid)
+        sites.append({"id": sid, "name": str(raw.get("name") or sid)[:40], "hosts": hosts,
+                      "start": {str(k).upper() if k != "*" else "*": v for k, v in start.items()},
+                      "langs": [str(x).lower() for x in raw.get("langs") or []][:10]})
+    locale = str(data.get("lego_locale") or "").lower()
+    out = {"format": SETTINGS_FORMAT, "version": SETTINGS_VERSION, "shops": shops, "comparison_sites": sites}
+    if re.fullmatch(r"[a-z]{2}-[a-z]{2}", locale):
+        out["lego_locale"] = locale
+    return out
+
+
+def previous_settings(options: dict[str, Any]) -> dict[str, Any] | None:
+    """An installation from before version 1.0.0 keeps the shops it used: they are carried over once (the terms
+    still have to be accepted before anything is fetched). New installations start without shops."""
+    import json
+    from pathlib import Path
+
+    if options.get(CONF_SHOP_PROFILE) or options.get(CONF_SETUP_VERSION):
+        return None
+    try:
+        return validate_settings(json.loads((Path(__file__).parent / "data" / "previous_shop_settings.json").read_text("utf-8")))
+    except (OSError, ValueError):
+        return None
+
+
+def legal_ok(options: dict[str, Any]) -> bool:
+    legal = options.get(CONF_LEGAL) or {}
+    return bool(legal.get("accepted")) and legal.get("version") == LEGAL_VERSION
+
+
+def ready() -> bool:
+    """Shop settings imported and their terms accepted: only then does the integration contact any website."""
+    return STATE["profile"] and STATE["legal"]
+
+
+def profile_ids() -> list[str]:
+    return list(PROFILE)
+
+
+def reader_of(rid: str) -> str:
+    return (PROFILE.get(rid) or {}).get("reader") or "generic"
+
+
 def apply_shop_options(options: dict[str, Any]) -> None:
-    """Rebuild the registry from the options (custom shops + search overrides)."""
-    for rid in [r for r in RETAILERS if r not in BUILTIN_RETAILERS]:
-        del RETAILERS[rid]
+    """Rebuild the registry from the options (imported settings + custom shops + search overrides)."""
+    from . import compare        # compare imports parsers, which imports this module
+
+    profile = options.get(CONF_SHOP_PROFILE)
+    try:
+        profile = validate_settings(profile) if profile else None
+    except ValueError:
+        profile = None
+    STATE["profile"], STATE["legal"] = profile is not None, legal_ok(options)
+    RETAILERS.clear()
     GENERIC_SHOPS.clear()
-    GENERIC_SHOPS.update({k: dict(v) for k, v in _BUILTIN_GENERIC.items()})
+    DEFAULT_SEARCH.clear()
+    PROFILE.clear()
+    COMPARE.clear()
+    ALIASES.clear()
+    for shop in (profile or {}).get("shops", []):
+        PROFILE[shop["id"]] = shop
+        RETAILERS[shop["id"]] = (shop["name"], "EUR")
+        if shop.get("search"):
+            DEFAULT_SEARCH[shop["id"]] = shop["search"]
+        if shop["reader"] == "generic":
+            GENERIC_SHOPS[shop["id"]] = {"domain": shop["domain"], "search": shop.get("search", "")}
+        ALIASES.extend((a, shop["id"]) for a in shop["aliases"])
+    for site in (profile or {}).get("comparison_sites", []):
+        COMPARE[_COMPARE_IDS.get(site["id"], site["id"])] = site
+    ALIASES.sort(key=lambda a: -len(a[0]))
+    compare.load_sites(COMPARE)
     for shop in options.get("custom_shops", []) or []:
         try:
             s = validate_custom_shop(shop)
         except ValueError:
+            continue
+        if s["id"] in PROFILE:
             continue
         RETAILERS[s["id"]] = (s["name"], "EUR")
         GENERIC_SHOPS[s["id"]] = {"domain": s["domain"], "search": s["search"]}
@@ -66,10 +204,47 @@ def apply_shop_options(options: dict[str, Any]) -> None:
             SEARCH[rid] = tpl
             if rid in GENERIC_SHOPS:
                 GENERIC_SHOPS[rid]["search"] = tpl
-    LOCALE["lego"] = (options.get("lego_locale") or DEFAULT_LEGO_LOCALE).lower()
+    LOCALE["lego"] = (options.get("lego_locale") or (profile or {}).get("lego_locale") or DEFAULT_LEGO_LOCALE).lower()
     LOCALE["bol"] = bol_site(options)
-    if SEARCH.get("bol") == DEFAULT_SEARCH.get("bol"):     # your own search URL for bol.com stays as you wrote it
-        SEARCH["bol"] = bol_site_url(SEARCH["bol"])
+    for rid in PROFILE:
+        if reader_of(rid) == "bol" and SEARCH.get(rid) == DEFAULT_SEARCH.get(rid):   # your own search URL stays as you wrote it
+            SEARCH[rid] = bol_site_url(SEARCH[rid])
+
+
+def export_settings(options: dict[str, Any]) -> dict[str, Any]:
+    """The settings in force, as a file you can import again (imported shops, shops added by hand, your search URLs)."""
+    from .i18n import T
+
+    profile = options.get(CONF_SHOP_PROFILE) or {"format": SETTINGS_FORMAT, "version": SETTINGS_VERSION, "shops": [], "comparison_sites": []}
+    out = {"format": SETTINGS_FORMAT, "version": SETTINGS_VERSION, "notice": T("You decide yourself which websites your Home Assistant contacts, and you alone are responsible for everything that happens between your Home Assistant and those websites: respecting their terms of use, robots.txt and the law that applies to you, and all legal consequences. The software is provided as is, without any warranty; to the fullest extent permitted by law, its author and contributors cannot be held liable. Use it only for personal, non-commercial purposes and moderately. LEGO and the names of shops are trademarks of their owners; this project is not affiliated with or endorsed by any of them.")}
+    if LOCALE["lego"]:
+        out["lego_locale"] = LOCALE["lego"]
+    shops = []
+    for shop in profile.get("shops", []):
+        s = dict(shop)
+        if (tpl := (options.get("shop_search") or {}).get(s["id"])) and valid_search(tpl):
+            s["search"] = tpl
+        shops.append(s)
+    out["shops"] = shops
+    out["comparison_sites"] = profile.get("comparison_sites", [])
+    out["custom_shops"] = [s for s in options.get("custom_shops", []) or []]
+    return out
+
+
+def compare_start(source: str, num: str, lego_locale: str | None, ean: str | None) -> str | None:
+    """Where a comparison site starts for a set; None when it does not cover this country (or needs an EAN)."""
+    site = COMPARE.get(source)
+    if not site:
+        return None
+    parts = (lego_locale or "nl-be").lower().split("-")
+    lang, cc = parts[0], (parts[1] if len(parts) > 1 else "be").upper()
+    tpl = site["start"].get(cc) or site["start"].get("*")
+    if not tpl or ("{ean14}" in tpl and not (ean and ean.isdigit())):
+        return None
+    if site.get("langs") and lang not in site["langs"]:
+        lang = site["langs"][-1]
+    return (tpl.replace("{query}", quote_plus(f"lego {num}")).replace("{number}", quote_plus(num)).replace("{lang}", lang)
+            .replace("{cc_lower}", cc.lower()).replace("{cc}", cc).replace("{ean14}", (ean or "").zfill(14)))
 
 
 def bol_site(options: dict[str, Any]) -> str:
@@ -84,8 +259,30 @@ def bol_site_url(url: str) -> str:
 
 
 def domain_of(rid: str) -> str | None:
-    return FIXED_DOMAINS.get(rid) or GENERIC_SHOPS.get(rid, {}).get("domain")
+    return (PROFILE.get(rid) or {}).get("domain") or GENERIC_SHOPS.get(rid, {}).get("domain")
+
+
+def home_of(rid: str) -> str | None:
+    """The page a visit to this shop starts on (as a visitor would): from the settings, else the shop's root."""
+    home = (PROFILE.get(rid) or {}).get("home")
+    if home:
+        return bol_site_url(home) if reader_of(rid) == "bol" else home
+    return f"https://www.{d}/" if (d := domain_of(rid)) else None
+
+
+def site_root(rid: str) -> str | None:
+    """https://www.<domain>, for links in search results that are relative to the shop."""
+    return f"https://www.{d}" if (d := domain_of(rid)) else None
+
+
+def shop_with_reader(reader: str) -> str | None:
+    return next((rid for rid, s in PROFILE.items() if s["reader"] == reader), None)
 
 
 def all_domains() -> dict[str, str]:
     return {rid: d for rid in RETAILERS if (d := domain_of(rid))}
+
+
+def readers_by_domain() -> dict[str, str]:
+    return {d: reader_of(rid) for rid, d in all_domains().items()}
+

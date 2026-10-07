@@ -14,7 +14,7 @@ import aiohttp
 
 from .models import normalize_set_number
 from .i18n import T
-from .shops import bol_site_url, domain_of
+from .shops import bol_site_url, domain_of, home_of, ready, reader_of
 from .parsers import Parsed, find_search_result, is_search_url, lego_number, title_check, lego_product_url, parse_brickset_page, parse_page, search_url, url_key
 
 _LOGGER = logging.getLogger(__name__)
@@ -33,11 +33,6 @@ BROWSER_HEADERS = {
     "Sec-Ch-Ua-Mobile": "?0",
     "Sec-Ch-Ua-Platform": '"Windows"',
 }
-ORIGINS = {
-    "amazon_nl": "https://www.amazon.nl/", "amazon_de": "https://www.amazon.de/",
-    "amazon_be": "https://www.amazon.com.be/", "bol": "https://www.bol.com/nl/nl/",
-    "kruidvat_be": "https://www.kruidvat.be/nl/",
-}
 # To protect the traffic to and the load on the shops and comparison sites: at most 2 requests a minute
 # per site, and a search at most once every 2 minutes per site.
 DOMAIN_GAP = 30.0
@@ -46,6 +41,10 @@ SEARCH_GAP = 120.0
 
 class Aborted(Exception):
     """The running job was stopped while a request was waiting for its turn."""
+
+
+class NotReady(Exception):
+    """No shop settings imported, or their terms not accepted: no website is contacted."""
 
 
 def site_of(url: str) -> str:
@@ -249,15 +248,15 @@ class Fetcher:
             await asyncio.sleep(min(left, 1.0))
 
     async def _get(self, retailer: str, url: str, search: bool = False, binary: bool = False) -> tuple[int, Any]:
+        if not ready():          # the one gate every request to a shop or comparison site passes
+            raise NotReady(T("no shop settings imported (or their terms not accepted): nothing is fetched"))
         if self._curl_ok is None:
             await self.async_setup()
         site = site_of(url)
         lock = self._locks.setdefault(site, asyncio.Lock())      # one request at a time per site
         async with lock:
             await self._wait_turn(site, search)
-            origin = ORIGINS.get(retailer) or (f"https://www.{d}/" if (d := domain_of(retailer)) else None)
-            if retailer == "bol" and origin:
-                origin = bol_site_url(origin)
+            origin = home_of(retailer)
             if origin and retailer not in self._warmed:   # look like a visitor: home page first
                 self._warmed.add(retailer)
                 try:
@@ -308,12 +307,12 @@ class Fetcher:
         return parsed, error
 
     async def _fetch_offer(self, retailer: str, url: str, force: bool) -> tuple[Parsed | None, int | None, int, str | None]:
-        if retailer == "lego_com" and not lego_number(url):
+        if reader_of(retailer) == "lego" and not lego_number(url):
             # without the set number the page's own product can't be told from recommendations
             return None, None, 0, T("not a LEGO.com product page with a set number in the address")
         if not force and (left := self.cooldown_left(retailer)) > 0:
             return None, None, 0, T("paused {hours} h after being blocked", hours=f"{left / 3600:.1f}")
-        if retailer == "bol":
+        if reader_of(retailer) == "bol":
             url = bol_site_url(url)                         # the bol.com site chosen in Settings (NL or BE)
         try:
             status, page = await self._get(retailer, url)
@@ -329,7 +328,7 @@ class Fetcher:
             return None, status, size, T("page not found (HTTP 404)")
         if status >= 400:
             return None, status, size, T("HTTP error {status}", status=status)
-        parsed = parse_page(retailer, page, lego_number(url) if retailer == "lego_com" else None)
+        parsed = parse_page(retailer, page, lego_number(url) if reader_of(retailer) == "lego" else None)
         if parsed.blocked:
             self._note_block(retailer)
             return None, status, size, T("blocked (captcha / bot protection)")
@@ -427,14 +426,14 @@ class Fetcher:
         found = find_search_result(retailer, page, set_number, skip) or self._landed_on_product(retailer, url, page, set_number)
         if found and url_key(retailer, found) in skip:
             found = None                                   # the search jumped to a page you blocked: look elsewhere
-        if found or retailer != "lego_com":
+        if found or reader_of(retailer) != "lego":
             if not found:
                 self.discover_error[retailer] = T("no matching product found") if set_number in page else \
                     T("the search page does not contain {number}: this shop probably loads its results with JavaScript. Paste the product page URL instead.", number=set_number)
             return found
         # LEGO.com search is partly rendered in the browser: try the product URL directly (its own trace entry)
-        t0, purl = time.time(), lego_product_url(set_number)
-        if url_key(retailer, purl) in skip:                # you blocked this page: never visit it again
+        t0, purl = time.time(), lego_product_url(set_number, retailer)
+        if not purl or url_key(retailer, purl) in skip:                # you blocked this page: never visit it again
             self.discover_error[retailer] = T("no matching product found")
             return None
         try:

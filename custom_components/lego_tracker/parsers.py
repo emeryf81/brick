@@ -15,7 +15,7 @@ from urllib.parse import quote_plus, urlparse
 from .const import GENERIC_SHOPS
 from .i18n import T
 from .models import parse_price
-from .shops import BOL_PATH_RE, LOCALE, SEARCH, all_domains, bol_site_url, domain_of
+from .shops import BOL_PATH_RE, LOCALE, PROFILE, SEARCH, all_domains, bol_site_url, domain_of, reader_of, site_root
 
 
 @dataclass
@@ -88,7 +88,6 @@ def availability_reason(page: str, set_number: str | None = None) -> str | None:
     return None
 
 
-AMAZON_DOMAINS = {"amazon_nl": "amazon.nl", "amazon_de": "amazon.de", "amazon_be": "amazon.com.be"}
 BLOCK_MARKERS = (
     "api-services-support@amazon", "Type the characters you see", "Voer de tekens in",
     "Geben Sie die Zeichen", "/errors/validateCaptcha", "captcha", "Access Denied",
@@ -428,18 +427,15 @@ def lego_number(url: str | None) -> str | None:
     return m.group(1) if m else None
 
 
-PARSERS = {
-    "lego_com": parse_lego,
-    "amazon_nl": parse_amazon, "amazon_de": parse_amazon, "amazon_be": parse_amazon,
-    "bol": parse_bol, "kruidvat_be": parse_kruidvat,
-}
+# how a shop's pages are read: the "reader" of the shop in the shop settings file
+PARSERS = {"amazon": parse_amazon, "bol": parse_bol, "kruidvat": parse_kruidvat}
 
 
 def parse_page(retailer: str, page: str, set_number: str | None = None) -> Parsed:
-    if retailer == "lego_com":
+    if reader_of(retailer) == "lego":
         return parse_lego(page, set_number)       # never the generic fallback: it may read a recommended product
     amazon = is_amazon(retailer)
-    parser = parse_amazon if amazon else PARSERS.get(retailer, parse_generic)
+    parser = parse_amazon if amazon else PARSERS.get(reader_of(retailer), parse_generic)
     result = parser(page)
     if amazon and result.price is None and not result.blocked:
         # an Amazon page without a price in the buy box: not in stock (at Amazon), never an error
@@ -459,13 +455,13 @@ def parse_page(retailer: str, page: str, set_number: str | None = None) -> Parse
 # --------------------------------------------------------------- URL handling
 def is_amazon(retailer: str) -> bool:
     """Any Amazon site: the built-in ones and a shop you add yourself on amazon.fr, amazon.it, amazon.co.uk..."""
-    if retailer in AMAZON_DOMAINS:
+    if reader_of(retailer) == "amazon":
         return True
     return bool(re.fullmatch(r"(?:www\.)?amazon\.(?:[a-z]{2,3}|com?\.[a-z]{2})", (domain_of(retailer) or "").lower()))
 
 
 def amazon_url(retailer: str, asin: str) -> str:
-    domain = AMAZON_DOMAINS.get(retailer) or (domain_of(retailer) or "").removeprefix("www.")
+    domain = (domain_of(retailer) or "").removeprefix("www.")
     return f"https://www.{domain}/dp/{asin}"
 
 
@@ -493,8 +489,11 @@ def search_url(retailer: str, set_number: str) -> str | None:
             .replace("{locale}", LOCALE["lego"]))
 
 
-def lego_product_url(set_number: str) -> str:
-    return f"https://www.lego.com/{LOCALE['lego']}/product/{set_number}"
+def lego_product_url(set_number: str, retailer: str | None = None) -> str | None:
+    """The product page of a set at the official LEGO shop, from its "product" address in the shop settings."""
+    shop = PROFILE.get(retailer or "") or next((s for s in PROFILE.values() if s["reader"] == "lego"), {})
+    tpl = shop.get("product")
+    return tpl.replace("{locale}", LOCALE["lego"]).replace("{number}", quote_plus(set_number)) if tpl else None
 
 
 # ------------------------------------------------------------ product matching
@@ -641,19 +640,20 @@ def find_search_result(retailer: str, page: str, set_number: str, skip: set[str]
         for asin, title in _amazon_results(page):
             if title_check(title, set_number)[0] == "ok" and ok(amazon_url(retailer, asin)):
                 return amazon_url(retailer, asin)
-    elif retailer == "bol":
+    elif (reader := reader_of(retailer)) == "bol":
         for href in dict.fromkeys(re.findall(r'href="(/(?:nl|be)/nl/p/[^"]+)"', page)):
-            url = bol_site_url("https://www.bol.com" + href.split("?")[0])
+            url = bol_site_url(f"{site_root(retailer)}{href.split('?')[0]}")
             if title_check(f"lego {slug_title(url) or ''}", set_number)[0] == "ok" and ok(url):
                 return url
-    elif retailer == "kruidvat_be":
+    elif reader == "kruidvat":
         for href in dict.fromkeys(re.findall(r'href="(/nl/[^"]*?/p/\d+[^"]*)"', page)):
-            url = "https://www.kruidvat.be" + href.split("?")[0]
+            url = f"{site_root(retailer)}{href.split('?')[0]}"
             if title_check(slug_title(url), set_number)[0] == "ok" and ok(url):
                 return url
-    elif retailer == "lego_com":
-        for href in dict.fromkeys(re.findall(r'href="((?:https://www\.lego\.com)?/[a-z]{2}-[a-z]{2}/product/[^"?#]+)"', page)):
-            url = href if href.startswith("http") else "https://www.lego.com" + href
+    elif reader == "lego":
+        root = site_root(retailer) or ""
+        for href in dict.fromkeys(re.findall(rf'href="((?:{re.escape(root)})?/[a-z]{{2}}-[a-z]{{2}}/product/[^"?#]+)"', page)):
+            url = href if href.startswith("http") else root + href
             if re.search(rf"(?<!\d){re.escape(set_number)}/?$", href) and ok(url):
                 return url
     elif retailer in GENERIC_SHOPS:
@@ -785,7 +785,7 @@ def url_key(retailer: str, url: str) -> str:
         m = re.search(r"/(?:dp|gp/product)/([A-Z0-9]{10})", url)
         if m:
             return m.group(1)
-    if retailer == "bol":                              # the same product on bol.com/nl/nl and bol.com/be/nl
+    if reader_of(retailer) == "bol":                   # the same product on bol.com/nl/nl and bol.com/be/nl
         url = BOL_PATH_RE.sub(r"\1/nl/nl/", url)
     parsed = urlparse(url)
     return parsed.path.rstrip("/").lower()

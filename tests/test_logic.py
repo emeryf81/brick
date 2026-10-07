@@ -766,3 +766,45 @@ def test_parser_lab_explains_why_there_is_no_or_a_wrong_price():
     r = lab.analyze("c_shop", "", parsers.Parsed(None), "10280", status=404, error="page not found (HTTP 404)")
     assert r["verdict"] == "error" and "out of date" in texts(r)
     assert p.price is None or p.price == 49.99
+
+
+def test_shop_settings_file_is_checked_and_drives_every_address():
+    """The shops, their addresses and the comparison sites come only from the shop settings file."""
+    import copy
+    import json
+    from pathlib import Path
+    from lego_pkg import compare, shops
+    example = json.loads((Path(__file__).parent.parent / "examples" / "lot-shops.example.json").read_text("utf-8"))
+    ok = shops.validate_settings(example)
+    assert [s["reader"] for s in ok["shops"]] == ["lego", "amazon", "amazon", "amazon", "bol", "kruidvat", "generic", "generic"]
+    for bad, why in ((lambda d: d.update(format="x"), "not a shop settings file"),
+                     (lambda d: d.update(version=9), "version 9"),
+                     (lambda d: d.update(shops=[]), "no shops"),
+                     (lambda d: d["shops"][1].update(reader="magic"), "unknown reader"),
+                     (lambda d: d["shops"][1].update(search="https://evil.example/s?k={query}"), "must be an https:// address"),
+                     (lambda d: d["shops"][1].update(id="c_amazon"), "not starting with c_"),
+                     (lambda d: d["shops"][0].update(id="lego_shop"), "must have the id lego_com"),
+                     (lambda d: d["comparison_sites"][0]["start"].update(BE="https://evil.example/?q={query}"), "on one of its hosts")):
+        d = copy.deepcopy(example)
+        bad(d)
+        with pytest.raises(ValueError, match=why):
+            shops.validate_settings(d)
+    # the addresses the integration used to have built in, now from the example file
+    assert parsers.search_url("amazon_be", "10311") == "https://www.amazon.com.be/s?k=LEGO+10311"
+    assert parsers.lego_product_url("10311") == "https://www.lego.com/nl-be/product/10311"
+    assert shops.home_of("kruidvat_be") == "https://www.kruidvat.be/nl/" and shops.home_of("dreamland_be") == "https://www.dreamland.be/"
+    assert compare.first_url("kieskeurig", "10311", "nl-be") == "https://www.kieskeurig.be/search?q=lego+10311"
+    assert compare.first_url("kieskeurig", "10311", "de-de") is None
+    assert compare.first_url("shoparize", "10311", "en-gb") == "https://www.shoparize.com/uk/q?q=lego+10311"
+    assert compare.first_url("producthero", "10311", "it-it", "5702017416281") == \
+        "https://shopping.producthero.com/en/product/05702017416281?country=it"
+    assert compare.first_url("producthero", "10311", "nl-be") is None                 # needs an EAN
+    assert compare.first_url("brickeconomy", "10311") == "https://www.brickeconomy.com/set/10311-1/"
+    assert compare.is_compare_url("https://www.kieskeurig.nl/x") and compare.shop_retailer("Amazon BE", None, {}) == "amazon_be"
+    # without settings: no shops, no comparison sites, no addresses at all
+    try:
+        shops.raw_apply_shop_options({})
+        assert shops.RETAILERS == {} and compare.SOURCES == {} and not shops.ready()
+        assert parsers.search_url("amazon_be", "10311") is None and parsers.lego_product_url("10311") is None
+    finally:
+        shops.apply_shop_options({})

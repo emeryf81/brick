@@ -11,6 +11,9 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.lego_tracker.const import DEAL_FILTER_DEFAULT, DOMAIN, LEGO_RETIRED_REST, MAX_HISTORY
 from custom_components.lego_tracker.parsers import Parsed
+from custom_components.lego_tracker.client import Fetcher
+
+REAL_GET = Fetcher._get          # before the no_network fixture replaces it
 
 CSV = "Number;Name;Theme;Qty;Paid;Value\n10281-1;Bonsai;Botanicals;1;40;50\n42143;Ferrari;Technic;1;350;400\n"
 
@@ -3108,3 +3111,73 @@ async def test_rrp_is_the_first_lego_price_and_stays(hass: HomeAssistant, entry,
     s["rrp"] = 120.0
     c._fix_lego_rrp()                                                        # only once
     assert s["rrp"] == 120.0
+
+
+@pytest.mark.no_shop_settings
+async def test_no_shop_is_contacted_before_shop_settings_are_imported_and_accepted(hass: HomeAssistant, entry, hass_ws_client):
+    """The integration has no shops of its own: without imported shop settings and accepted terms there are no
+    shops, every request is refused and manual fetches say what to do. Import needs the terms accepted."""
+    import json
+    from pathlib import Path
+    from custom_components.lego_tracker import client, shops
+
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "setup_version": 1})    # a new installation
+    c = await _setup(hass, entry)
+    assert c.retailers == [] and not shops.ready() and shops.RETAILERS == {}
+    assert c.shop_settings_info()["imported"] is False
+    with patch("custom_components.lego_tracker.client.Fetcher._request", AsyncMock(return_value=(200, "x"))) as req:
+        with pytest.raises(client.NotReady):
+            await REAL_GET(c.fetcher, "x", "https://www.example.be/")
+        assert req.await_count == 0
+    with pytest.raises(ValueError, match="import the shop settings"):
+        c.manual_gate("prices")
+    example = json.loads((Path(__file__).parent.parent / "examples" / "lot-shops.example.json").read_text("utf-8"))
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/shop_settings/import", "settings": example, "accept": False})
+    assert "Accept the terms" in (await ws.receive_json())["error"]["message"]
+    await ws.send_json({"id": 2, "type": "lego_tracker/shop_settings/import", "settings": {"format": "x"}, "accept": True})
+    assert "not a shop settings file" in (await ws.receive_json())["error"]["message"]
+    assert "shop_profile" not in entry.options
+    await ws.send_json({"id": 3, "type": "lego_tracker/shop_settings/import", "settings": example, "accept": True})
+    assert (await ws.receive_json())["result"] == {"imported": True, "shops": 8}
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][entry.entry_id]                                    # entry reloaded with the shops
+    assert shops.ready() and entry.options["legal"]["version"] == shops.LEGAL_VERSION and entry.options["legal"]["accepted"]
+    assert set(c.retailers) == set(shops.profile_ids()) and "lego_com" in c.retailers      # every imported shop on
+    assert c.shop_settings_info() | {"accepted": 1} == {"imported": True, "ready": True, "shops": 8, "comparison_sites": 5,
+                                                        "accepted": 1, "legal_version": 1, "accepted_version": 1}
+    await ws.send_json({"id": 4, "type": "lego_tracker/shop_settings/export"})
+    out = (await ws.receive_json())["result"]
+    assert out["format"] == "lot-shop-settings" and [s["id"] for s in out["shops"]] == [s["id"] for s in example["shops"]]
+    assert "responsible" in out["notice"] and shops.validate_settings(out)["shops"] == shops.validate_settings(example)["shops"]
+    await ws.send_json({"id": 5, "type": "lego_tracker/shop_settings/withdraw"})
+    assert (await ws.receive_json())["result"]["withdrawn"]
+    await hass.async_block_till_done()
+    assert "shop_profile" not in entry.options and "legal" not in entry.options and not shops.ready()
+    assert hass.data[DOMAIN][entry.entry_id].retailers == []
+
+
+@pytest.mark.no_shop_settings
+async def test_an_installation_from_before_1_0_keeps_its_shops_after_accepting_once(hass: HomeAssistant, entry, hass_ws_client):
+    """An existing installation keeps the shops it used (carried over once), but nothing is fetched until the
+    terms are accepted in the one-time pop-up."""
+    from custom_components.lego_tracker import shops
+
+    c = await _setup(hass, entry)
+    assert entry.options["setup_version"] == 1 and len(entry.options["shop_profile"]["shops"]) == 8
+    assert c.retailers == ["bol", "amazon_nl", "dreamland_be", "smyths_be"] and not shops.ready()   # your choice stays, newer shops on
+    assert c.shop_settings_info()["imported"] and not c.shop_settings_info()["ready"]
+    assert c._live_retailers(False) == []
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/shop_settings/accept", "accept": False})
+    assert "Accept the terms" in (await ws.receive_json())["error"]["message"]
+    await ws.send_json({"id": 2, "type": "lego_tracker/shop_settings/accept", "accept": True})
+    assert (await ws.receive_json())["result"]["accepted"]
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][entry.entry_id]
+    assert shops.ready() and c._live_retailers(False) == ["bol", "amazon_nl", "dreamland_be", "smyths_be"]
+    # withdrawn: never carried over again
+    await ws.send_json({"id": 3, "type": "lego_tracker/shop_settings/withdraw"})
+    await ws.receive_json()
+    await hass.async_block_till_done()
+    assert "shop_profile" not in entry.options and not shops.ready()

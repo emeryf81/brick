@@ -14,7 +14,7 @@ from .i18n import T
 from .models import parse_price
 from .parsers import (AMAZON_BUYBOX_IDS, BLOCK_MARKERS, _jsonld_blocks, _meta, _walk, is_amazon, lego_number,
                       lego_product_url, parse_page, retailer_from_url, search_url, title_check)
-from .shops import bol_site_url, domain_of
+from .shops import bol_site_url, domain_of, reader_of
 
 AMOUNT_RE = re.compile(r"(?:€|EUR)\s?(\d{1,4}(?:[.\s]\d{3})*[.,]\d{2})(?!\d)|(?<![\d.,])(\d{1,4}(?:[.\s]\d{3})*,\d{2})\s?(?:€|EUR)")
 JS_HINT_RE = re.compile(r"enable javascript|javascript (?:is )?(?:required|disabled)|schakel javascript in|aktivieren sie javascript", re.I)
@@ -27,7 +27,7 @@ def links(coord: Any, rid: str, num: str) -> dict[str, Any]:
     (LEGO.com) and the shop's search page. 'suggested' is the one filled in."""
     offer = coord.store["offers"].get(num, {}).get(rid) or {}
     out = {"link": offer.get("url"), "search": search_url(rid, num) if rid in RETAILERS else None,
-           "product": lego_product_url(num) if rid == "lego_com" else None}
+           "product": lego_product_url(num, rid) if reader_of(rid) == "lego" else None}
     out["suggested"] = out["link"] or out["product"] or out["search"]
     return out
 
@@ -139,9 +139,9 @@ async def run(coord: Any, rid: str | None, num: str | None, url: str, html: str 
     rid = rid or (retailer_from_url(url) if url else None)
     if not rid or rid not in RETAILERS:
         raise ValueError(T("Pick a shop, or an address of a shop the integration knows."))
-    if rid == "bol" and url:
+    if reader_of(rid) == "bol" and url:
         url = bol_site_url(url)
-    num = num or (lego_number(url) if rid == "lego_com" else None)
+    num = num or (lego_number(url) if reader_of(rid) == "lego" else None)
     status, error, final_url, ms = None, None, None, 0
     if html:
         page = html

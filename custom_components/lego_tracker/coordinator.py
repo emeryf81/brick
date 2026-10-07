@@ -27,7 +27,7 @@ from .const import (
     FULL_REFRESH_GAP, MANUAL_GAP, CONF_DEAL_MIN_SCORE, CONF_DEAL_ATL, CONF_DEAL_TARGET, DEFAULT_DEAL_MIN_SCORE, CONF_DEV_FIXED_TIMES, CONF_DEV_FULL_REFRESH, CONF_DEV_FREE_CYCLE, CONF_DEV_WATCH_UNLIMITED, CONF_ALLOW_WORDS, CONF_COMPARE_SOURCES, COMPARE_FRESH_HOURS, COMPARE_MISSING_HOURS, COMPARE_NET_ERRORS, COMPARE_PAUSE_HOURS,
     CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET, CONF_BOL_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS, CONF_MARKET, CONF_TICKER, TICKER_DEFAULT, TICKER_GOOD_SCORE, TICKER_RELOAD, LEGO_RETIRED_REST, CONF_DEAL_FILTER, DEAL_FILTER_DEFAULT, CONF_SCAN,
     CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_LANGUAGE, CONF_REFRESH_MODE, CONF_SPREAD_HOURS, DEFAULT_REFRESH_MODE, DEFAULT_SPREAD_HOURS, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, CONF_CUSTOM_SHOPS, CONF_DIGEST_TIME, CONF_NO_AUTOPAUSE, CONF_SHOP_SEARCH, CONF_VALUE_SOURCE, DEFAULT_DIGEST_TIME, GENERIC_SHOPS, CONF_DISCOUNT_THRESHOLD, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
-    DEFAULT_REFRESH_TIMES, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS, DEFAULT_RETAILERS,
+    DEFAULT_REFRESH_TIMES, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS,
     DOMAIN, EVENT_JOB_DONE, EVENT_HIGH_DISCOUNT, EVENT_NEW_LOW, EVENT_TARGET_HIT, RETAILERS, STORAGE_KEY,
     STORAGE_VERSION,
 )
@@ -39,7 +39,8 @@ from .i18n import DEFAULT_LANGUAGE, LANGUAGES, LocalizedError, T, resolve, set_l
 from .notifications import Notifier, default_rules
 from .bol_api import BolApi, BolApiError
 from . import catalog, sitemaps, compare, setdb, scan
-from .shops import all_domains, bol_site, bol_site_url, domain_of
+from .shops import (CONF_LEGAL, CONF_SHOP_PROFILE, LEGAL_VERSION, all_domains, bol_site, bol_site_url, domain_of, profile_ids,
+                    reader_of, ready, site_root)
 from .parsers import Parsed, title_check, wrong_product
 from .shops import SEARCH, valid_search
 from .parsers import BUILTIN_WORDS, KNOCKOFF_RE, find_search_result, is_search_url, search_url, accessory_word, set_custom_words, clean_title, normalize_url, retailer_from_url, url_key
@@ -107,7 +108,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def retailers(self) -> list[str]:
-        return [r for r in self.opt(self.entry, CONF_RETAILERS, DEFAULT_RETAILERS) if r in RETAILERS]
+        return [r for r in self.opt(self.entry, CONF_RETAILERS, profile_ids()) if r in RETAILERS]
 
     # ---------------------------------------------------------------- storage
     @property
@@ -496,7 +497,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         self._spread_unsub = None
         try:
-            if not self.job_running and (num := self.next_spread_set()):
+            if ready() and not self.job_running and (num := self.next_spread_set()):
                 await self.refresh_set(num, self._live_retailers(False), source="schedule")
                 self._spread_last = {"set_number": num, "ts": time.time()}
                 self.push_update()
@@ -544,6 +545,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def manual_gate(self, key: str) -> None:
         """Manual fetches and searches: at most once every 2 minutes (per set action, per shop site)."""
+        if not ready():
+            raise LocalizedError("First import the shop settings and accept their terms (Manage → Shops).")
         if (left := self.manual_left(key)) > 0:
             s = int(left) + 1
             if key == "prices":
@@ -745,7 +748,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def bol_api(self) -> BolApi | None:
         """The official bol.com API when the user entered affiliate credentials (else: scraping)."""
         cid, secret = self.opt(self.entry, CONF_BOL_CLIENT_ID, ""), self.opt(self.entry, CONF_BOL_CLIENT_SECRET, "")
-        if not (cid and secret):
+        if not (cid and secret) or not ready():
             return None
         if self._bol_api is None:
             self._bol_api = BolApi(async_get_clientsession(self.hass), cid, secret, self.bol_country)
@@ -770,7 +773,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if not match:
                 return None
             self._bol_found[num] = match
-            return match.get("url") or f"https://www.bol.com/{'be' if self.bol_country == 'BE' else 'nl'}/nl/s/?searchtext={match['ean']}"
+            return match.get("url") or bol_site_url(f"{site_root(rid)}/nl/nl/s/?searchtext={match['ean']}")
         skip = set(self.store.get("rejected", {}).get(num, []))
         return await self.fetcher.discover(rid, num, force=force, url=url, skip=skip)
 
@@ -1050,7 +1053,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """All enabled comparison sites for one set. Pages are re-used for a few hours, a site that doesn't
         have the set is not asked again within a day, a paused site is skipped (unless forced from the panel)."""
         out: dict[str, dict[str, Any]] = {}
-        for src in sources or self.compare_sources:
+        for src in (sources or self.compare_sources) if ready() else []:
             if src == "brickeconomy" and not self.market_enabled:      # the market value is switched off
                 continue
             try:
@@ -1278,6 +1281,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _live_retailers(self, force: bool) -> list[str]:
         if force:
             self.fetcher.reset_cooldowns()
+        if not ready():          # no shop settings imported or terms not accepted: no shop is contacted
+            return []
         return [r for r in self.retailers if self.fetcher.cooldown_left(r) <= 0]
 
     # ------------------------------------------------------------------- refresh
@@ -1558,7 +1563,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "items": [i for _, i in items[:limit]], "total": len(items)}
 
     # ------------------------------------------------------------ product links from shop sitemaps
-    SITEMAP_EXCLUDE = {"lego_com", "amazon_nl", "amazon_de", "amazon_be", "bol"}   # huge sitemaps / own search works
+    SITEMAP_EXCLUDE = {"lego", "amazon", "bol"}   # readers of shops with huge sitemaps / a search that works
 
     def _note_js(self, rid: str) -> None:
         """Remember shops whose search page is built with JavaScript (the userscript can render it in a tab)."""
@@ -1579,7 +1584,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return url
         ean = str(self.store["sets"].get(num, {}).get("ean") or "")
         tpl = SEARCH.get(rid)
-        if slow and ean.isdigit() and tpl and rid not in ("lego_com", "bol"):
+        if slow and ean.isdigit() and tpl and reader_of(rid) not in ("lego", "bol"):
             url = await self._discover(rid, num, url=tpl.replace("{query}", ean).replace("{number}", ean))
             if url:
                 self.log("ok", "discover", T("link found by searching the EAN {ean}", ean=ean), set_number=num, retailer=rid, url=url)
@@ -1587,7 +1592,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return None
 
     def sitemap_shops(self) -> list[str]:
-        return [r for r in self.retailers if r not in self.SITEMAP_EXCLUDE and domain_of(r)]
+        return [r for r in self.retailers if reader_of(r) not in self.SITEMAP_EXCLUDE and domain_of(r)]
 
     def start_sitemap(self, rid: str) -> None:
         """Shops → a shop → 'Read the sitemap now' (once every 2 minutes per shop, like any manual action)."""
@@ -1612,7 +1617,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _sitemap_round(self, rids: list[str]) -> None:
         try:
-            for rid in rids:
+            for rid in rids if ready() else []:
                 await self.refresh_sitemap(rid)
         finally:
             self._sitemap_busy = False
@@ -2017,6 +2022,13 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # ---------------------------------------------------------------- settings
     SECRET_KEYS = (CONF_BRICKSET_KEY, CONF_REBRICKABLE_KEY, CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET)
 
+    def shop_settings_info(self) -> dict[str, Any]:
+        """Shop settings imported? Terms accepted (when, which version)? Without both, no shop is contacted."""
+        legal = self.entry.options.get(CONF_LEGAL) or {}
+        return {"imported": bool(self.entry.options.get(CONF_SHOP_PROFILE)), "ready": ready(), "shops": len(profile_ids()),
+                "comparison_sites": len(compare.SOURCES), "accepted": legal.get("accepted"),
+                "legal_version": LEGAL_VERSION, "accepted_version": legal.get("version")}
+
     def settings_get(self) -> dict[str, Any]:
         """Return panel settings and shop state with configured secret values masked."""
         o = {**self.entry.data, **self.entry.options}
@@ -2025,13 +2037,14 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for rid, (label, _) in RETAILERS.items():
             shops.append({
                 "id": rid, "label": label, "builtin": not rid.startswith("c_"),
-                "generic": rid in GENERIC_SHOPS, "domain": GENERIC_SHOPS.get(rid, {}).get("domain"),
+                "generic": rid in GENERIC_SHOPS, "domain": domain_of(rid), "reader": reader_of(rid),
                 "search": SEARCH.get(rid, ""), "default_search": DEFAULT_SEARCH.get(rid, GENERIC_SHOPS.get(rid, {}).get("search", "")),
                 "enabled": rid in self.retailers,
                 "paused_hours": round(self.fetcher.cooldown_left(rid) / 3600, 2),
                 "blocks": self.fetcher.blocks.get(rid, 0), "autopause": rid not in self.fetcher.no_autopause,
             })
         return {
+            "shop_settings": self.shop_settings_info(),
             "discount_threshold": self.threshold, "min_history_days": int(self.opt(self.entry, CONF_MIN_HISTORY_DAYS, DEFAULT_MIN_HISTORY_DAYS)),
             "auto_refresh": bool(o.get(CONF_AUTO_REFRESH, True)), "refresh_times": ", ".join(f"{h:02d}:{m:02d}" for h, m in self.refresh_times),
             "digest_time": str(o.get(CONF_DIGEST_TIME, DEFAULT_DIGEST_TIME))[:5], "use_impersonation": bool(o.get(CONF_IMPERSONATE, True)),
@@ -2237,7 +2250,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if "custom_shops" in fields:
             # a shop you just added is searched and fetched right away (switch it off under Shops if you like)
             before = {s["id"] for s in self.opt(self.entry, CONF_CUSTOM_SHOPS, []) or []}
-            active = list(opts.get(CONF_RETAILERS, self.opt(self.entry, CONF_RETAILERS, DEFAULT_RETAILERS)))
+            active = list(opts.get(CONF_RETAILERS, self.opt(self.entry, CONF_RETAILERS, profile_ids())))
             opts[CONF_RETAILERS] = [r for r in active if r in valid_ids] + \
                 [s["id"] for s in opts[CONF_CUSTOM_SHOPS] if s["id"] not in before and s["id"] not in active]
         if "no_autopause" in fields:
@@ -2321,7 +2334,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _run_rediscover(self) -> None:
         try:
-            while self._rediscover:
+            while self._rediscover and ready():
                 num, rid = self._rediscover[0]
                 if num in self.store["sets"] and not (self.store["offers"].get(num) or {}).get(rid):
                     try:
@@ -2550,7 +2563,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _run_first_checks(self) -> None:
         """Work through the sets waiting for their first check; always release the busy flag."""
         try:
-            while self._first_checks:
+            while self._first_checks and ready():
                 num = self._first_checks.pop(0)
                 if num not in self.store["sets"]:
                     continue                                       # removed again in the meantime
@@ -2705,7 +2718,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Every minute: when it is time, look up the set of the database that waited longest. The sets
         per day are spread evenly over the day (at least a minute apart)."""
         now = time.time()
-        if not self.scan_per_day or self.scan_info["busy"] or now < self.scan_info["next"] or not self.setdb:
+        if not self.scan_per_day or self.scan_info["busy"] or now < self.scan_info["next"] or not self.setdb or not ready():
             return
         num = scan.pick(self.scan_candidates(), self.scan, self.setdb, now)
         if num is None:

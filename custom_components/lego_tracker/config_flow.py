@@ -10,12 +10,13 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
-    BUILTIN_RETAILERS, CONF_KNOWN_SHOPS, CONF_LANGUAGE, CONF_REFRESH_MODE, CONF_SPREAD_HOURS, DEFAULT_REFRESH_MODE, DEFAULT_SPREAD_HOURS, CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_DIGEST_TIME, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, DEFAULT_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_DISCOUNT_THRESHOLD, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
+    CONF_KNOWN_SHOPS, CONF_LANGUAGE, CONF_REFRESH_MODE, CONF_SPREAD_HOURS, DEFAULT_REFRESH_MODE, DEFAULT_SPREAD_HOURS, CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_DIGEST_TIME, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, DEFAULT_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_DISCOUNT_THRESHOLD, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
     DEFAULT_DIGEST_TIME, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS,
-    DEFAULT_RETAILERS, DOMAIN, RETAILERS, CYCLE_CHOICES, CONF_WATCH_CYCLE, WATCH_CYCLE_CHOICES, CONF_DEV_FIXED_TIMES,
+    DOMAIN, RETAILERS, CYCLE_CHOICES, CONF_WATCH_CYCLE, WATCH_CYCLE_CHOICES, CONF_DEV_FIXED_TIMES,
     CONF_DEV_FREE_CYCLE,
 )
 from .i18n import DEFAULT_LANGUAGE, LANGUAGES
+from .shops import CONF_SETUP_VERSION, profile_ids
 
 
 def _mode(d: dict[str, Any]) -> str:
@@ -37,9 +38,10 @@ def _schema(d: dict[str, Any]) -> vol.Schema:
         vol.Required(CONF_DISCOUNT_THRESHOLD, default=d.get(CONF_DISCOUNT_THRESHOLD, DEFAULT_DISCOUNT_THRESHOLD)):
             selector.NumberSelector(selector.NumberSelectorConfig(min=1, max=90, step=1, unit_of_measurement="%",
                                                                   mode=selector.NumberSelectorMode.SLIDER)),
-        vol.Required(CONF_RETAILERS, default=d.get(CONF_RETAILERS, DEFAULT_RETAILERS)):
+        # the shops come from the shop settings file (imported in the panel): none before that
+        **({vol.Required(CONF_RETAILERS, default=[r for r in d.get(CONF_RETAILERS, profile_ids()) if r in RETAILERS]):
             selector.SelectSelector(selector.SelectSelectorConfig(
-                options=[{"value": k, "label": v[0]} for k, v in RETAILERS.items()], multiple=True)),
+                options=[{"value": k, "label": v[0]} for k, v in RETAILERS.items()], multiple=True))} if RETAILERS else {}),
         vol.Required(CONF_LANGUAGE, default=d.get(CONF_LANGUAGE, DEFAULT_LANGUAGE)):
             selector.SelectSelector(selector.SelectSelectorConfig(
                 options=[{"value": "auto", "label": "Auto (Home Assistant)"}] + [{"value": k, "label": v} for k, v in LANGUAGES.items()],
@@ -101,7 +103,7 @@ class LegoTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             try:
                 return self.async_create_entry(title="LEGO Organizing Tool", data={},
-                                               options={**_clean(user_input), CONF_KNOWN_SHOPS: list(BUILTIN_RETAILERS)})
+                                               options={**_clean(user_input), CONF_KNOWN_SHOPS: profile_ids(), CONF_SETUP_VERSION: 1})
             except InvalidTimes:
                 errors[CONF_REFRESH_TIMES] = "invalid_times"
         return self.async_show_form(step_id="user", data_schema=_schema(user_input or {}), errors=errors)

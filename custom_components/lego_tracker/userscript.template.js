@@ -123,9 +123,17 @@
     const m = doc.querySelector('meta[itemprop="price"], meta[property="product:price:amount"]');
     return m ? parse(m.content) : null;
   }
+  // how each shop's pages are read: the "reader" of the shop in your shop settings (domain -> reader)
+  const READERS = {{READERS}};
+  function readerOf(host) {
+    const h = host.replace(/^www\./, "");
+    const d = Object.keys(READERS).find((k) => h === k || h.endsWith("." + k));
+    return d ? READERS[d] : "generic";
+  }
   function priceOf(doc, host) {
-    if (host.includes("amazon")) return amazonPrice(doc);
-    if (host.includes("bol.com")) return bolPrice(doc) ?? fromJsonLd(doc);
+    const reader = readerOf(host);
+    if (reader === "amazon") return amazonPrice(doc);
+    if (reader === "bol") return bolPrice(doc) ?? fromJsonLd(doc);
     const m = doc.querySelector('meta[property="product:price:amount"], meta[itemprop="price"]');
     return (m && parse(m.content)) ?? fromJsonLd(doc);
   }
