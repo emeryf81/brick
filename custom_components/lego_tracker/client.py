@@ -15,7 +15,7 @@ import aiohttp
 from .models import normalize_set_number
 from .i18n import T
 from .shops import bol_site_url, domain_of, home_of, ready, reader_of, source_url
-from .parsers import Parsed, find_search_result, is_search_url, lego_number, title_check, lego_product_url, parse_brickset_page, parse_page, search_url, url_key
+from .parsers import Parsed, bot_wall, find_search_result, is_search_url, lego_number, title_check, lego_product_url, parse_brickset_page, parse_page, search_url, url_key
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -352,10 +352,10 @@ class Fetcher:
             return 0, "", T("paused: the job was stopped")
         except Exception as err:  # noqa: BLE001
             return 0, "", T("network error: {error}", error=str(err)[:120])
-        if status in (403, 429, 503):
+        if status in (403, 429, 503) or bot_wall(page):
             if note_block:
                 self._note_block(key)
-            return status, "", T("blocked (HTTP {status})", status=status)
+            return status, "", T("blocked (HTTP {status})", status=status) if status >= 400 else T("blocked (captcha / bot protection)")
         return status, page, None
 
     def _landed_on_product(self, retailer: str, url: str, page: str, set_number: str) -> str | None:

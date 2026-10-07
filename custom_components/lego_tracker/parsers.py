@@ -92,7 +92,16 @@ BLOCK_MARKERS = (
     "api-services-support@amazon", "Type the characters you see", "Voer de tekens in",
     "Geben Sie die Zeichen", "/errors/validateCaptcha", "captcha", "Access Denied",
     "Just a moment...", "Attention Required",
+    "Pardon Our Interruption", "_Incapsula_Resource", "isImpervaSpaSupport", "Incapsula incident ID",
 )
+# a shop's protection against automated visits (Imperva / Incapsula, Cloudflare...): an unmistakable wall page, never
+# a normal product page that merely mentions "captcha" somewhere. Seen on any shop, it means: blocked, leave it alone.
+BOT_WALL_RE = re.compile(r"<title>\s*Pardon Our Interruption|_Incapsula_Resource|isImpervaSpaSupport|Incapsula incident ID"
+                         r"|<title>\s*Just a moment\.\.\.|<title>\s*Attention Required! \| Cloudflare|/cdn-cgi/challenge-platform", re.I)
+
+
+def bot_wall(page: str | None) -> bool:
+    return bool(page) and bool(BOT_WALL_RE.search(page[:60000]))
 
 
 def _jsonld_blocks(page: str):
@@ -432,6 +441,8 @@ PARSERS = {"amazon": parse_amazon, "bol": parse_bol, "kruidvat": parse_kruidvat}
 
 
 def parse_page(retailer: str, page: str, set_number: str | None = None) -> Parsed:
+    if bot_wall(page):                             # the shop doesn't want automated visits: blocked, never "no price"
+        return Parsed(None, blocked=True)
     if reader_of(retailer) == "lego":
         return parse_lego(page, set_number)       # never the generic fallback: it may read a recommended product
     amazon = is_amazon(retailer)

@@ -137,7 +137,7 @@
     const m = doc.querySelector('meta[property="product:price:amount"], meta[itemprop="price"]');
     return (m && parse(m.content)) ?? fromJsonLd(doc);
   }
-  const BLOCKED = /captcha|robot check|bot protection|access denied|Type the characters you see|Voer de tekens in|px-captcha|_Incapsula_|cf-chl|Just a moment/i;
+  const BLOCKED = /captcha|robot check|bot protection|access denied|Type the characters you see|Voer de tekens in|px-captcha|_Incapsula_|cf-chl|Just a moment|Pardon Our Interruption|isImpervaSpaSupport/i;
 
   // ---------------------------------------------------------------- 1) the shop page you are looking at
   function report() {

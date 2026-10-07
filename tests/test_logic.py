@@ -818,3 +818,22 @@ def test_shop_settings_file_is_checked_and_drives_every_address():
         assert shops.SOURCES == {} and shops.source_url("brickset_api") is None
     finally:
         shops.apply_shop_options({})
+
+
+IMPERVA_WALL = """<!DOCTYPE html><html><head><noscript><title>Pardon Our Interruption</title></noscript>
+<meta name="robots" content="noindex, nofollow"><script>window.reeseSkipExpirationCheck = true;
+const isSpa = new URLSearchParams(window.location.search).get('X-SPA') === '1' || window.isImpervaSpaSupport;</script></head>
+<body><div class="container"><h1>Pardon Our Interruption</h1></div></body></html>"""
+
+
+def test_a_bot_protection_wall_is_a_block_not_a_missing_price():
+    """A shop that shows its protection against automated visits (here Imperva, as Smyths Toys does) is blocked:
+    the shop gets paused and is left alone, it is never reported as a page without a price."""
+    for rid in ("smyths_be", "dreamland_be", "kruidvat_be", "bol", "lego_com", "amazon_nl", "c_unknown"):
+        p = parsers.parse_page(rid, IMPERVA_WALL, "10311")
+        assert p.blocked and p.price is None and not p.unavailable, rid
+    assert parsers.bot_wall("<html><title>Just a moment...</title></html>")
+    # a normal product page that merely mentions a captcha (e.g. in a login form) is not a wall
+    ok = ('<html><head><title>LEGO 10311 Orchidee</title><meta property="product:price:amount" content="39.99"></head>'
+          '<body><form class="g-recaptcha">captcha</form></body></html>')
+    assert not parsers.bot_wall(ok) and parsers.parse_page("dreamland_be", ok).price == 39.99
