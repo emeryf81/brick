@@ -78,7 +78,7 @@ const signPct = (v) => (v == null ? "–" : `${v > 0 ? "+" : ""}${v.toLocaleStri
 const DATE = (ts, o = { day: "2-digit", month: "short" }) => new Date(ts * 1000).toLocaleDateString(LOC, o);
 const TIME = (ts) => new Date(ts * 1000).toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" });
 /** What this panel needs from the server (API_LEVEL in const.py). Different = Home Assistant still runs older code. */
-const API_LEVEL = 8;
+const API_LEVEL = 9;
 const SRC = { kieskeurig: "Kieskeurig", shoparize: "Shoparize", channable: "Channable Shopping", producthero: "Producthero", brickeconomy: "Market value" };
 /** How a price was read, as one letter: ⓤ your own browser (userscript), ⓢ ⓚ ⓒ ⓟ ⓑ a comparison site, ⌂ the shop's own site. */
 const VIA_MARK = { relay: "ⓤ", userscript: "ⓤ", shoparize: "ⓢ", kieskeurig: "ⓚ", channable: "ⓒ", producthero: "ⓟ", brickeconomy: "ⓜ" };
@@ -442,7 +442,7 @@ const SECTIONS = {
   deals: { label: "🏷️ Deals & watchlist", hint: "sets you keep an eye on", subs: [["today", "Today"], ["watch", "Watchlist"], ["all", "All prices"], ["new", "New sets"], ["lego", "All LEGO sets"], ["dset", "Settings"]] },
   collection: { label: "📦 My collection", hint: "what you own", subs: [["overview", "Overview"], ["sets", "Sets"]] },
   log: { label: "📜 Logbook", hint: "checks, prices, errors", subs: [["all", "Everything"], ["checks", "Shop checks"], ["errors", "Open errors"]] },
-  manage: { label: "⚙️ Manage", hint: "add, import, shops, settings", subs: [["add", "Add"], ["import", "Import"], ["edit", "Edit all"], ["links", "Link check"], ["notify", "Notifications"], ["shops", "Shops & jobs"], ["lab", "Parser lab"], ["settings", "Settings"], ["userscript", "Userscript"], ["backup", "Backup"]] },
+  manage: { label: "⚙️ Manage", hint: "add, import, shops, settings", subs: [["add", "Add"], ["import", "Import"], ["edit", "Edit all"], ["links", "Link check"], ["notify", "Notifications"], ["shops", "Shops & jobs"], ["lab", "Parser lab"], ["settings", "Settings"], ["userscript", "Userscript"], ["backup", "Backup"], ["legal", "Legal"]] },
 };
 
 class LegoTrackerPanel extends HTMLElement {
@@ -601,6 +601,8 @@ class LegoTrackerPanel extends HTMLElement {
       if (!this._tickerAt || Date.now() - this._tickerAt > TICKER_RELOAD) this.loadTicker();
     } catch (e) { this.state.err = e.message || String(e); }
     this.render(animate || !this._rendered);
+    const ss = (this.state.data || {}).shop_settings;
+    if (ss && !ss.ready && !this._gateShown && this._hass.user && this._hass.user.is_admin) { this._gateShown = true; this.openShopSettings(); }
   }
   // ---------------------------------------------------------------- ticker (latest prices, deals, news)
   /** The content (deals, watchlist, news, solved errors) is reloaded every 10 minutes; in between it keeps scrolling. */
@@ -835,6 +837,7 @@ class LegoTrackerPanel extends HTMLElement {
       <header>${this._narrow ? `<ha-menu-button></ha-menu-button>` : ""}<img class="logo" src="/lego_tracker_static/icon.png${d ? `?v=${encodeURIComponent(d.version)}` : ""}" alt="" onerror="this.outerHTML=this.dataset.fb" data-fb="${esc(BRICK)}"><div><h1>LEGO Organizing Tool</h1><div class="meta">${d ? `v${esc(d.version)} · ${t("{n} sets tracked", { n: d.sets.length })}` : t("loading…")}</div></div>
         <div class="hsp"></div>${status}<button class="btn ghost sm" data-act="discover" title="${t("Search shop links for sets that have none yet: a job you can follow and stop, spread out so every shop is searched at most once every 2 minutes")}">🔎 <span class="lbl">${t("Find links")}</span></button><button class="btn sm" data-act="refresh" ${this.fullRefreshAttr(t("Fetch all shop prices now"))}>↻ <span class="lbl">${t("Refresh prices")}</span></button></header>
       ${d && d.api !== API_LEVEL ? `<div class="banner" style="border-color:var(--lt-bad,#c62828)">🔄 <span><b>${t("Restart Home Assistant to finish the update.")}</b> ${t("The new panel is loaded, but Home Assistant still runs the previous version of the integration, so some buttons and settings don't work yet. Settings → System → Restart.")}</span></div>` : ""}
+      ${d && d.shop_settings && !d.shop_settings.ready ? `<div class="banner" style="border-color:var(--lt-bad,#c62828)">⚖️ <span><b>${t(d.shop_settings.imported ? "Accept the terms once to keep fetching prices." : "First step: import your shop settings.")}</b> ${t("Until then no shop or comparison site is contacted. Your sets and prices stay.")} <a id="gate_open">${t(d.shop_settings.imported ? "Read and accept" : "Import shop settings")} →</a></span></div>` : ""}
       <div id="jobbar"></div>
       <nav class="seg" role="tablist">${Object.entries(SECTIONS).map(([k, v]) => `<button role="tab" data-sec="${k}" class="${k === s.section ? "on" : ""}">${t(v.label)}<small>${t(v.hint)}</small></button>`).join("")}<span class="ind"></span></nav>
       <div class="sub">${sec.subs.map(([k, l]) => `<button data-sub="${k}" class="${k === sub ? "on" : ""}">${t(l)}${this.subCount(s.section, k)}</button>`).join("")}${s.section === "manage" ? `<button data-sub="secret" class="secretlink" tabindex="-1" aria-hidden="true"></button>` : ""}</div>
@@ -859,6 +862,7 @@ class LegoTrackerPanel extends HTMLElement {
     dlg._bound = true;
     if (!this._keys) { this._keys = true; this.addEventListener("keydown", (e) => { if (e.key === "/" && !/INPUT|TEXTAREA|SELECT/.test((e.composedPath()[0] || {}).tagName || "")) { const q = this.shadowRoot.getElementById("q"); if (q) { e.preventDefault(); q.focus(); } } }); }
     root.querySelectorAll("header [data-act]").forEach((b) => b.addEventListener("click", () => this.startJob(b.dataset.act, b)));
+    const go = root.getElementById("gate_open"); if (go) go.onclick = () => this.openShopSettings();
     this.renderContent(animate);
     this.renderJob();
     if (animate) requestAnimationFrame(() => this.placeIndicator(true));
@@ -959,7 +963,7 @@ class LegoTrackerPanel extends HTMLElement {
     const s = this.state, el = this.shadowRoot.getElementById("content"); if (!el) return;
     if (s.err) { el.innerHTML = `<div class="empty"><span class="big">⚠️</span>${t("Could not load data: {error}", { error: esc(s.err) })}<br><br><button class="btn" id="retry">${t("Try again")}</button></div>`; el.querySelector("#retry").onclick = () => this.load(true); return; }
     if (!s.data) { el.innerHTML = `<div class="kpis">${"<div class='skel' style='height:86px'></div>".repeat(4)}</div><div class="grid">${"<div class='skel' style='height:260px'></div>".repeat(8)}</div>`; return; }
-    const view = { deals: { today: this.vToday, watch: this.vWatch, all: this.vAll, new: this.vNewSets, lego: this.vCatalog, dset: this.vDealSettings }, collection: { overview: this.vCollOverview, sets: this.vCollSets }, log: { all: this.vLog, checks: this.vLog, errors: this.vErrors }, manage: { notify: this.vNotify, add: this.vAdd, import: this.vImport, links: this.vLinks, shops: this.vShops, lab: this.vLab, edit: this.vBulk, settings: this.vSettings, userscript: this.vUserscript, backup: this.vBackup, secret: this.vSecret } }[s.section][s.sub[s.section]];
+    const view = { deals: { today: this.vToday, watch: this.vWatch, all: this.vAll, new: this.vNewSets, lego: this.vCatalog, dset: this.vDealSettings }, collection: { overview: this.vCollOverview, sets: this.vCollSets }, log: { all: this.vLog, checks: this.vLog, errors: this.vErrors }, manage: { notify: this.vNotify, add: this.vAdd, import: this.vImport, links: this.vLinks, shops: this.vShops, lab: this.vLab, edit: this.vBulk, settings: this.vSettings, userscript: this.vUserscript, backup: this.vBackup, legal: this.vLegal, secret: this.vSecret } }[s.section][s.sub[s.section]];
     el.className = animate && !REDUCED ? "enter" : "";
     el.innerHTML = view.call(this);
     this.bindContent(el);
@@ -2122,10 +2126,81 @@ class LegoTrackerPanel extends HTMLElement {
       <div class="action"><b>🔗 ${t("Check links")}</b><p>${t("Judges all links again and shows suspicious or unchecked links, so you can approve or replace them.")}</p><button class="btn" data-goto="manage/links">${t("Go to link check")}</button></div></div></div>
       <div class="panel"><h3>⏰ ${t("Automatic checks")}</h3><p>${this.scheduleLine()} <a data-goto="manage/settings" style="cursor:pointer">${t("Change under Settings")} →</a></p>
       <p><b>${t("Last job:")}</b> ${lastTxt}</p>${pausedTxt ? `<p><b>${t("Paused after a block:")}</b> ${pausedTxt}. ${t("With the buttons you can choose to try anyway.")} <button class="btn ghost sm" data-resume="">▶ ${t("Lift all pauses")}</button></p>` : ""}</div>`;
-    return `${actions}<div class="panel"><h3>🏪 ${t("Shop status")}<span class="hsp"></span><span class="pill">${esc(this.state.data.transport)}</span></h3><p>${t("After a block a shop is paused automatically for a while (1 → 3 → 6 → 12 → 24 h) so the protection doesn't get stricter.")}</p></div>
+    return `${this.shopSettingsPanel()}${actions}<div class="panel"><h3>🏪 ${t("Shop status")}<span class="hsp"></span><span class="pill">${esc(this.state.data.transport)}</span></h3><p>${t("After a block a shop is paused automatically for a while (1 → 3 → 6 → 12 → 24 h) so the protection doesn't get stricter.")}</p></div>
       <div class="shops">${cards}</div>
       <div class="panel" style="margin-top:16px"><h3>⚠️ ${t("Offers without a price")} <span class="muted" style="font-weight:400">${failing.length}</span><span class="hsp"></span>${failing.length ? `<a class="btn ghost sm" data-goto="log/errors">${t("Fix in the logbook")} →</a>` : ""}</h3>${failing.length ? `<div class="tscroll"><table class="tbl"><tr><th>Set</th><th>${t("Shop")}</th><th>${t("Message")}</th></tr>${failing.map((f) => `<tr class="click" data-set="${esc(f.set_number)}"><td><b>${esc(f.set_number)}</b> ${esc(f.name || "")}</td><td>${esc(f.shop)}</td><td class="err">${esc(tx(f.error))}${f.suspect != null ? ` ${approveBtn(f.set_number, f.rid, f.suspect)}` : ""}</td></tr>`).join("")}</table></div>` : `<p class="ok">${t("All OK.")}</p>`}</div>
       <div class="panel"><h3>🧩 ${t("Does a shop keep blocking?")}</h3><p>1. ${t("Enter the price by hand: click a set → Shops → price field. A manual price always wins.")}<br>2. ${t("Install the {link} in Tampermonkey: your own browser sends the price when you visit a product page.", { link: `<a data-goto="manage/userscript" style="cursor:pointer">${t("userscript")}</a>` })}<br>3. ${t("Or switch off “pause automatically” per shop under {link}.", { link: `<a data-goto="manage/settings" style="cursor:pointer">${t("Settings")}</a>` })}<br>4. ${t("Use the action {action} from an automation or n8n.", { action: "<code>lego_tracker.report_price</code>" })}</p></div>`;
+  }
+  /** The legal terms, in full (Manage → Legal, the import wizard and the one-time acceptance). */
+  legalHtml() {
+    const sec = [
+      ["About this software", "LEGO Organizing Tool (LOT) is free software that runs entirely on your own Home Assistant. It contains no list of shops or websites and contacts no website by itself: which websites are contacted is decided only by the shop settings you import or enter yourself."],
+      ["Example settings", "The example shop settings file only shows how settings can be written. It is not a recommendation, not an instruction and not a statement that any website allows its pages to be read automatically. Whether and how you use it is your own decision."],
+      ["Your responsibility", "Everything that happens between your Home Assistant and the websites in your settings (page requests, searches, APIs, the browser relay and the userscript) happens on your initiative, from your own network and under your own responsibility. You are responsible for respecting the terms of use of those websites, their robots.txt and the law that applies to you, including copyright, database rights, rules on unauthorised access to computer systems and consumer law. Use the software only for personal, non-commercial purposes and keep the number of requests moderate."],
+      ["No warranty", "The software is provided \"as is\", without any warranty, express or implied, including fitness for a particular purpose and non-infringement. Prices, availability, deals, retirement dates and values can be wrong, incomplete or out of date: always check them at the shop before you buy."],
+      ["Limitation of liability", "To the fullest extent permitted by the applicable law, the author and the contributors are not liable for any damage, loss, claim, fine or other consequence arising from the use of the software or of shop settings, including claims by website operators or other third parties. Such claims concern the user who chose and used the settings. Nothing in these terms limits a liability that cannot be limited by law."],
+      ["Indemnity", "As far as the law allows, you hold the author and the contributors harmless from claims by third parties that arise from your use of the software or of your shop settings."],
+      ["Trademarks", "LEGO® is a trademark of the LEGO Group, which does not sponsor, authorise or endorse this software. Names of shops and websites are trademarks of their owners; this project is not affiliated with any of them."],
+      ["Your data", "Your sets, prices and settings stay on your own Home Assistant. The software does not send your collection or settings to its author; it only fetches a public news file to show news in the panel."],
+      ["Acceptance and withdrawal", "By importing shop settings, or by accepting the shop settings carried over from an earlier version, you confirm that you have read and accept these terms, that you bear all legal consequences of your settings and their use yourself, and that the author cannot be held liable. You can withdraw at any time under Manage → Legal: from then on no website from your settings is contacted."],
+      ["No legal advice", "These terms are no legal advice. If you are unsure what is allowed where you live, ask a lawyer before you use shop settings."],
+    ];
+    return sec.map(([h, p]) => `<h4 style="margin:12px 0 4px">${t(h)}</h4><p style="margin:0">${t(p)}</p>`).join("");
+  }
+  shopSettingsPanel() {
+    const ss = this.state.data.shop_settings || {};
+    const when = ss.accepted ? new Date(ss.accepted * 1000).toLocaleString(LANG) : null;
+    const state = ss.ready ? `✅ ${t("{n} shops and {m} comparison sites from your shop settings; terms accepted on {when}.", { n: ss.shops, m: ss.comparison_sites, when: esc(when) })}`
+      : ss.imported ? `⚠️ ${t("Shop settings present, terms not accepted yet: nothing is fetched.")}` : `⚠️ ${t("No shop settings imported: nothing is fetched.")}`;
+    return `<div class="panel"><h3>🗂️ ${t("Shop settings")}</h3><p>${state}</p><p class="muted">${t("Which shops and comparison sites your Home Assistant contacts, with their addresses, comes from a shop settings file you import. Export it to keep a copy or to move it to another installation.")}</p>
+      <button class="btn" id="ss_import">⬆ ${t("Import shop settings")}</button> ${ss.imported && !ss.ready ? `<button class="btn" id="ss_accept">⚖️ ${t("Read and accept")}</button> ` : ""}${ss.imported ? `<button class="btn ghost" id="ss_export">⬇ ${t("Export shop settings")}</button> <button class="btn ghost" id="ss_withdraw">✋ ${t("Withdraw and stop fetching")}</button>` : ""}</div>`;
+  }
+  vLegal() {
+    return `${this.shopSettingsPanel()}<div class="panel"><h3>⚖️ ${t("Legal information")}</h3>${this.legalHtml()}<p class="muted" style="margin-top:12px">${t("Terms version {v}.", { v: (this.state.data.shop_settings || {}).legal_version || 1 })}</p></div>`;
+  }
+  /** First step (no shop settings yet: import + accept) or the one-time acceptance (settings carried over). */
+  openShopSettings(forceImport = false) {
+    const ss = (this.state.data || {}).shop_settings || {}, accept = ss.imported && !ss.ready && !forceImport;
+    const dlg = this.shadowRoot.getElementById("dlg");
+    this._dlgGen = (this._dlgGen || 0) + 1; clearInterval(this._shopTimer);
+    let payload = null;
+    const intro = accept ? t("LOT is now version 1.0. Your shop settings were carried over from the previous version, but before anything is fetched again you have to read and accept the terms below once.")
+      : t("LOT contains no shops of its own: you choose which websites your Home Assistant contacts by importing a shop settings file. An example file shows how such a file is written.");
+    dlg.innerHTML = `<div class="dhead" style="grid-template-columns:1fr auto"><div><h2>⚖️ ${t(accept ? "Accept the terms" : "Import shop settings")}</h2><div class="muted">${t("Nothing is fetched until you agree.")}</div></div><div><button class="x" id="x" aria-label="${t("Not now")}" title="${t("Not now")}">✕</button></div></div>
+      <div class="dbody"><p>${intro}</p>
+      ${accept ? `<p><b>${t("Shops in your settings:")}</b> ${Object.values(this.state.data.retailers || {}).map(esc).join(", ")}</p>`
+        : `<label class="drop" id="ss_drop" style="padding:18px"><span class="big" style="font-size:26px">🗂️</span><span id="ss_name">${t("Choose or drop a shop settings file (.json)")}</span><input type="file" id="ss_file" accept=".json,application/json" hidden></label>
+      <p class="muted"><a href="https://github.com/emeryf81/mot/blob/main/examples/lot-shops.example.json" target="_blank" rel="noopener noreferrer">${t("Example of a shop settings file")} ↗</a></p><div id="ss_info"></div>`}
+      <div style="max-height:260px;overflow:auto;border:1px solid var(--lt-line);border-radius:10px;padding:4px 12px 12px;margin:10px 0;font-size:13px">${this.legalHtml()}</div>
+      <label class="chk" style="display:flex;gap:8px;align-items:flex-start;margin:10px 0"><input type="checkbox" id="ss_ok" style="margin-top:3px"> <span>${t("I have read and accept these terms. I alone am responsible for what my Home Assistant does with these shop settings and I bear all legal consequences; the author of LOT cannot be held liable.")}</span></label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="ss_go" disabled>${t(accept ? "Accept" : "Import")}</button><button class="btn ghost" id="ss_later">${t("Not now")}</button>${accept ? `<button class="btn ghost" id="ss_other">⬆ ${t("Import other shop settings")}</button>` : ""}</div></div>`;
+    if (!dlg.open) dlg.showModal();
+    const q = (id) => dlg.querySelector("#" + id), ok = q("ss_ok"), go = q("ss_go");
+    const sync = () => { go.disabled = !ok.checked || (!accept && !payload); };
+    ok.onchange = sync;
+    q("x").onclick = q("ss_later").onclick = () => this.closeDialog();
+    if (q("ss_other")) q("ss_other").onclick = () => this.openShopSettings(true);
+    if (!accept) {
+      const drop = q("ss_drop");
+      const pick = async (f) => {
+        if (!f) return;
+        try {
+          const j = JSON.parse(await f.text());
+          if (!j || j.format !== "lot-shop-settings" || !Array.isArray(j.shops)) throw new Error("format");
+          payload = j; q("ss_name").textContent = f.name;
+          q("ss_info").innerHTML = `<p><b>${t("{n} shops", { n: j.shops.length })}:</b> ${j.shops.map((x) => esc(x.name || x.id)).join(", ")}${(j.comparison_sites || []).length ? `<br><b>${t("{n} comparison sites", { n: j.comparison_sites.length })}:</b> ${j.comparison_sites.map((x) => esc(x.name || x.id)).join(", ")}` : ""}</p>`;
+        } catch (e) { payload = null; q("ss_info").innerHTML = ""; this.toast(t("This is not a shop settings file for this integration."), "err"); }
+        sync();
+      };
+      ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+      ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+      drop.addEventListener("drop", (e) => pick(e.dataTransfer.files[0])); q("ss_file").addEventListener("change", (e) => pick(e.target.files[0]));
+    }
+    go.onclick = () => this.busy(go, "…", async () => {
+      if (accept) await this._hass.callWS({ type: "lego_tracker/shop_settings/accept", accept: ok.checked });
+      else { const r = await this._hass.callWS({ type: "lego_tracker/shop_settings/import", settings: payload, accept: ok.checked }); this.toast(t("{n} shops imported", { n: r.shops }), "ok"); }
+      this.closeDialog(); await new Promise((res) => setTimeout(res, 1500)); await this.load();
+    });
   }
   vBackup() {
     return `<div class="two"><div class="panel"><h3>⬇ ${t("Export")}</h3><p>${t("Full backup (sets, shop links, price history, collection, timeline) as JSON, or only your collection as CSV (can be imported again).")}</p><button class="btn" id="expjson">⬇ ${t("Backup (JSON)")}</button> <button class="btn ghost" id="expcsv">⬇ ${t("Collection (CSV)")}</button></div>
@@ -2277,6 +2352,11 @@ class LegoTrackerPanel extends HTMLElement {
         s.section = "collection"; s.sub.collection = "sets"; this.persist(); this.render(true);
       });
     });
+    // shop settings (Shops & jobs, Legal)
+    const ssi = $("ss_import"); if (ssi) ssi.onclick = () => this.openShopSettings(true);
+    const ssa = $("ss_accept"); if (ssa) ssa.onclick = () => this.openShopSettings();
+    const sse = $("ss_export"); if (sse) sse.onclick = () => this.busy(sse, "…", async () => { const x = await this._hass.callWS({ type: "lego_tracker/shop_settings/export" }); const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(x, null, 2)], { type: "application/json" })); a.download = "lot-shop-settings.json"; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 3000); });
+    const ssw = $("ss_withdraw"); if (ssw) ssw.onclick = () => { if (!confirm(t("Remove the shop settings and withdraw your acceptance? From then on no shop is contacted; your sets and prices stay."))) return; this.busy(ssw, "…", async () => { await this._hass.callWS({ type: "lego_tracker/shop_settings/withdraw" }); await new Promise((res) => setTimeout(res, 1500)); await this.load(); }); };
     // backup
     const dl = (name, text, mime) => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: mime })); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 3000); };
     const ec = $("expcsv"); if (ec) ec.addEventListener("click", () => this.busy(ec, "…", async () => { const x = await this.svc("export_collection", {}, true); dl("lego_collection.csv", x.response.csv, "text/csv;charset=utf-8"); }));
