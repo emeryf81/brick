@@ -20,6 +20,7 @@ from typing import Any
 import aiohttp
 
 from .i18n import T
+from .shops import ready
 
 TIMEOUT = aiohttp.ClientTimeout(total=20)
 
@@ -116,6 +117,8 @@ class BolApi:
         self._expires = 0.0
 
     async def _auth(self) -> str:
+        if not ready():           # withdrawn: not even a login
+            raise BolApiError(T("no shop settings imported (or their terms not accepted): nothing is fetched"))
         if self._token and time.time() < self._expires - 60:
             return self._token
         basic = base64.b64encode(f"{self._id}:{self._secret}".encode()).decode()
@@ -138,6 +141,8 @@ class BolApi:
     async def _get(self, path: str, **params: Any) -> Any:
         for attempt in (1, 2):
             token = await self._auth()
+            if not ready():       # withdrawn while logging in
+                raise BolApiError(T("no shop settings imported (or their terms not accepted): nothing is fetched"))
             try:
                 async with self._session.get(f"{self._api}{path}", params={"country-code": self.country, **params}, timeout=TIMEOUT,
                                              headers={"Authorization": f"Bearer {token}", "Accept": "application/json",

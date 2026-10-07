@@ -344,7 +344,7 @@ async def ws_shop_settings_import(hass, connection, msg):
         return
     try:
         profile = validate_settings(msg["settings"])
-    except ValueError as err:
+    except (ValueError, TypeError, AttributeError) as err:     # any malformed file is refused with a message
         connection.send_error(msg["id"], "invalid_format", str(err))
         return
     dropped = keys_for_moved_sources(coord.entry.options, profile)
@@ -415,13 +415,14 @@ async def ws_shop_settings_accept(hass, connection, msg):
 async def ws_shop_settings_withdraw(hass, connection, msg):
     """Remove the imported shop settings and the acceptance of the terms: from then on no shop is contacted.
     Your sets, prices and links stay."""
-    from .shops import CONF_LEGAL, CONF_SETUP_VERSION, CONF_SHOP_PROFILE
+    from .shops import CONF_LEGAL, CONF_SETUP_VERSION, CONF_SHOP_PROFILE, revoke
 
     coord = _coord(hass)
     if coord is None:
         connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
         return
     options = {k: v for k, v in coord.entry.options.items() if k not in (CONF_SHOP_PROFILE, CONF_LEGAL)} | {CONF_SETUP_VERSION: 1}
+    revoke()                    # at once, not only after the reload
     coord.log("info", "settings", T("Shop settings removed and terms withdrawn: no shop is contacted any more"), source="panel")
     coord._save()
     hass.config_entries.async_update_entry(coord.entry, options=options)

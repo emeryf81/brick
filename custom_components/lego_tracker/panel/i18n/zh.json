@@ -1486,6 +1486,7 @@
 "{field}: must be between {lo} and {hi}": "{field}：必须在 {lo} 到 {hi} 之间",
 "{field}: not a number": "{field}：不是数字",
 "{field}: not a valid choice": "{field}：不是有效的选项",
+"{field}: wrong type in the shop settings file.": "{field}：商店设置文件中的类型错误。",
 "{field}: {value} is not a number": "{field}：{value} 不是数字",
 "{field}: {value} is out of range": "{field}：{value} 超出范围",
 "{job} done": "{job} 已完成",

@@ -1486,6 +1486,7 @@
 "{field}: must be between {lo} and {hi}": "{field}: harus antara {lo} dan {hi}",
 "{field}: not a number": "{field}: bukan angka",
 "{field}: not a valid choice": "{field}: pilihan tidak valid",
+"{field}: wrong type in the shop settings file.": "{field}: tipe salah di file pengaturan toko.",
 "{field}: {value} is not a number": "{field}: {value} bukan angka",
 "{field}: {value} is out of range": "{field}: {value} di luar rentang",
 "{job} done": "{job} selesai",

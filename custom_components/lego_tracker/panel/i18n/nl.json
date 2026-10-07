@@ -1486,6 +1486,7 @@
 "{field}: must be between {lo} and {hi}": "{field}: moet tussen {lo} en {hi} liggen",
 "{field}: not a number": "{field}: geen getal",
 "{field}: not a valid choice": "{field}: geen geldige keuze",
+"{field}: wrong type in the shop settings file.": "{field}: verkeerd type in het winkelinstellingenbestand.",
 "{field}: {value} is not a number": "{field}: {value} is geen getal",
 "{field}: {value} is out of range": "{field}: {value} valt buiten het bereik",
 "{job} done": "{job} klaar",

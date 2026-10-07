@@ -789,7 +789,10 @@ def test_shop_settings_file_is_checked_and_drives_every_address():
                      (lambda d: d["comparison_sites"][0].update(hosts="www.kieskeurig.be"), "hosts and start addresses"),
                      (lambda d: d["data_sources"].update(brickset_page="https://brickset.com/sets/"), "must be an https:// address"),
                      (lambda d: d["data_sources"].update(rebrickable_api="http://rebrickable.com/api"), "must be an https:// address"),
-                     (lambda d: d["data_sources"].update(evil="https://x.example/"), "Unknown data source")):
+                     (lambda d: d["data_sources"].update(evil="https://x.example/"), "Unknown data source"),
+                     (lambda d: d.update(shops=1), "wrong type"),
+                     (lambda d: d.update(comparison_sites={"a": 1}), "wrong type"),
+                     (lambda d: d["shops"][0].update(aliases="lego"), "wrong type")):
         d = copy.deepcopy(example)
         bad(d)
         with pytest.raises(ValueError, match=why):

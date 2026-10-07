@@ -1486,6 +1486,7 @@
 "{field}: must be between {lo} and {hi}": "{field}: {lo}에서 {hi} 사이여야 합니다",
 "{field}: not a number": "{field}: 숫자가 아님",
 "{field}: not a valid choice": "{field}: 올바른 선택이 아닙니다",
+"{field}: wrong type in the shop settings file.": "{field}: 쇼핑몰 설정 파일의 형식이 잘못되었습니다.",
 "{field}: {value} is not a number": "{field}: {value}은(는) 숫자가 아닙니다",
 "{field}: {value} is out of range": "{field}: {value}은(는) 범위를 벗어났습니다",
 "{job} done": "{job} 완료",

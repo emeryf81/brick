@@ -1486,6 +1486,7 @@
 "{field}: must be between {lo} and {hi}": "{field} : doit être entre {lo} et {hi}",
 "{field}: not a number": "{field} : pas un nombre",
 "{field}: not a valid choice": "{field} : choix non valide",
+"{field}: wrong type in the shop settings file.": "{field} : type incorrect dans le fichier de paramètres de boutiques.",
 "{field}: {value} is not a number": "{field} : {value} n'est pas un nombre",
 "{field}: {value} is out of range": "{field} : {value} est hors limites",
 "{job} done": "{job} terminé",

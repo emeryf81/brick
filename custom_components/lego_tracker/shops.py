@@ -81,6 +81,9 @@ def validate_settings(data: Any) -> dict[str, Any]:
         raise LocalizedError("This is not a shop settings file for this integration.")
     if data.get("version") != SETTINGS_VERSION:
         raise LocalizedError("Shop settings file version {version} is not supported.", version=data.get("version"))
+    for key, kind in (("shops", list), ("comparison_sites", list), ("data_sources", dict)):
+        if data.get(key) is not None and not isinstance(data[key], kind):
+            raise LocalizedError("{field}: wrong type in the shop settings file.", field=key)
     shops, seen = [], set()
     for raw in data.get("shops") or []:
         if not isinstance(raw, dict):
@@ -102,7 +105,10 @@ def validate_settings(data: Any) -> dict[str, Any]:
             if not _https_on(v, domain) or (key == "search" and not valid_search(v)) or (key == "product" and "{number}" not in v):
                 raise LocalizedError("Shop {id}: {field} must be an https:// address on {domain}.", id=rid, field=key, domain=domain)
             shop[key] = v
-        shop["aliases"] = [a for a in (str(x).strip().lower()[:40] for x in raw.get("aliases") or []) if len(a) >= 3][:20]
+        aliases = raw.get("aliases") or []
+        if not isinstance(aliases, list) or not all(isinstance(x, str) for x in aliases):
+            raise LocalizedError("{field}: wrong type in the shop settings file.", field=f"{rid}.aliases")
+        shop["aliases"] = [a for a in (x.strip().lower()[:40] for x in aliases) if len(a) >= 3][:20]
         seen.add(rid)
         shops.append(shop)
     if not shops:
@@ -112,7 +118,7 @@ def validate_settings(data: Any) -> dict[str, Any]:
     sites = []
     for raw in data.get("comparison_sites") or []:
         if not isinstance(raw, dict):
-            continue
+            raise LocalizedError("{field}: wrong type in the shop settings file.", field="comparison_sites")
         sid = str(raw.get("id") or "").strip()
         raw_hosts, raw_langs = raw.get("hosts"), raw.get("langs")
         if not isinstance(raw_hosts, list) or not all(isinstance(x, str) for x in raw_hosts) or (
@@ -203,6 +209,11 @@ def legal_ok(options: dict[str, Any]) -> bool:
     return bool(legal.get("accepted")) and legal.get("version") == LEGAL_VERSION
 
 
+def revoke() -> None:
+    """Withdrawn: from this moment on nothing is fetched, also before the integration has reloaded."""
+    STATE["profile"] = STATE["legal"] = False
+
+
 def ready() -> bool:
     """Shop settings imported and their terms accepted: only then does the integration contact any website."""
     return STATE["profile"] and STATE["legal"]
@@ -228,7 +239,7 @@ def apply_shop_options(options: dict[str, Any]) -> None:
     profile = options.get(CONF_SHOP_PROFILE)
     try:
         profile = validate_settings(profile) if profile else None
-    except ValueError:
+    except (ValueError, TypeError, AttributeError):
         profile = None
     STATE["profile"], STATE["legal"] = profile is not None, legal_ok(options)
     RETAILERS.clear()

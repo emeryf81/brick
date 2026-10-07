@@ -3236,10 +3236,12 @@ async def test_imported_settings_never_send_an_api_key_to_a_new_address(hass: Ho
     assert entry.options["rebrickable_api_key"] == "k2"                                 # its address stayed the same
     http = await hass_client()
     assert (await (await http.get("/api/lego_tracker/relay?mode=check")).json()) == {"ready": True}
-    await ws.send_json({"id": 3, "type": "lego_tracker/shop_settings/withdraw"})
-    await ws.receive_json()
-    await hass.async_block_till_done()
-    assert (await (await http.get("/api/lego_tracker/relay?mode=check")).json()) == {"ready": False}
+    with patch.object(hass.config_entries, "async_update_entry"):            # even before the reload
+        await ws.send_json({"id": 3, "type": "lego_tracker/shop_settings/withdraw"})
+        assert (await ws.receive_json())["success"]
+        assert (await (await http.get("/api/lego_tracker/relay?mode=check")).json()) == {"ready": False}
+    await ws.send_json({"id": 4, "type": "lego_tracker/shop_settings/import", "settings": {"format": "lot-shop-settings", "version": 1, "shops": 1}, "accept": True})
+    assert "wrong type" in (await ws.receive_json())["error"]["message"]
 
 
 @pytest.mark.no_shop_settings
