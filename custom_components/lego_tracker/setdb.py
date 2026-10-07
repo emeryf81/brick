@@ -1,7 +1,8 @@
 """The LEGO set database: every set there is, with name, year, theme, subtheme, pieces and picture.
 
 Rebrickable publishes the complete list of LEGO sets every day as a free download (no key needed):
-sets.csv.gz and themes.csv.gz, about 1 MB together. The integration fetches it once a day, keeps it in
+sets.csv.gz and themes.csv.gz, about 1 MB together; their addresses come from the shop settings
+("set_database_sets", "set_database_themes"). The integration fetches it once a day, keeps it in
 its own storage file and uses it to
 - fill in set data right away when you add a set (before the slower online lookups),
 - search sets by name or number while adding,
@@ -17,8 +18,6 @@ import time
 from datetime import date
 from typing import Any
 
-SETS_URL = "https://cdn.rebrickable.com/media/downloads/sets.csv.gz"
-THEMES_URL = "https://cdn.rebrickable.com/media/downloads/themes.csv.gz"
 REFRESH_HOURS = 24
 MAX_BYTES = 40_000_000             # unpacked size limit per file
 NEW_KEEP_DAYS = 365                # how long a set stays in "new sets"

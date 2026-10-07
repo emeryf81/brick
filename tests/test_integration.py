@@ -11,6 +11,9 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.lego_tracker.const import DEAL_FILTER_DEFAULT, DOMAIN, LEGO_RETIRED_REST, MAX_HISTORY
 from custom_components.lego_tracker.parsers import Parsed
+from custom_components.lego_tracker.client import Fetcher
+
+REAL_GET = Fetcher._get          # before the no_network fixture replaces it
 
 CSV = "Number;Name;Theme;Qty;Paid;Value\n10281-1;Bonsai;Botanicals;1;40;50\n42143;Ferrari;Technic;1;350;400\n"
 
@@ -1933,11 +1936,15 @@ async def test_ticker_market_tick_and_shop_link(hass: HomeAssistant, entry, no_n
     await hass.async_block_till_done()
     assert len(calls) == 1                                       # next one waits (spread over the day)
 
-    # notifications link to the product page of the cheapest shop, not a comparison page
+    # notifications link to the cheapest shop itself: its product page when there is one, never another
+    # (dearer) shop's page; a price only a comparison site knows keeps its comparison link
     c.store["offers"]["10281"] = {
         "bol": {"url": "https://www.bol.com/nl/nl/p/x/1/", "available": True, "last_price": 39.99, "history": []},
         "amazon_nl": {"url": "https://www.kieskeurig.be/lego/product/123", "available": True, "last_price": 35.0, "history": []}}
-    assert c.notifier.shop_link("10281", {"best_url": "https://www.kieskeurig.be/lego/product/123"}) == "https://www.bol.com/nl/nl/p/x/1/"
+    st = {"best_price": 35.0, "best_retailer": "amazon_nl", "best_url": "https://www.kieskeurig.be/lego/product/123"}
+    assert c.notifier.shop_link("10281", st) == "https://www.kieskeurig.be/lego/product/123"
+    c.store["offers"]["10281"]["amazon_nl"]["url"] = "https://www.amazon.nl/dp/B0AAAAAAAA"
+    assert c.notifier.shop_link("10281", st) == "https://www.amazon.nl/dp/B0AAAAAAAA"
 
 
 async def test_market_value_via_userscript_when_server_fails(hass: HomeAssistant, entry, no_network, hass_client):
@@ -2041,11 +2048,12 @@ async def test_debug_toggle_overrides_debug_ancestor(hass: HomeAssistant, entry)
         parent.setLevel(old_parent_level)
 
 
+# price, shop and discount always belong to the cheapest offer; only its link may be a comparison or search page
 @pytest.mark.parametrize("best_url, fallback, expected_price, expected_retailer", [
     ("https://www.amazon.nl/dp/B012345678", True, 35.0, "amazon_nl"),
-    ("https://www.kieskeurig.be/lego/product/123", True, 39.99, "bol"),
-    ("https://www.amazon.nl/s?k=lego+10281", True, 39.99, "bol"),
-    (None, True, 39.99, "bol"),
+    ("https://www.kieskeurig.be/lego/product/123", True, 35.0, "amazon_nl"),
+    ("https://www.amazon.nl/s?k=lego+10281", True, 35.0, "amazon_nl"),
+    (None, True, 35.0, "amazon_nl"),
     ("https://www.kieskeurig.be/lego/product/123", False, 35.0, "amazon_nl"),
     (None, False, 35.0, "amazon_nl"),
 ])
@@ -2091,10 +2099,10 @@ async def test_notification_offer_values_stay_together(
 
 
 @pytest.mark.parametrize("shops, expected_price, expected_retailer", [
-    ([], 39.99, "bol"),
+    ([], 35.0, "amazon_nl"),
     (["amazon_nl"], 35.0, "amazon_nl"),
-    (["amazon_nl", "amazon_de"], 45.0, "amazon_de"),
-    (["amazon_nl", "amazon_de", "bol"], 39.99, "bol"),
+    (["amazon_nl", "amazon_de"], 35.0, "amazon_nl"),
+    (["amazon_nl", "amazon_de", "bol"], 35.0, "amazon_nl"),
 ])
 async def test_notification_fallback_respects_rule_shops(
     hass: HomeAssistant, entry, shops, expected_price, expected_retailer,
@@ -2761,8 +2769,8 @@ def test_series_keeps_own_imported_value_for_opened_copies():
 
 
 async def test_lego_temporarily_unavailable_keeps_the_lego_price(hass: HomeAssistant, entry, no_network):
-    """LEGO.com says 'temporarily unavailable': no new LEGO price; the one we had stays. Without one, the
-    regular price (RRP) is used: the page's own, else the RRP from another source. A warning, not an error."""
+    """LEGO.com says 'temporarily unavailable': no new LEGO price; the LEGO price is the set's RRP (never the
+    promotion price we happened to have). Without an RRP, the page's regular price. A warning, not an error."""
     c = await _setup(hass, entry)
     await c.add_set("10281", name="Bonsai", rrp=49.99, discover=False)
     o = c.store["offers"].setdefault("10281", {})["lego_com"] = {"url": "https://www.lego.com/nl-be/product/bonsai-tree-10281", "history": []}
@@ -2773,9 +2781,9 @@ async def test_lego_temporarily_unavailable_keeps_the_lego_price(hass: HomeAssis
     no_network.return_value = (away, None)
     await c.refresh_set("10281", ["lego_com"])
     await c.refresh_set("10281", ["lego_com"])
-    assert o["last_price"] == 44.99 and o["available"] and o["unavailable"] == "sold_out" and o["error"] is None
-    assert [e["message"] for e in c.store["activity"] if e.get("unavailable")] == ["temporarily unavailable: last price €44.99 kept"]
-    assert c.compute()["statuses"]["10281"]["best_price"] == 44.99
+    assert o["last_price"] == 49.99 and o["available"] and o["unavailable"] == "sold_out" and o["error"] is None
+    assert [e["message"] for e in c.store["activity"] if e.get("unavailable")] == ["temporarily unavailable: regular price €49.99 used"]
+    assert c.compute()["statuses"]["10281"]["best_price"] == 49.99
     # never had a price: the regular price from the page, else the set's RRP from elsewhere
     del c.store["offers"]["10281"]["lego_com"]
     o = c.store["offers"]["10281"]["lego_com"] = {"url": "https://www.lego.com/nl-be/product/bonsai-tree-10281", "history": []}
@@ -3038,3 +3046,225 @@ async def test_deal_of_the_day_notification_once_a_day_from_its_time(hass: HomeA
         await c.notifier.send(rule, f"n{i}", "m")
     q = c.store["notify_queue"]["q"]
     assert len(q) == 50 and q[0]["title"] == "⭐ dotd" and q[-1]["title"] == "n59"
+
+
+async def test_deal_notification_keeps_price_shop_and_discount_together(hass: HomeAssistant, entry, no_network):
+    """The cheapest price is known only through a comparison site (Amazon via Shoparize): the notification
+    names that price and that shop with its discount, never LEGO.com's regular price next to Amazon's discount."""
+    from unittest.mock import patch as _patch
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "11382", "rrp": 129.99}, blocking=True)
+    c.store["offers"]["11382"].update({
+        "lego_com": {"url": "https://www.lego.com/nl-be/product/11382", "history": [[1, 129.99]], "last_price": 129.99, "available": True},
+        "amazon_be": {"url": "https://www.shoparize.com/be/q?q=lego+11382", "history": [[1, 88.99]], "last_price": 88.99, "available": True}})
+    st = {"best_price": 88.99, "best_retailer": "amazon_be", "best_url": "https://www.shoparize.com/be/q?q=lego+11382", "discount_rrp": 31.5}
+    click = "https://track.shoparize.com/site.php?pos=0&url=https%3A%2F%2Fwww.amazon.com.be%2Fdp%2FB0GGSLFWNB"
+    with _patch.object(c, "compare_prices", lambda num: {"amazon_be": {"price": 88.99, "url": click, "source": "shoparize"}}):
+        price, rid, url = c.notifier.shop_offer("11382", st)
+    assert (price, rid) == (88.99, "amazon_be") and url == "https://www.amazon.com.be/dp/B0GGSLFWNB"
+    with _patch.object(c, "compare_prices", lambda num: {}):
+        assert c.notifier.shop_offer("11382", st)[:2] == (88.99, "amazon_be")       # never LEGO.com's 129.99
+    # a rule for certain shops: the cheapest of those shops, with that shop's own price
+    assert c.notifier.shop_offer("11382", st, ["lego_com"]) == (129.99, "lego_com", "https://www.lego.com/nl-be/product/11382")
+
+
+async def test_old_amazon_no_price_errors_become_out_of_stock(hass: HomeAssistant, entry, no_network):
+    """Amazon 'price not found' errors stored by earlier versions leave Open errors at the next start (as
+    'not in stock'), without counting as solved errors; other shops' errors stay."""
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
+    c.store["offers"]["10281"].update({
+        "amazon_nl": {"url": "https://www.amazon.nl/dp/B0AAAAAAAA", "history": [], "error": "price not found on the page", "available": False},
+        "bol": {"url": "https://www.bol.com/nl/nl/p/x/1/", "history": [], "error": "price not found on the page", "available": False}})
+    c._track_errors()
+    assert {"10281|amazon_nl", "10281|bol"} <= set(c.store["err_track"]["open"])
+    c._amazon_no_price_is_out_of_stock()
+    o = c.store["offers"]["10281"]["amazon_nl"]
+    assert o["error"] is None and o["unavailable"] == "sold_out" and "10281|amazon_nl" not in c.open_error_keys()
+    assert "10281|bol" in c.open_error_keys()
+    c._track_errors()
+    assert not any(k == "10281|amazon_nl" for _, k, _ in c.store["err_track"]["solved"])
+
+
+async def test_rrp_is_the_first_lego_price_and_stays(hass: HomeAssistant, entry, no_network):
+    """The RRP is the regular price LEGO.com shows the first time: a later promotion or price change never
+    moves it, your own RRP always wins, and RRPs that earlier versions moved are corrected once."""
+    c = await _setup(hass, entry)
+    await c.add_set("21066", name="NYC", discover=False)
+    s = c.store["sets"]["21066"]
+    s.pop("rrp", None), s.pop("rrp_source", None)
+    c._apply_lego("21066", Parsed(139.99, "NYC", list_price=139.99))
+    assert (s["rrp"], s["rrp_source"]) == (139.99, "LEGO.com")
+    c._apply_lego("21066", Parsed(99.99, "NYC", list_price=99.99))           # a promotion without a list price
+    c._apply_lego("21066", Parsed(149.99, "NYC", list_price=149.99))         # a later price change
+    assert s["rrp"] == 139.99
+    s["rrp"], s["rrp_source"] = 129.0, "user"
+    c._apply_lego("21066", Parsed(139.99, "NYC", list_price=139.99))
+    assert s["rrp"] == 129.0
+    # correction of RRPs earlier versions moved: the highest price LEGO.com showed at least twice
+    s["rrp"], s["rrp_source"] = 99.99, "LEGO.com"
+    c.store["offers"]["21066"]["lego_com"] = {"url": "https://www.lego.com/nl-be/product/21066",
+                                             "history": [[1, 139.99], [2, 139.99], [3, 99.99], [4, 139.99]]}
+    c.store.pop("rrp_fixed", None)
+    c._fix_lego_rrp()
+    assert s["rrp"] == 139.99 and c.store["rrp_fixed"] == 1
+    s["rrp"] = 120.0
+    c._fix_lego_rrp()                                                        # only once
+    assert s["rrp"] == 120.0
+    # a promotion checked more often than the regular price never replaces a correct RRP
+    s["rrp"] = 139.99
+    c.store["offers"]["21066"]["lego_com"]["history"] = [[1, 99.99], [2, 99.99], [3, 99.99], [4, 139.99]]
+    c.store.pop("rrp_fixed", None)
+    c._fix_lego_rrp()
+    assert s["rrp"] == 139.99
+    s["rrp"] = 99.99                                     # the promotion became the RRP: the regular price seen twice wins
+    c.store["offers"]["21066"]["lego_com"]["history"] += [[5, 139.99]]
+    c.store.pop("rrp_fixed", None)
+    c._fix_lego_rrp()
+    assert s["rrp"] == 139.99
+
+
+@pytest.mark.no_shop_settings
+async def test_no_shop_is_contacted_before_shop_settings_are_imported_and_accepted(hass: HomeAssistant, entry, hass_ws_client):
+    """The integration has no shops of its own: without imported shop settings and accepted terms there are no
+    shops, every request is refused and manual fetches say what to do. Import needs the terms accepted."""
+    import json
+    from pathlib import Path
+    from custom_components.lego_tracker import client, shops
+
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "setup_version": 1})    # a new installation
+    c = await _setup(hass, entry)
+    assert c.retailers == [] and not shops.ready() and shops.RETAILERS == {}
+    assert c.shop_settings_info()["imported"] is False
+    with patch("custom_components.lego_tracker.client.Fetcher._request", AsyncMock(return_value=(200, "x"))) as req:
+        with pytest.raises(client.NotReady):
+            await REAL_GET(c.fetcher, "x", "https://www.example.be/")
+        assert req.await_count == 0
+    with pytest.raises(ValueError, match="import the shop settings"):
+        c.manual_gate("prices")
+    # set data, the set database and the bol.com API are not asked either
+    from custom_components.lego_tracker import client as cl
+    session = AsyncMock()
+    assert await cl.lookup_metadata(session, "key1", "key2", "10281") == ({}, None) and not session.get.called
+    assert (await cl.test_metadata_source(session, "brickset", "key1"))[0] is False
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "bol_client_id": "a", "bol_client_secret": "b"})
+    assert c.bol_api is None and (await c.test_bol("a", "b"))[0] is False
+    c.setdb_info.update(busy=False, ts=0)
+    c.setdb_tick()
+    assert c.setdb_info["busy"] is False
+    example = json.loads((Path(__file__).parent.parent / "examples" / "lot-shops.example.json").read_text("utf-8"))
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/shop_settings/import", "settings": example, "accept": False})
+    assert "Accept the terms" in (await ws.receive_json())["error"]["message"]
+    await ws.send_json({"id": 2, "type": "lego_tracker/shop_settings/import", "settings": {"format": "x"}, "accept": True})
+    assert "not a shop settings file" in (await ws.receive_json())["error"]["message"]
+    assert "shop_profile" not in entry.options
+    await ws.send_json({"id": 3, "type": "lego_tracker/shop_settings/import", "settings": example, "accept": True})
+    assert (await ws.receive_json())["result"] == {"imported": True, "shops": 8}
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][entry.entry_id]                                    # entry reloaded with the shops
+    assert shops.ready() and entry.options["legal"]["version"] == shops.LEGAL_VERSION and entry.options["legal"]["accepted"]
+    assert set(c.retailers) == set(shops.profile_ids()) and "lego_com" in c.retailers      # every imported shop on
+    assert c.shop_settings_info() | {"accepted": 1} == {"imported": True, "ready": True, "shops": 8, "comparison_sites": 5,
+                                                        "accepted": 1, "legal_version": 1, "accepted_version": 1}
+    await ws.send_json({"id": 4, "type": "lego_tracker/shop_settings/export"})
+    out = (await ws.receive_json())["result"]
+    assert out["format"] == "lot-shop-settings" and [s["id"] for s in out["shops"]] == [s["id"] for s in example["shops"]]
+    assert "responsible" in out["notice"] and shops.validate_settings(out)["shops"] == shops.validate_settings(example)["shops"]
+    await ws.send_json({"id": 5, "type": "lego_tracker/shop_settings/withdraw"})
+    assert (await ws.receive_json())["result"]["withdrawn"]
+    await hass.async_block_till_done()
+    assert "shop_profile" not in entry.options and "legal" not in entry.options and not shops.ready()
+    assert hass.data[DOMAIN][entry.entry_id].retailers == []
+
+
+@pytest.mark.no_shop_settings
+async def test_an_installation_from_before_1_0_keeps_its_shops_after_accepting_once(hass: HomeAssistant, entry, hass_ws_client):
+    """An existing installation keeps the shops it used (carried over once), but nothing is fetched until the
+    terms are accepted in the one-time pop-up."""
+    from custom_components.lego_tracker import shops
+
+    c = await _setup(hass, entry)
+    assert entry.options["setup_version"] == 1 and len(entry.options["shop_profile"]["shops"]) == 8
+    assert c.retailers == ["bol", "amazon_nl", "dreamland_be", "smyths_be"] and not shops.ready()   # your choice stays, newer shops on
+    assert c.shop_settings_info()["imported"] and not c.shop_settings_info()["ready"]
+    assert c._live_retailers(False) == []
+    page = {"10281": {"set_number": "10281"}}, {"10281": {"amazon_nl": {"url": "https://www.amazon.nl/dp/B000000001"}}}
+    c.store["sets"].update(page[0]); c.store["offers"].update(page[1])
+    assert c.relay_items()["items"] == [] and c.continuous_items()["items"] == []        # the browser fetches nothing either
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/shop_settings/accept", "accept": False})
+    assert "Accept the terms" in (await ws.receive_json())["error"]["message"]
+    await ws.send_json({"id": 2, "type": "lego_tracker/shop_settings/accept", "accept": True})
+    assert (await ws.receive_json())["result"]["accepted"]
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][entry.entry_id]
+    assert shops.ready() and c._live_retailers(False) == ["bol", "amazon_nl", "dreamland_be", "smyths_be"]
+    c.store["sets"].update(page[0]); c.store["offers"].update(page[1])
+    assert c.relay_items()["items"] and c.continuous_items()["items"]
+    # withdrawn: never carried over again
+    await ws.send_json({"id": 3, "type": "lego_tracker/shop_settings/withdraw"})
+    await ws.receive_json()
+    await hass.async_block_till_done()
+    assert "shop_profile" not in entry.options and not shops.ready()
+
+
+@pytest.mark.no_shop_settings
+async def test_imported_settings_never_send_an_api_key_to_a_new_address(hass: HomeAssistant, entry, hass_ws_client, hass_client, no_network):
+    """A key is only sent to the host it was used with: a settings file that moves a source elsewhere removes the
+    key. The userscript asks before every page whether it may still fetch."""
+    import copy
+    import json
+    from pathlib import Path
+
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "brickset_api_key": "k1", "rebrickable_api_key": "k2",
+                                                           "bol_client_id": "id", "bol_client_secret": "sec"})
+    await _setup(hass, entry)
+    example = json.loads((Path(__file__).parent.parent / "examples" / "lot-shops.example.json").read_text("utf-8"))
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/shop_settings/import", "settings": example, "accept": True})
+    assert (await ws.receive_json())["success"]
+    await hass.async_block_till_done()
+    assert entry.options["brickset_api_key"] == "k1" and entry.options["key_hosts"]["brickset_api_key"] == ["brickset.com"]
+    moved = copy.deepcopy(example)
+    moved["data_sources"]["brickset_api"] = "https://keys.example/api"
+    moved["data_sources"]["bol_api"] = "https://keys.example/bol"
+    await ws.send_json({"id": 2, "type": "lego_tracker/shop_settings/import", "settings": moved, "accept": True})
+    assert (await ws.receive_json())["success"]
+    await hass.async_block_till_done()
+    assert "brickset_api_key" not in entry.options and "bol_client_id" not in entry.options and "bol_client_secret" not in entry.options
+    assert entry.options["rebrickable_api_key"] == "k2"                                 # its address stayed the same
+    http = await hass_client()
+    assert (await (await http.get("/api/lego_tracker/relay?mode=check")).json()) == {"ready": True}
+    with patch.object(hass.config_entries, "async_update_entry"):            # even before the reload
+        await ws.send_json({"id": 3, "type": "lego_tracker/shop_settings/withdraw"})
+        assert (await ws.receive_json())["success"]
+        assert (await (await http.get("/api/lego_tracker/relay?mode=check")).json()) == {"ready": False}
+    await ws.send_json({"id": 4, "type": "lego_tracker/shop_settings/import", "settings": {"format": "lot-shop-settings", "version": 1, "shops": 1}, "accept": True})
+    assert "wrong type" in (await ws.receive_json())["error"]["message"]
+
+
+@pytest.mark.no_shop_settings
+async def test_a_key_without_a_known_address_is_removed_at_the_first_import(hass: HomeAssistant, entry, hass_ws_client, no_network):
+    """A new installation with keys entered before any shop settings: the first import can't tell where they belong,
+    so they are removed (enter them again); a key entered afterwards is bound to the addresses then in force, and a
+    key is never handed to a source whose address differs from the recorded one."""
+    import json
+    from pathlib import Path
+    from custom_components.lego_tracker import shops
+
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "setup_version": 1, "brickset_api_key": "k1abcdefgh"})
+    await _setup(hass, entry)
+    example = json.loads((Path(__file__).parent.parent / "examples" / "lot-shops.example.json").read_text("utf-8"))
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/shop_settings/import", "settings": example, "accept": True})
+    assert (await ws.receive_json())["success"]
+    await hass.async_block_till_done()
+    assert "brickset_api_key" not in entry.options
+    await ws.send_json({"id": 2, "type": "lego_tracker/settings/set", "fields": {"brickset_api_key": "k2abcdefgh"}})
+    assert (await ws.receive_json())["success"]
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][entry.entry_id]
+    assert entry.options["key_hosts"]["brickset_api_key"] == ["brickset.com"] and c.api_key("brickset_api_key") == "k2abcdefgh"
+    shops.SOURCES["brickset_api"] = "https://elsewhere.example/api"          # the address in force changed some other way
+    assert c.api_key("brickset_api_key") == ""

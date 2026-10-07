@@ -19,22 +19,17 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import quote_plus, urljoin, urlparse
+from urllib.parse import urljoin, urlparse
 
 from .models import parse_price
 from .parsers import KNOCKOFF_RE, accessory_word
+from .shops import ALIASES, compare_start
 
+# The comparison sites come from the shop settings file (shops.apply_shop_options → load_sites):
 # id -> (display name, host); order = order in which the sources are tried
-SOURCES: dict[str, tuple[str, str]] = {
-    "kieskeurig": ("Kieskeurig", "www.kieskeurig.be"),
-    "shoparize": ("Shoparize", "www.shoparize.com"),
-    "channable": ("Channable Shopping", "shopping.channable.com"),
-    "producthero": ("Producthero", "shopping.producthero.com"),
-    "brickeconomy": ("Market value", "www.brickeconomy.com"),     # market value + retirement, not shop prices
-}
+SOURCES: dict[str, tuple[str, str]] = {}
 FRESH_HOURS = {"brickeconomy": 24}          # market values move slowly: once a day is enough
-HOSTS = {"www.brickeconomy.com", "www.kieskeurig.be", "www.kieskeurig.nl", "www.shoparize.com",
-         "shopping.channable.com", "shopping.producthero.com"}
+HOSTS: set[str] = set()
 MAX_STEPS = 3
 
 PRICE_RE = re.compile(r"(?:€\s*(\d{1,4}(?:[.\s]\d{3})*(?:[.,]\d{1,2})?|\d{1,4}[.,]-)|(\d{1,4}(?:[.\s]\d{3})*(?:[.,]\d{1,2})?)\s*€"
@@ -44,14 +39,18 @@ OLD_PRICE = re.compile(r"(?:^|[\s_:-])(?:old|strike|strikethrough|line-through|w
                        r"original|crossed|uvp|shipping|verzend|verzendkosten|delivery)(?:$|[\s_:-])", re.I)
 RRP_RE = re.compile(r"(?:adviesprijs|winkelprijs|verkoopprijs lego|rrp|prix conseillé|prix public|uvp|retail price)[^€\d]{0,60}"
                     r"(?:€\s*([\d.,]+)|([\d.,]+)\s*€)", re.I)
-# shop name / domain -> our retailer id (custom shops are matched by their domain)
-SHOP_ALIASES = (
-    ("amazon.com.be", "amazon_be"), ("amazon.be", "amazon_be"), ("amazon be", "amazon_be"), ("amazon belgi", "amazon_be"),
-    ("amazon.nl", "amazon_nl"), ("amazon nl", "amazon_nl"), ("amazon nederland", "amazon_nl"),
-    ("amazon.de", "amazon_de"), ("amazon de", "amazon_de"), ("amazon duitsland", "amazon_de"),
-    ("bol.com", "bol"), ("bol", "bol"), ("lego.com", "lego_com"), ("lego shop", "lego_com"), ("lego store", "lego_com"),
-    ("lego", "lego_com"), ("kruidvat", "kruidvat_be"), ("dreamland", "dreamland_be"), ("smyths", "smyths_be"), ("smythstoys", "smyths_be"),
-)
+# shop name / domain -> our retailer id: the "aliases" of the shops in the shop settings file
+# (custom shops are matched by their domain)
+SHOP_ALIASES = ALIASES
+
+
+def load_sites(sites: dict[str, dict[str, Any]]) -> None:
+    """The comparison sites of the imported shop settings (internal id -> entry)."""
+    SOURCES.clear()
+    HOSTS.clear()
+    for sid, site in sites.items():
+        SOURCES[sid] = (site["name"], site["hosts"][0])
+        HOSTS.update(site["hosts"])
 
 
 def is_accessory(text: str | None) -> bool:
@@ -67,31 +66,11 @@ def is_compare_url(url: str | None) -> bool:
     return bool(url) and urlparse(url).netloc.lower() in HOSTS
 
 
-# ------------------------------------------------------------------ locale
-def _country(lego_locale: str | None) -> tuple[str, str]:
-    """('nl', 'BE') from 'nl-be'."""
-    parts = (lego_locale or "nl-be").lower().split("-")
-    return parts[0], (parts[1] if len(parts) > 1 else "be").upper()
-
-
+# ------------------------------------------------------------------ start address
 def first_url(source: str, num: str, lego_locale: str | None = None, ean: str | None = None) -> str | None:
-    """Where a source starts for a set; None when the source does not cover this country (or needs an EAN)."""
-    lang, cc = _country(lego_locale)
-    q = quote_plus(f"lego {num}")
-    if source == "kieskeurig":
-        host = {"BE": "www.kieskeurig.be", "NL": "www.kieskeurig.nl"}.get(cc)
-        return f"https://{host}/search?q={q}" if host else None
-    if source == "shoparize":
-        return f"https://www.shoparize.com/{'uk' if cc == 'GB' else cc.lower()}/q?q={q}"
-    if source == "channable":
-        return f"https://shopping.channable.com/?country={cc}&search={q}"
-    if source == "brickeconomy":
-        return f"https://www.brickeconomy.com/set/{num}-1/"
-    if source == "producthero":
-        if not ean or not ean.isdigit():
-            return None
-        return f"https://shopping.producthero.com/{lang if lang in ('nl', 'fr', 'de', 'en') else 'en'}/product/{ean.zfill(14)}?country={cc.lower()}"
-    return None
+    """Where a source starts for a set (its "start" address in the shop settings); None when the source does not
+    cover this country (or needs an EAN)."""
+    return compare_start(source, num, lego_locale, ean)
 
 
 # ------------------------------------------------------------------ small DOM

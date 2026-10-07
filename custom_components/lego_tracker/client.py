@@ -14,7 +14,7 @@ import aiohttp
 
 from .models import normalize_set_number
 from .i18n import T
-from .shops import bol_site_url, domain_of
+from .shops import bol_site_url, domain_of, home_of, ready, reader_of, source_url
 from .parsers import Parsed, find_search_result, is_search_url, lego_number, title_check, lego_product_url, parse_brickset_page, parse_page, search_url, url_key
 
 _LOGGER = logging.getLogger(__name__)
@@ -33,11 +33,6 @@ BROWSER_HEADERS = {
     "Sec-Ch-Ua-Mobile": "?0",
     "Sec-Ch-Ua-Platform": '"Windows"',
 }
-ORIGINS = {
-    "amazon_nl": "https://www.amazon.nl/", "amazon_de": "https://www.amazon.de/",
-    "amazon_be": "https://www.amazon.com.be/", "bol": "https://www.bol.com/nl/nl/",
-    "kruidvat_be": "https://www.kruidvat.be/nl/",
-}
 # To protect the traffic to and the load on the shops and comparison sites: at most 2 requests a minute
 # per site, and a search at most once every 2 minutes per site.
 DOMAIN_GAP = 30.0
@@ -46,6 +41,10 @@ SEARCH_GAP = 120.0
 
 class Aborted(Exception):
     """The running job was stopped while a request was waiting for its turn."""
+
+
+class NotReady(Exception):
+    """No shop settings imported, or their terms not accepted: no website is contacted."""
 
 
 def site_of(url: str) -> str:
@@ -249,15 +248,17 @@ class Fetcher:
             await asyncio.sleep(min(left, 1.0))
 
     async def _get(self, retailer: str, url: str, search: bool = False, binary: bool = False) -> tuple[int, Any]:
+        if not ready():          # the one gate every request to a shop or comparison site passes
+            raise NotReady(T("no shop settings imported (or their terms not accepted): nothing is fetched"))
         if self._curl_ok is None:
             await self.async_setup()
         site = site_of(url)
         lock = self._locks.setdefault(site, asyncio.Lock())      # one request at a time per site
         async with lock:
             await self._wait_turn(site, search)
-            origin = ORIGINS.get(retailer) or (f"https://www.{d}/" if (d := domain_of(retailer)) else None)
-            if retailer == "bol" and origin:
-                origin = bol_site_url(origin)
+            origin = home_of(retailer)
+            if not ready():      # withdrawn while waiting for this site's turn
+                raise NotReady(T("no shop settings imported (or their terms not accepted): nothing is fetched"))
             if origin and retailer not in self._warmed:   # look like a visitor: home page first
                 self._warmed.add(retailer)
                 try:
@@ -266,6 +267,8 @@ class Fetcher:
                     pass
                 await asyncio.sleep(2 + random.random() * 2)
             await asyncio.sleep(self.min_delay + random.random() * 3)
+            if not ready():      # withdrawn while waiting for this site's turn
+                raise NotReady(T("no shop settings imported (or their terms not accepted): nothing is fetched"))
             try:
                 return await self._request(retailer, url, referer=None if binary else origin, binary=binary)
             finally:
@@ -308,12 +311,12 @@ class Fetcher:
         return parsed, error
 
     async def _fetch_offer(self, retailer: str, url: str, force: bool) -> tuple[Parsed | None, int | None, int, str | None]:
-        if retailer == "lego_com" and not lego_number(url):
+        if reader_of(retailer) == "lego" and not lego_number(url):
             # without the set number the page's own product can't be told from recommendations
             return None, None, 0, T("not a LEGO.com product page with a set number in the address")
         if not force and (left := self.cooldown_left(retailer)) > 0:
             return None, None, 0, T("paused {hours} h after being blocked", hours=f"{left / 3600:.1f}")
-        if retailer == "bol":
+        if reader_of(retailer) == "bol":
             url = bol_site_url(url)                         # the bol.com site chosen in Settings (NL or BE)
         try:
             status, page = await self._get(retailer, url)
@@ -329,7 +332,7 @@ class Fetcher:
             return None, status, size, T("page not found (HTTP 404)")
         if status >= 400:
             return None, status, size, T("HTTP error {status}", status=status)
-        parsed = parse_page(retailer, page, lego_number(url) if retailer == "lego_com" else None)
+        parsed = parse_page(retailer, page, lego_number(url) if reader_of(retailer) == "lego" else None)
         if parsed.blocked:
             self._note_block(retailer)
             return None, status, size, T("blocked (captcha / bot protection)")
@@ -427,14 +430,14 @@ class Fetcher:
         found = find_search_result(retailer, page, set_number, skip) or self._landed_on_product(retailer, url, page, set_number)
         if found and url_key(retailer, found) in skip:
             found = None                                   # the search jumped to a page you blocked: look elsewhere
-        if found or retailer != "lego_com":
+        if found or reader_of(retailer) != "lego":
             if not found:
                 self.discover_error[retailer] = T("no matching product found") if set_number in page else \
                     T("the search page does not contain {number}: this shop probably loads its results with JavaScript. Paste the product page URL instead.", number=set_number)
             return found
         # LEGO.com search is partly rendered in the browser: try the product URL directly (its own trace entry)
-        t0, purl = time.time(), lego_product_url(set_number)
-        if url_key(retailer, purl) in skip:                # you blocked this page: never visit it again
+        t0, purl = time.time(), lego_product_url(set_number, retailer)
+        if not purl or url_key(retailer, purl) in skip:                # you blocked this page: never visit it again
             self.discover_error[retailer] = T("no matching product found")
             return None
         try:
@@ -455,11 +458,11 @@ class Fetcher:
 
 async def brickset_lookup(session: aiohttp.ClientSession, api_key: str, set_number: str) -> dict[str, Any] | None:
     """Metadata from Brickset API v3 (free key). Returns None on any problem."""
-    if not api_key:
+    if not api_key or not (url := source_url("brickset_api")):
         return None
     params = {"apiKey": api_key, "userHash": "", "params": json.dumps({"setNumber": f"{normalize_set_number(set_number)}-1"})}
     try:
-        async with session.get("https://brickset.com/api/v3.asmx/getSets", params=params,
+        async with session.get(url, params=params,
                                timeout=aiohttp.ClientTimeout(total=20)) as resp:
             data = await resp.json(content_type=None)
     except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
@@ -488,10 +491,10 @@ _RB_THEMES: dict[int, dict[str, Any]] = {}
 
 async def rebrickable_lookup(session: aiohttp.ClientSession, api_key: str, set_number: str) -> dict[str, Any] | None:
     """Metadata from the Rebrickable API v3 (free key at rebrickable.com/api). No RRP there."""
-    if not api_key:
+    if not api_key or not (base := source_url("rebrickable_api")):
         return None
+    base = base.rstrip("/")
     headers = {"Authorization": f"key {api_key}", "Accept": "application/json"}
-    base = "https://rebrickable.com/api/v3/lego"
     try:
         async with session.get(f"{base}/sets/{normalize_set_number(set_number)}-1/", headers=headers,
                                timeout=aiohttp.ClientTimeout(total=20)) as resp:
@@ -522,7 +525,9 @@ async def rebrickable_lookup(session: aiohttp.ClientSession, api_key: str, set_n
 
 async def brickset_page_lookup(session: aiohttp.ClientSession, set_number: str) -> dict[str, Any] | None:
     """Fallback without any key: the public brickset.com set page."""
-    url = f"https://brickset.com/sets/{normalize_set_number(set_number)}-1"
+    if not (tpl := source_url("brickset_page")):
+        return None
+    url = tpl.replace("{number}", normalize_set_number(set_number))
     try:
         async with session.get(url, headers=BROWSER_HEADERS, timeout=aiohttp.ClientTimeout(total=20)) as resp:
             if resp.status != 200:
@@ -546,7 +551,8 @@ async def lookup_metadata(session: aiohttp.ClientSession, brickset_key: str, reb
         sources.append(("Brickset", lambda: brickset_lookup(session, brickset_key, set_number)))
     if rebrickable_key:
         sources.append(("Rebrickable", lambda: rebrickable_lookup(session, rebrickable_key, set_number)))
-    sources.append(("brickset.com", lambda: brickset_page_lookup(session, set_number)))
+    if source_url("brickset_page"):
+        sources.append(("brickset.com", lambda: brickset_page_lookup(session, set_number)))
     for name, fetch in sources:
         if all(merged.get(k) for k in wanted if k not in ("subtheme", "exit_date")):
             break
@@ -572,6 +578,8 @@ async def test_metadata_source(session: aiohttp.ClientSession, source: str, key:
     fn = {"brickset": brickset_lookup, "rebrickable": rebrickable_lookup}[source]
     if not key:
         return False, T("no key entered")
+    if not source_url(f"{source}_api"):
+        return False, T("this source is not in your shop settings (or their terms are not accepted)")
     data = await fn(session, key, "10281")
     if data and data.get("name"):
         return True, T("works: 10281 = {name}", name=data["name"])

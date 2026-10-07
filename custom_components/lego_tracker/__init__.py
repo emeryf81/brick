@@ -19,12 +19,13 @@ from homeassistant.helpers.event import async_call_later, async_track_time_chang
 from homeassistant.util import dt as dt_util
 
 from .const import (
-    BUILTIN_RETAILERS, CONF_DIGEST_TIME, CONF_KNOWN_SHOPS, DEFAULT_DIGEST_TIME, DEFAULT_RETAILERS, DOMAIN, EVENT_DIGEST, GENERIC_SHOPS, PANEL_ELEMENT, PANEL_URL, RETAILERS,
+    CONF_DIGEST_TIME, CONF_KNOWN_SHOPS, DEFAULT_DIGEST_TIME, DOMAIN, EVENT_DIGEST, GENERIC_SHOPS, PANEL_ELEMENT, PANEL_URL, RETAILERS,
     STATIC_URL,
 )
 from .coordinator import LegoCoordinator
 from .i18n import T
-from .shops import apply_shop_options, domain_of
+from .shops import (CONF_KEY_HOSTS, CONF_SETUP_VERSION, CONF_SHOP_PROFILE, apply_shop_options, domain_of, key_hosts,
+                    previous_settings, profile_ids)
 from .csv_import import analyze_csv, apply_import, importable_rows
 from .models import normalize_set_number
 from .websocket_api import async_register_websocket
@@ -113,19 +114,27 @@ async def _send_digest(hass: HomeAssistant, coord: LegoCoordinator) -> None:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up the coordinator, platforms, panel, services, and scheduled refreshes."""
+    if (previous := previous_settings(dict(entry.options))) is not None:     # an installation from before 1.0.0
+        # the shops it already knew stay as you set them (installations that never stored them knew the first six);
+        # shops it didn't know yet are switched on once, as a new shop always was
+        hass.config_entries.async_update_entry(entry, options={
+            **entry.options, CONF_SHOP_PROFILE: previous, CONF_SETUP_VERSION: 1,
+            CONF_KEY_HOSTS: key_hosts(previous, dict(entry.options)),     # the keys you had were used with these
+            CONF_KNOWN_SHOPS: entry.options.get(CONF_KNOWN_SHOPS) or ["lego_com", "amazon_nl", "amazon_de", "amazon_be", "bol", "kruidvat_be"]})
     apply_shop_options(dict(entry.options))
-    # New built-in shops (e.g. Dreamland) are switched on once; afterwards the user's choice wins.
-    known = set(entry.options.get(CONF_KNOWN_SHOPS) or ("amazon_nl", "amazon_de", "amazon_be", "bol", "kruidvat_be"))
-    # a shop you added yourself on the same site as a built-in one (e.g. Smyths Toys)
-    same_site = [(rid, b) for b in BUILTIN_RETAILERS for rid, g in GENERIC_SHOPS.items()
-                 if rid not in BUILTIN_RETAILERS and g.get("domain") == domain_of(b)]
-    if new_shops := [r for r in BUILTIN_RETAILERS if r not in known]:
-        enabled = list(entry.options.get("retailers", DEFAULT_RETAILERS))
+    # Shops new in the imported shop settings are switched on once; afterwards the user's choice wins.
+    builtin = profile_ids()
+    known = set(entry.options.get(CONF_KNOWN_SHOPS) or entry.options.get("retailers") or [])
+    # a shop you added yourself on the same site as one in the settings file (e.g. Smyths Toys)
+    same_site = [(rid, b) for b in builtin for rid, g in GENERIC_SHOPS.items()
+                 if rid not in builtin and g.get("domain") == domain_of(b)]
+    if new_shops := [r for r in builtin if r not in known]:
+        enabled = list(entry.options.get("retailers", [r for r in builtin if r in known]))
         enabled += [r for r in new_shops if r not in enabled]
-        # ... is switched off once, when the built-in one comes
+        # ... is switched off once, when the one from the settings file comes
         enabled = [r for r in enabled if r not in {old for old, b in same_site if b in new_shops}]
         hass.config_entries.async_update_entry(
-            entry, options={**entry.options, "retailers": enabled, CONF_KNOWN_SHOPS: list(BUILTIN_RETAILERS)})
+            entry, options={**entry.options, "retailers": enabled, CONF_KNOWN_SHOPS: sorted(known | set(builtin))})
     coord = LegoCoordinator(hass, entry)
     await coord.async_load()
     # ... and hands its links over to the built-in one; checked at every start, so an interrupted move is finished

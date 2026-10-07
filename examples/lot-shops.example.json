@@ -1,0 +1,182 @@
+{
+  "format": "lot-shop-settings",
+  "version": 1,
+  "notice": "EXAMPLE ONLY. This file shows how shop settings for LEGO Organizing Tool can be written. It is not a recommendation, not an instruction and not a statement that any of these websites allows its pages to be read automatically. By importing it (or any changed version of it) you decide yourself which websites your Home Assistant contacts, and you alone are responsible for everything that happens between your Home Assistant and those websites: respecting their terms of use, robots.txt and the law that applies to you, and all legal consequences. The software is provided as is, without any warranty; to the fullest extent permitted by law, its author and contributors cannot be held liable. Use it only for personal, non-commercial purposes and moderately. LEGO and the names of shops are trademarks of their owners; this project is not affiliated with or endorsed by any of them.",
+  "notice_nl": "ENKEL EEN VOORBEELD. Dit bestand toont hoe winkelinstellingen voor LEGO Organizing Tool geschreven kunnen worden. Het is geen aanbeveling, geen instructie en geen verklaring dat een van deze websites toelaat dat haar pagina's automatisch gelezen worden. Door het (of een gewijzigde versie ervan) te importeren, beslis je zelf welke websites je Home Assistant contacteert, en ben je alleen verantwoordelijk voor alles wat er gebeurt tussen je Home Assistant en die websites: het respecteren van hun gebruiksvoorwaarden, robots.txt en de wet die op jou van toepassing is, en alle juridische gevolgen. De software wordt geleverd zoals ze is, zonder enige garantie; voor zover de wet het toelaat, kunnen de maker en de bijdragers niet aansprakelijk gesteld worden. Gebruik het enkel voor persoonlijke, niet-commerciële doeleinden en met mate. LEGO en de namen van winkels zijn merken van hun eigenaars; dit project is met geen van hen verbonden of door hen goedgekeurd.",
+  "lego_locale": "nl-be",
+  "shops": [
+    {
+      "id": "lego_com",
+      "name": "LEGO.com",
+      "domain": "lego.com",
+      "reader": "lego",
+      "home": "https://www.lego.com/",
+      "search": "https://www.lego.com/{locale}/search?q={number}",
+      "product": "https://www.lego.com/{locale}/product/{number}",
+      "aliases": [
+        "lego.com",
+        "lego shop",
+        "lego store",
+        "lego"
+      ]
+    },
+    {
+      "id": "amazon_nl",
+      "name": "Amazon.nl",
+      "domain": "amazon.nl",
+      "reader": "amazon",
+      "home": "https://www.amazon.nl/",
+      "search": "https://www.amazon.nl/s?k={query}",
+      "aliases": [
+        "amazon.nl",
+        "amazon nl",
+        "amazon nederland"
+      ]
+    },
+    {
+      "id": "amazon_de",
+      "name": "Amazon.de",
+      "domain": "amazon.de",
+      "reader": "amazon",
+      "home": "https://www.amazon.de/",
+      "search": "https://www.amazon.de/s?k={query}",
+      "aliases": [
+        "amazon.de",
+        "amazon de",
+        "amazon duitsland"
+      ]
+    },
+    {
+      "id": "amazon_be",
+      "name": "Amazon.com.be",
+      "domain": "amazon.com.be",
+      "reader": "amazon",
+      "home": "https://www.amazon.com.be/",
+      "search": "https://www.amazon.com.be/s?k={query}",
+      "aliases": [
+        "amazon.com.be",
+        "amazon.be",
+        "amazon be",
+        "amazon belgi"
+      ]
+    },
+    {
+      "id": "bol",
+      "name": "bol.com",
+      "domain": "bol.com",
+      "reader": "bol",
+      "home": "https://www.bol.com/nl/nl/",
+      "search": "https://www.bol.com/nl/nl/s/?searchtext={query}",
+      "aliases": [
+        "bol.com",
+        "bol"
+      ]
+    },
+    {
+      "id": "kruidvat_be",
+      "name": "Kruidvat.be",
+      "domain": "kruidvat.be",
+      "reader": "kruidvat",
+      "home": "https://www.kruidvat.be/nl/",
+      "search": "https://www.kruidvat.be/nl/search?text={query}",
+      "aliases": [
+        "kruidvat.be",
+        "kruidvat"
+      ]
+    },
+    {
+      "id": "dreamland_be",
+      "name": "Dreamland.be",
+      "domain": "dreamland.be",
+      "reader": "generic",
+      "search": "https://www.dreamland.be/e/nl/search?q={query}",
+      "aliases": [
+        "dreamland.be",
+        "dreamland"
+      ]
+    },
+    {
+      "id": "smyths_be",
+      "name": "Smyths Toys",
+      "domain": "smythstoys.com",
+      "reader": "generic",
+      "search": "https://www.smythstoys.com/be/nl-be/search?text={number}",
+      "aliases": [
+        "smythstoys.com",
+        "smythstoys",
+        "smyths toys",
+        "smyths"
+      ]
+    }
+  ],
+  "comparison_sites": [
+    {
+      "id": "kieskeurig",
+      "name": "Kieskeurig",
+      "hosts": [
+        "www.kieskeurig.be",
+        "www.kieskeurig.nl"
+      ],
+      "start": {
+        "BE": "https://www.kieskeurig.be/search?q={query}",
+        "NL": "https://www.kieskeurig.nl/search?q={query}"
+      }
+    },
+    {
+      "id": "shoparize",
+      "name": "Shoparize",
+      "hosts": [
+        "www.shoparize.com"
+      ],
+      "start": {
+        "GB": "https://www.shoparize.com/uk/q?q={query}",
+        "*": "https://www.shoparize.com/{cc_lower}/q?q={query}"
+      }
+    },
+    {
+      "id": "channable",
+      "name": "Channable Shopping",
+      "hosts": [
+        "shopping.channable.com"
+      ],
+      "start": {
+        "*": "https://shopping.channable.com/?country={cc}&search={query}"
+      }
+    },
+    {
+      "id": "producthero",
+      "name": "Producthero",
+      "hosts": [
+        "shopping.producthero.com"
+      ],
+      "langs": [
+        "nl",
+        "fr",
+        "de",
+        "en"
+      ],
+      "start": {
+        "*": "https://shopping.producthero.com/{lang}/product/{ean14}?country={cc_lower}"
+      }
+    },
+    {
+      "id": "market_value",
+      "name": "Market value",
+      "hosts": [
+        "www.brickeconomy.com"
+      ],
+      "start": {
+        "*": "https://www.brickeconomy.com/set/{number}-1/"
+      }
+    }
+  ],
+  "data_sources": {
+    "brickset_api": "https://brickset.com/api/v3.asmx/getSets",
+    "brickset_page": "https://brickset.com/sets/{number}-1",
+    "rebrickable_api": "https://rebrickable.com/api/v3/lego",
+    "set_database_sets": "https://cdn.rebrickable.com/media/downloads/sets.csv.gz",
+    "set_database_themes": "https://cdn.rebrickable.com/media/downloads/themes.csv.gz",
+    "bol_api_token": "https://login.bol.com/token",
+    "bol_api": "https://api.bol.com/marketing/catalog/v1"
+  }
+}

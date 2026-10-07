@@ -78,7 +78,7 @@ const signPct = (v) => (v == null ? "–" : `${v > 0 ? "+" : ""}${v.toLocaleStri
 const DATE = (ts, o = { day: "2-digit", month: "short" }) => new Date(ts * 1000).toLocaleDateString(LOC, o);
 const TIME = (ts) => new Date(ts * 1000).toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" });
 /** What this panel needs from the server (API_LEVEL in const.py). Different = Home Assistant still runs older code. */
-const API_LEVEL = 8;
+const API_LEVEL = 9;
 const SRC = { kieskeurig: "Kieskeurig", shoparize: "Shoparize", channable: "Channable Shopping", producthero: "Producthero", brickeconomy: "Market value" };
 /** How a price was read, as one letter: ⓤ your own browser (userscript), ⓢ ⓚ ⓒ ⓟ ⓑ a comparison site, ⌂ the shop's own site. */
 const VIA_MARK = { relay: "ⓤ", userscript: "ⓤ", shoparize: "ⓢ", kieskeurig: "ⓚ", channable: "ⓒ", producthero: "ⓟ", brickeconomy: "ⓜ" };
@@ -177,10 +177,22 @@ function donut(items, { size = 170, label = "" } = {}) {
   return `<div class="donut"><svg viewBox="0 0 160 160" width="${size}" height="${size}"><g transform="rotate(-90 80 80)">${arcs}</g><text x="80" y="76" text-anchor="middle" class="dn-v">${EUR0(total)}</text><text x="80" y="96" text-anchor="middle" class="dn-l">${esc(label)}</text></svg><div class="dlegend">${legend}</div></div>`;
 }
 
-function bars(items, { fmt = INT } = {}) {
+function bars(items, { fmt = INT, cf = null } = {}) {
   const max = Math.max(1, ...items.map((i) => i.value));
-  return `<div class="bars">${items.map((it, i) => `<div class="bar" style="--i:${i}"><div class="bv">${fmt(it.value)}</div><div class="bf" style="--h:${(it.value / max) * 100}%"></div><div class="bl">${esc(it.label)}</div></div>`).join("")}</div>`;
+  return `<div class="bars">${items.map((it, i) => `<div class="bar${cf ? " click" : ""}" style="--i:${i}"${cf ? ` data-cf="${esc(cf(it))}" title="${esc(t("Show these sets"))}"` : ""}><div class="bv">${fmt(it.value)}</div><div class="bf" style="--h:${(it.value / max) * 100}%"></div><div class="bl">${esc(it.label)}</div></div>`).join("")}</div>`;
 }
+
+// Price bands and statuses for the filter drop-downs. A status with a 4th value only shows in the
+// collection (true) or only in the deal lists (false).
+const PRICE_BANDS = [["p0", 0, 25], ["p25", 25, 50], ["p50", 50, 100], ["p100", 100, 200], ["p200", 200, 400], ["p400", 400, Infinity]];
+const STATUS_FILTERS = [
+  ["deal", "Deal now", (s, p) => p.isDeal(s), false], ["low", "Lowest price ever", (s) => s.is_all_time_low, false],
+  ["target", "Target price reached", (s) => s.target_hit, false], ["noprice", "No price yet", (s) => s.best_price == null, false],
+  ["owned", "Owned", (s) => s.owned, false], ["notowned", "Not owned", (s) => !s.owned, false],
+  ["retiring", "Retiring soon", (s) => s.retiring_soon], ["retired", "Retired", (s) => s.retired],
+  ["nopaid", "Without purchase price", (s, p) => !p.own(s).paid, true], ["gain", "Worth more than paid", (s, p) => { const o = p.own(s); return o.paid != null && o.paidValue != null && o.paidValue > o.paid; }, true],
+  ["loss", "Worth less than paid", (s, p) => { const o = p.own(s); return o.paid != null && o.paidValue != null && o.paidValue < o.paid; }, true],
+];
 
 /** Solved (green) and new (red) side by side per period, with the net change as a title. */
 function pairBars(rows) {
@@ -363,6 +375,7 @@ h2.sec{font-size:16px;margin:18px 0 10px;display:flex;align-items:center;gap:8px
 .dn-v{font-size:17px;font-weight:700;fill:var(--lt-text)}.dn-l{font-size:10px;fill:var(--lt-muted)}
 .dlegend{flex:1;min-width:150px}.dl{display:flex;align-items:center;gap:8px;font-size:13px;padding:3px 0}.dl i{width:10px;height:10px;border-radius:3px;flex:none}.dl span{flex:1}
 .bars{display:flex;align-items:flex-end;gap:6px;height:170px;padding-top:18px;overflow-x:auto}
+[data-cf]{cursor:pointer}.stat.click{transition:box-shadow .15s}.stat.click:hover,.chip[data-cf]:hover{box-shadow:0 0 0 2px var(--lt-accent)}.bar.click:hover .bf{filter:brightness(1.15)}.fmore{flex-wrap:wrap;gap:8px;margin-top:-4px}.ff{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--lt-muted)}.ff select{max-width:200px}
 .bar{flex:1;min-width:30px;display:flex;flex-direction:column;align-items:center;height:100%;justify-content:flex-end}
 .bf{width:70%;height:var(--h);background:linear-gradient(var(--lt-accent),color-mix(in srgb,var(--lt-accent) 60%,var(--lt-card)));border-radius:6px 6px 2px 2px;animation:grow .8s cubic-bezier(.3,1.2,.5,1) both;animation-delay:calc(var(--i) * 40ms);transform-origin:bottom}
 .pbars{display:flex;align-items:flex-end;gap:4px;height:170px;padding-top:14px;overflow-x:auto}.pbar{flex:1;min-width:0;display:flex;flex-direction:column;height:100%;justify-content:flex-end}
@@ -442,7 +455,7 @@ const SECTIONS = {
   deals: { label: "🏷️ Deals & watchlist", hint: "sets you keep an eye on", subs: [["today", "Today"], ["watch", "Watchlist"], ["all", "All prices"], ["new", "New sets"], ["lego", "All LEGO sets"], ["dset", "Settings"]] },
   collection: { label: "📦 My collection", hint: "what you own", subs: [["overview", "Overview"], ["sets", "Sets"]] },
   log: { label: "📜 Logbook", hint: "checks, prices, errors", subs: [["all", "Everything"], ["checks", "Shop checks"], ["errors", "Open errors"]] },
-  manage: { label: "⚙️ Manage", hint: "add, import, shops, settings", subs: [["add", "Add"], ["import", "Import"], ["edit", "Edit all"], ["links", "Link check"], ["notify", "Notifications"], ["shops", "Shops & jobs"], ["lab", "Parser lab"], ["settings", "Settings"], ["userscript", "Userscript"], ["backup", "Backup"]] },
+  manage: { label: "⚙️ Manage", hint: "add, import, shops, settings", subs: [["add", "Add"], ["import", "Import"], ["edit", "Edit all"], ["links", "Link check"], ["notify", "Notifications"], ["shops", "Shops & jobs"], ["lab", "Parser lab"], ["settings", "Settings"], ["userscript", "Userscript"], ["backup", "Backup"], ["legal", "Legal"]] },
 };
 
 class LegoTrackerPanel extends HTMLElement {
@@ -601,6 +614,8 @@ class LegoTrackerPanel extends HTMLElement {
       if (!this._tickerAt || Date.now() - this._tickerAt > TICKER_RELOAD) this.loadTicker();
     } catch (e) { this.state.err = e.message || String(e); }
     this.render(animate || !this._rendered);
+    const ss = (this.state.data || {}).shop_settings;
+    if (ss && !ss.ready && !this._gateShown && (!this._hass.user || this._hass.user.is_admin)) { this._gateShown = true; this.openShopSettings(); }
   }
   // ---------------------------------------------------------------- ticker (latest prices, deals, news)
   /** The content (deals, watchlist, news, solved errors) is reloaded every 10 minutes; in between it keeps scrolling. */
@@ -803,8 +818,14 @@ class LegoTrackerPanel extends HTMLElement {
   }
   filtered(list) {
     const { q, theme, subtheme, cond } = this.state.f;
-    let out = list.filter((s) => (!theme || s.theme === theme) && (!subtheme || s.subtheme === subtheme) && (!cond || (s.collection && (s.collection.condition || "Unknown") === cond)));
+    let out = list.filter((s) => (!theme || (s.theme || "Unknown") === theme) && (!subtheme || s.subtheme === subtheme) && (!cond || (s.collection && this.conditions(s).includes(cond))));
     if (this.state.f.ret100) out = out.filter((s) => this.ret100(s));
+    const { shop, price, status, year, loc } = this.state.f;
+    if (shop) out = out.filter((s) => s.best_retailer === shop);
+    if (price) { const [lo, hi] = PRICE_BANDS.find(([k]) => k === price).slice(1); out = out.filter((s) => s.best_price != null && s.best_price >= lo && s.best_price < hi); }
+    if (status) { const fn = (STATUS_FILTERS.find(([k]) => k === status) || [])[2]; if (fn) out = out.filter((s) => fn(s, this)); }
+    if (year) out = out.filter((s) => String(s.year || "?") === year);
+    if (loc) out = out.filter((s) => this.locations(s).includes(loc));
     if (q) { const n = q.toLowerCase(); out = out.filter((s) => `${s.set_number} ${s.name} ${s.theme} ${s.subtheme} ${s.notes || ""}`.toLowerCase().includes(n)); }
     return out;
   }
@@ -835,6 +856,7 @@ class LegoTrackerPanel extends HTMLElement {
       <header>${this._narrow ? `<ha-menu-button></ha-menu-button>` : ""}<img class="logo" src="/lego_tracker_static/icon.png${d ? `?v=${encodeURIComponent(d.version)}` : ""}" alt="" onerror="this.outerHTML=this.dataset.fb" data-fb="${esc(BRICK)}"><div><h1>LEGO Organizing Tool</h1><div class="meta">${d ? `v${esc(d.version)} · ${t("{n} sets tracked", { n: d.sets.length })}` : t("loading…")}</div></div>
         <div class="hsp"></div>${status}<button class="btn ghost sm" data-act="discover" title="${t("Search shop links for sets that have none yet: a job you can follow and stop, spread out so every shop is searched at most once every 2 minutes")}">🔎 <span class="lbl">${t("Find links")}</span></button><button class="btn sm" data-act="refresh" ${this.fullRefreshAttr(t("Fetch all shop prices now"))}>↻ <span class="lbl">${t("Refresh prices")}</span></button></header>
       ${d && d.api !== API_LEVEL ? `<div class="banner" style="border-color:var(--lt-bad,#c62828)">🔄 <span><b>${t("Restart Home Assistant to finish the update.")}</b> ${t("The new panel is loaded, but Home Assistant still runs the previous version of the integration, so some buttons and settings don't work yet. Settings → System → Restart.")}</span></div>` : ""}
+      ${d && d.shop_settings && !d.shop_settings.ready ? `<div class="banner" style="border-color:var(--lt-bad,#c62828)">⚖️ <span><b>${t(d.shop_settings.imported ? "Accept the terms once to keep fetching prices." : "First step: import your shop settings.")}</b> ${t("Until then no shop or comparison site is contacted. Your sets and prices stay.")} <a id="gate_open">${t(d.shop_settings.imported ? "Read and accept" : "Import shop settings")} →</a></span></div>` : ""}
       <div id="jobbar"></div>
       <nav class="seg" role="tablist">${Object.entries(SECTIONS).map(([k, v]) => `<button role="tab" data-sec="${k}" class="${k === s.section ? "on" : ""}">${t(v.label)}<small>${t(v.hint)}</small></button>`).join("")}<span class="ind"></span></nav>
       <div class="sub">${sec.subs.map(([k, l]) => `<button data-sub="${k}" class="${k === sub ? "on" : ""}">${t(l)}${this.subCount(s.section, k)}</button>`).join("")}${s.section === "manage" ? `<button data-sub="secret" class="secretlink" tabindex="-1" aria-hidden="true"></button>` : ""}</div>
@@ -859,6 +881,7 @@ class LegoTrackerPanel extends HTMLElement {
     dlg._bound = true;
     if (!this._keys) { this._keys = true; this.addEventListener("keydown", (e) => { if (e.key === "/" && !/INPUT|TEXTAREA|SELECT/.test((e.composedPath()[0] || {}).tagName || "")) { const q = this.shadowRoot.getElementById("q"); if (q) { e.preventDefault(); q.focus(); } } }); }
     root.querySelectorAll("header [data-act]").forEach((b) => b.addEventListener("click", () => this.startJob(b.dataset.act, b)));
+    const go = root.getElementById("gate_open"); if (go) go.onclick = () => this.openShopSettings();
     this.renderContent(animate);
     this.renderJob();
     if (animate) requestAnimationFrame(() => this.placeIndicator(true));
@@ -936,7 +959,7 @@ class LegoTrackerPanel extends HTMLElement {
     ind.style.left = on.offsetLeft + "px"; ind.style.width = on.offsetWidth + "px";
     if (!anim) requestAnimationFrame(() => { ind.style.transition = ""; });
   }
-  resetFilters() { Object.assign(this.state.f, { theme: null, subtheme: null, cond: null, q: "", ret100: false }); const s = this.state; s.f.sort = s.section === "collection" ? "value" : s.sub.deals === "watch" && s.section === "deals" ? "priority" : "score"; }
+  resetFilters() { Object.assign(this.state.f, { theme: null, subtheme: null, cond: null, q: "", ret100: false, shop: null, price: null, status: null, year: null, loc: null }); const s = this.state; s.f.sort = s.section === "collection" ? "value" : s.sub.deals === "watch" && s.section === "deals" ? "priority" : "score"; }
   subCount(sec, sub) {
     const d = this.state.data; if (!d) return "";
     let n = 0;
@@ -959,7 +982,7 @@ class LegoTrackerPanel extends HTMLElement {
     const s = this.state, el = this.shadowRoot.getElementById("content"); if (!el) return;
     if (s.err) { el.innerHTML = `<div class="empty"><span class="big">⚠️</span>${t("Could not load data: {error}", { error: esc(s.err) })}<br><br><button class="btn" id="retry">${t("Try again")}</button></div>`; el.querySelector("#retry").onclick = () => this.load(true); return; }
     if (!s.data) { el.innerHTML = `<div class="kpis">${"<div class='skel' style='height:86px'></div>".repeat(4)}</div><div class="grid">${"<div class='skel' style='height:260px'></div>".repeat(8)}</div>`; return; }
-    const view = { deals: { today: this.vToday, watch: this.vWatch, all: this.vAll, new: this.vNewSets, lego: this.vCatalog, dset: this.vDealSettings }, collection: { overview: this.vCollOverview, sets: this.vCollSets }, log: { all: this.vLog, checks: this.vLog, errors: this.vErrors }, manage: { notify: this.vNotify, add: this.vAdd, import: this.vImport, links: this.vLinks, shops: this.vShops, lab: this.vLab, edit: this.vBulk, settings: this.vSettings, userscript: this.vUserscript, backup: this.vBackup, secret: this.vSecret } }[s.section][s.sub[s.section]];
+    const view = { deals: { today: this.vToday, watch: this.vWatch, all: this.vAll, new: this.vNewSets, lego: this.vCatalog, dset: this.vDealSettings }, collection: { overview: this.vCollOverview, sets: this.vCollSets }, log: { all: this.vLog, checks: this.vLog, errors: this.vErrors }, manage: { notify: this.vNotify, add: this.vAdd, import: this.vImport, links: this.vLinks, shops: this.vShops, lab: this.vLab, edit: this.vBulk, settings: this.vSettings, userscript: this.vUserscript, backup: this.vBackup, legal: this.vLegal, secret: this.vSecret } }[s.section][s.sub[s.section]];
     el.className = animate && !REDUCED ? "enter" : "";
     el.innerHTML = view.call(this);
     this.bindContent(el);
@@ -991,12 +1014,30 @@ class LegoTrackerPanel extends HTMLElement {
       requestAnimationFrame(step);
     });
   }
-  filterBar({ sorts, threshold = false, cond = false, viewToggle = false, retire = false, list }) {
+  /** The conditions of your copies of a set (every copy counts; "Unknown" when none is known). */
+  conditions(s) { const c = s.collection || {}, list = c.copies && c.copies.length ? c.copies.map((k) => k.condition) : [c.condition]; return [...new Set(list.map((x) => x || "Unknown"))]; }
+  /** Where your copies of a set are (the set's location and those of its copies). */
+  locations(s) { const c = s.collection || {}; return [...new Set([c.location, ...(c.copies || []).map((k) => k.location)].filter(Boolean))]; }
+  /** Extra filters as drop-downs (shop, price, status, year, location): only choices that occur in the list, with counts. */
+  moreFilters(list, kinds) {
+    const f = this.state.f, count = (fn) => { const c = {}; list.forEach((s) => [].concat(fn(s)).forEach((k) => { if (k != null && k !== "") c[k] = (c[k] || 0) + 1; })); return c; };
+    const sel = (key, label, opts) => opts.length ? `<label class="ff">${label} <select data-ff="${key}"><option value="">${t("all")}</option>${opts.map(([v, l, n]) => `<option value="${esc(v)}" ${f[key] === v ? "selected" : ""}>${esc(l)} (${n})</option>`).join("")}</select></label>` : "";
+    const out = [];
+    if (kinds.includes("shop")) { const c = count((s) => s.best_retailer); out.push(sel("shop", t("Cheapest at"), Object.keys(c).sort().map((k) => [k, this.state.data.retailers[k] || k, c[k]]))); }
+    if (kinds.includes("price")) { const c = count((s) => s.best_price == null ? null : (PRICE_BANDS.find(([, lo, hi]) => s.best_price >= lo && s.best_price < hi) || [])[0]); out.push(sel("price", t("Price"), PRICE_BANDS.filter(([k]) => c[k]).map(([k, lo, hi]) => [k, hi === Infinity ? `≥ ${EUR0(lo)}` : `${EUR0(lo)} – ${EUR0(hi)}`, c[k]]))); }
+    if (kinds.includes("status")) { const own = kinds.includes("loc"); out.push(sel("status", t("Status"), STATUS_FILTERS.filter(([, , , coll]) => coll === undefined || coll === own).map(([k, l, fn]) => [k, t(l), list.filter((s) => fn(s, this)).length]).filter((x) => x[2]))); }
+    if (kinds.includes("year")) { const c = count((s) => (s.year ? String(s.year) : null)); out.push(sel("year", t("Year"), Object.keys(c).sort().reverse().map((k) => [k, k, c[k]]))); }
+    if (kinds.includes("loc")) { const c = count((s) => this.locations(s)); out.push(sel("loc", t("Location"), Object.keys(c).sort().map((k) => [k, k, c[k]]))); }
+    const active = ["shop", "price", "status", "year", "loc", "theme", "subtheme", "cond"].filter((k) => f[k]).length + (f.ret100 ? 1 : 0) + (f.q ? 1 : 0);
+    const html = out.filter(Boolean).join("");
+    return html || active ? `<div class="fbar fmore">${html}${active ? `<button class="btn ghost sm" data-ffclear>✕ ${t("Clear filters")} (${active})</button>` : ""}</div>` : "";
+  }
+  filterBar({ sorts, threshold = false, cond = false, viewToggle = false, retire = false, list, more = [] }) {
     const f = this.state.f;
     const counts = {}; list.forEach((s) => { const th = s.theme || "Unknown"; counts[th] = (counts[th] || 0) + 1; });
     const themes = Object.keys(counts).sort();
     const subs = {}; if (f.theme) list.filter((s) => s.theme === f.theme && s.subtheme).forEach((s) => { subs[s.subtheme] = (subs[s.subtheme] || 0) + 1; });
-    const conds = {}; if (cond) list.forEach((s) => { const c = (s.collection && s.collection.condition) || "Unknown"; conds[c] = (conds[c] || 0) + 1; });
+    const conds = {}; if (cond) list.forEach((s) => this.conditions(s).forEach((c) => { conds[c] = (conds[c] || 0) + 1; }));
     return `<div class="fbar"><div class="search"><input id="q" placeholder="${t("Search by number, name, theme…")}  ( / )" value="${esc(f.q)}" autocomplete="off"></div>
       <select id="sort" aria-label="${t("Sort")}">${sorts.map(([k, l]) => `<option value="${k}" ${f.sort === k ? "selected" : ""}>${t(l)}</option>`).join("")}</select>
       ${threshold ? `<label class="thr">${t("Discount")} ≥ <b id="thrv">${this.state.threshold}%</b><input id="thr" type="range" min="5" max="70" step="5" value="${this.state.threshold}"></label>` : ""}
@@ -1004,7 +1045,7 @@ class LegoTrackerPanel extends HTMLElement {
       ${themes.length > 1 ? `<div class="chips"><span class="chip ${!f.theme ? "on" : ""}" data-theme="">${t("All themes")}</span>${themes.map((th) => `<span class="chip ${f.theme === th ? "on" : ""}" data-theme="${esc(th)}">${esc(th === "Unknown" ? t("Unknown") : th)} <span class="muted">${counts[th]}</span></span>`).join("")}</div>` : ""}
       ${Object.keys(subs).length ? `<div class="chips"><span class="chip sm ${!f.subtheme ? "on" : ""}" data-subtheme="">${t("All subthemes")}</span>${Object.keys(subs).sort().map((st) => `<span class="chip sm ${f.subtheme === st ? "on" : ""}" data-subtheme="${esc(st)}">${esc(st)} <span class="muted">${subs[st]}</span></span>`).join("")}</div>` : ""}
       ${Object.keys(conds).length > 1 ? `<div class="chips"><span class="chip sm ${!f.cond ? "on" : ""}" data-cond="">${t("Any condition")}</span>${Object.keys(conds).map((c) => `<span class="chip sm ${f.cond === c ? "on" : ""}" data-cond="${esc(c)}">${esc(t(c))} <span class="muted">${conds[c]}</span></span>`).join("")}</div>` : ""}
-      ${retire ? this.ret100Chip(list) : ""}`;
+      ${retire ? this.ret100Chip(list) : ""}${more.length ? this.moreFilters(list, more) : ""}`;
   }
   img(s, big = false) { return s.image ? `<img loading="lazy" decoding="async" src="${esc(thumb(s.image, big ? 640 : 320))}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'ph',textContent:'🧱'}))">` : `<span class="ph"${big ? ' style="font-size:60px"' : ""}>🧱</span>`; }
   badges(s) {
@@ -1071,9 +1112,9 @@ class LegoTrackerPanel extends HTMLElement {
 
   // ---------------------------------------------------------------- DEALS
   vToday() {
-    const allWatched = this.sets.filter((s) => s.watched && !this.dealBlocked(s)), watched = this.state.f.ret100 ? allWatched.filter((s) => this.ret100(s)) : allWatched;
+    const allWatched = this.sets.filter((s) => s.watched && !this.dealBlocked(s)), watched = this.filtered(allWatched);
     if (!this.sets.length) return this.emptyState("🧱", t("No sets yet. Add sets to track their prices, or import your collection."), `<button class="btn" data-goto="manage/add">＋ ${t("Add a set")}</button> <button class="btn ghost" data-goto="manage/import">⇪ ${t("Import collection")}</button>`);
-    const deals = this.sorted(watched.filter((s) => this.isDeal(s)), "score");
+    const deals = this.sorted(watched.filter((s) => this.isDeal(s)), this.state.f.sort || "score");
     const top = deals[0];
     const lows = watched.filter((s) => s.is_all_time_low).length, targets = watched.filter((s) => s.target_hit).length, retiring = watched.filter((s) => s.retiring_soon);
     const w = this.state.data.wishlist;
@@ -1087,7 +1128,14 @@ class LegoTrackerPanel extends HTMLElement {
       ${!deals.length ? this.emptyState("😴", t("No deals today among your {n} watched sets. Tip: lower the discount threshold or set target prices.", { n: watched.length })) : ""}
       ${retiring.length ? `<h2 class="sec">⏳ ${t("Retiring soon")} <span class="n">${t("buy while you can?")}</span></h2>${this.gridOf(this.sorted(retiring, "score"))}` : ""}
       ${drops.length ? `<h2 class="sec">📉 ${t("Big price drops")} <span class="n">${t("last 30 days")}</span></h2>${this.gridOf(drops)}` : ""}`;
-    return `${this.banner()}${kpis}${this.ret100Chip(allWatched)}<div class="cols"><div>${main}</div><aside>${this.timeline()}${this.thresholdPanel()}</aside></div>`;
+    if (this._todayResults) return `<div class="cols"><div>${main}</div><aside>${this.timeline()}${this.thresholdPanel()}</aside></div>`;
+    const bar = this.filterBar({ list: allWatched, retire: true, more: ["shop", "price", "status", "year"], sorts: [["score", "Deal score"], ["discount", "Highest discount"], ["price", "Lowest price"], ["ppp", "Price per piece"], ["drop", "Biggest drop"], ["deal_new", "Latest deal notification"]] });
+    return `${this.banner()}${kpis}${bar}<div id="results" data-fn="rToday"><div class="cols"><div>${main}</div><aside>${this.timeline()}${this.thresholdPanel()}</aside></div></div>`;
+  }
+  /** Deals → Today without the filters above (typing in the search box keeps its focus). */
+  rToday() {
+    this._todayResults = true;
+    try { return this.vToday(); } finally { this._todayResults = false; }
   }
   thresholdPanel() {
     return `<div class="panel"><h3>🎚️ ${t("When is it a deal?")}</h3><p>${t("Discount vs. RRP of at least {pct}, or lowest price ever, target price reached, or deal score ≥ 70.", { pct: `<b id="thrv">${this.state.threshold}%</b>` })}</p><input id="thr" type="range" min="5" max="70" step="5" value="${this.state.threshold}" style="width:100%"><p style="margin-top:8px;font-size:12px">${t("The default threshold is set under Manage → Settings (now {pct}%).", { pct: this.state.data.threshold })}</p></div>`;
@@ -1115,12 +1163,12 @@ class LegoTrackerPanel extends HTMLElement {
     if (!list.length) return this.emptyState("👀", t("Your watchlist is empty. Add sets you don't own yet; you get a heads-up when the price is right."), `<button class="btn" data-goto="manage/add">＋ ${t("Add a set")}</button>`);
     const w = this.state.data.wishlist;
     return `${this.banner()}<div class="kpis">${this.kpi(t("Sets on watchlist"), w.sets, { icon: "👀" })}${this.kpi(t("Total now"), w.cost, { fmt: "eur", icon: "🛒", sub: t("{n} with a price", { n: w.priced }) })}${this.kpi(t("RRP"), w.rrp, { fmt: "eur", icon: "🏷️" })}${this.kpi(t("Saving"), w.saving, { fmt: "eur", icon: "💰", color: "var(--lt-green)" })}</div>
-      ${this.filterBar({ list, retire: true, sorts: [["priority", "Priority"], ["score", "Deal score"], ["discount", "Highest discount"], ["price", "Lowest price"], ["ppp", "Price per piece"], ["drop", "Biggest drop"], ["deal_new", "Latest deal notification"], ["watch_new", "Newest on the watchlist"], ["watch_old", "Longest on the watchlist"], ["name", "Name"]] })}
+      ${this.filterBar({ list, retire: true, more: ["shop", "price", "status", "year"], sorts: [["priority", "Priority"], ["score", "Deal score"], ["discount", "Highest discount"], ["price", "Lowest price"], ["ppp", "Price per piece"], ["drop", "Biggest drop"], ["deal_new", "Latest deal notification"], ["watch_new", "Newest on the watchlist"], ["watch_old", "Longest on the watchlist"], ["name", "Name"]] })}
       <div id="results" data-fn="rWatch">${this.rWatch()}</div>`;
   }
   rWatch() { const l = this.sorted(this.filtered(this.sets.filter((s) => s.watched)), this.state.f.sort); return l.length ? this.gridOf(l, undefined, "watch") : `<div class="grid">${this.addTile("watch")}</div>` + this.emptyState("🔍", t("Nothing found with these filters.")); }
   vAll() {
-    return `${this.banner()}${this.filterBar({ list: this.sets, threshold: true, retire: true, sorts: [["score", "Deal score"], ["discount", "Highest discount"], ["price", "Lowest price"], ["ppp", "Price per piece"], ["drop", "Biggest drop"], ["deal_new", "Latest deal notification"], ["name", "Name"], ["number", "Set number"]] })}<div id="results" data-fn="rAll">${this.rAll()}</div>`;
+    return `${this.banner()}${this.filterBar({ list: this.sets, threshold: true, retire: true, more: ["shop", "price", "status", "year"], sorts: [["score", "Deal score"], ["discount", "Highest discount"], ["price", "Lowest price"], ["ppp", "Price per piece"], ["drop", "Biggest drop"], ["deal_new", "Latest deal notification"], ["name", "Name"], ["number", "Set number"]] })}<div id="results" data-fn="rAll">${this.rAll()}</div>`;
   }
   /** Deals → New sets: sets that appeared in the LEGO set database (downloaded once a day). */
   vNewSets() {
@@ -1359,9 +1407,9 @@ class LegoTrackerPanel extends HTMLElement {
     const conds = Object.entries(a.by_condition || {});
     return `${kpis}<div class="panel"><h3>📈 ${t("Collection growth")}<span class="hsp"></span><span class="muted" style="font-size:12px;font-weight:400">${t("value = lowest new price × quantity")}</span></h3>${this.zoomBar(from, to)}${chart}${this.periodStats(vPts, cPts, from, to)}</div>
       ${this.collStats()}
-      <div class="two"><div class="panel"><h3>🎨 ${t("Value per theme")}</h3>${donut(donutItems, { label: t("total") })}</div><div class="panel"><h3>📅 ${t("Sets per release year")}</h3>${years.length > 1 ? bars(years) : `<p>${t("Year unknown for most sets; add a Brickset or Rebrickable key under Settings to fill this in.")}</p>`}</div></div>
+      <div class="two"><div class="panel"><h3>🎨 ${t("Value per theme")}</h3>${donut(donutItems, { label: t("total") })}</div><div class="panel"><h3>📅 ${t("Sets per release year")}</h3>${years.length > 1 ? bars(years, { cf: (it) => `year:${it.label}` }) : `<p>${t("Year unknown for most sets; add a Brickset or Rebrickable key under Settings to fill this in.")}</p>`}</div></div>
       <div class="two"><div class="panel"><h3>🚀 ${t("Biggest risers")}</h3>${mv(a.top_gainers || [], "up")}</div><div class="panel"><h3>📉 ${t("Below purchase price")}</h3>${mv(a.top_losers || [], "down")}</div></div>
-      ${conds.length ? `<div class="panel"><h3>📦 ${t("Condition of your sets")}</h3><div class="chips">${conds.map(([k, v]) => `<span class="chip">${esc(t(k))} <b>${v}</b></span>`).join("")}</div></div>` : ""}`;
+      ${conds.length ? `<div class="panel"><h3>📦 ${t("Condition of your sets")}</h3><div class="chips">${conds.map(([k, v]) => `<span class="chip" data-cf="cond:${esc(k)}" title="${esc(t("Show these sets"))}">${esc(t(k))} <b>${v}</b></span>`).join("")}</div></div>` : ""}`;
   }
   /** The period shown in the collection chart: a preset (days back, "ytd"), a dragged / typed range, or everything. */
   collWindow(ser) {
@@ -1405,7 +1453,7 @@ class LegoTrackerPanel extends HTMLElement {
     const pieces = sum((r) => (r.s.pieces || 0) * r.q), years = rows.filter((r) => r.s.year).map((r) => r.s.year), yr = new Date().getFullYear();
     const retired = rows.filter((r) => r.s.retired), retiring = rows.filter((r) => r.s.retiring_soon), sealed = rows.filter((r) => r.c.condition === "Sealed");
     const top = (arr, key, n = 5) => [...arr].sort((a, b) => key(b) - key(a)).slice(0, n);
-    const stat = (l, v, sub = "") => `<div class="stat"><small>${l}</small><b>${v}</b>${sub ? `<div class="muted" style="font-size:11px">${sub}</div>` : ""}</div>`;
+    const stat = (l, v, sub = "", cf = "") => `<div class="stat${cf ? " click" : ""}"${cf ? ` data-cf="${cf}" title="${esc(t("Show these sets"))}"` : ""}><small>${l}</small><b>${v}</b>${sub ? `<div class="muted" style="font-size:11px">${sub}</div>` : ""}</div>`;
     const pct = (a, b) => (b ? signPct(Math.round(((a - b) / b) * 1000) / 10) : "–");
     const biggest = top(rows, (r) => r.v)[0], largest = top(rows.filter((r) => r.s.pieces), (r) => r.s.pieces)[0];
     const oldest = rows.filter((r) => r.s.year).sort((a, b) => a.s.year - b.s.year)[0];
@@ -1413,16 +1461,16 @@ class LegoTrackerPanel extends HTMLElement {
       ${stat(t("Unique sets"), INT(own.length), t("{n} copies", { n: INT(copies) }))}${stat(t("Pieces"), INT(pieces), pieces && value ? t("{n} ct per piece (value)", { n: ((value / pieces) * 100).toFixed(1) }) : "")}
       ${stat(t("Average value per set"), EUR0(value / copies))}${stat(t("Average paid per set"), paidRows.length ? EUR0(paid / paidRows.reduce((a, r) => a + r.q, 0)) : "–")}
       ${stat(t("Value vs. purchase price"), pct(paidValue, paid), t("{n} sets with a purchase price", { n: paidRows.length }))}${stat(t("Value vs. RRP"), pct(rrpValue, rrp), t("RRP total {amount}", { amount: EUR0(rrp) }))}
-      ${stat(t("Retired sets"), INT(retired.length), EUR0(retired.reduce((a, r) => a + r.v, 0)))}${stat(t("Retiring soon"), INT(retiring.length), EUR0(retiring.reduce((a, r) => a + r.v, 0)))}
-      ${stat(t("Sealed"), own.length ? `${Math.round((sealed.length / own.length) * 100)}%` : "–", t("{n} sets", { n: sealed.length }))}${stat(t("Average age"), years.length ? t("{n} years", { n: (years.reduce((a, y) => a + (yr - y), 0) / years.length).toFixed(1) }) : "–")}
+      ${stat(t("Retired sets"), INT(retired.length), EUR0(retired.reduce((a, r) => a + r.v, 0)), retired.length ? "status:retired" : "")}${stat(t("Retiring soon"), INT(retiring.length), EUR0(retiring.reduce((a, r) => a + r.v, 0)), retiring.length ? "status:retiring" : "")}
+      ${stat(t("Sealed"), own.length ? `${Math.round((sealed.length / own.length) * 100)}%` : "–", t("{n} sets", { n: sealed.length }), sealed.length ? "cond:Sealed" : "")}${stat(t("Average age"), years.length ? t("{n} years", { n: (years.reduce((a, y) => a + (yr - y), 0) / years.length).toFixed(1) }) : "–")}
       ${stat(t("Most valuable set"), biggest ? EUR0(biggest.v) : "–", biggest ? esc(biggest.s.name || biggest.s.set_number) : "")}${stat(t("Largest set"), largest ? INT(largest.s.pieces) : "–", largest ? esc(largest.s.name || largest.s.set_number) : "")}
-      ${stat(t("Oldest set"), oldest ? oldest.s.year : "–", oldest ? esc(oldest.s.name || oldest.s.set_number) : "")}${stat(t("Without purchase price"), INT(rows.length - paidRows.length))}
+      ${stat(t("Oldest set"), oldest ? oldest.s.year : "–", oldest ? esc(oldest.s.name || oldest.s.set_number) : "")}${stat(t("Without purchase price"), INT(rows.length - paidRows.length), "", rows.length > paidRows.length ? "status:nopaid" : "")}
       ${stat(t("Themes"), INT(new Set(own.map((x) => x.theme).filter(Boolean)).size))}${stat(t("Locations"), INT(new Set(rows.map((r) => r.c.location).filter(Boolean)).size))}</div>`;
     // per theme: sets, paid, value, growth
     const th = {};
-    for (const r of rows) { const k = r.s.theme || t("Unknown"), o = th[k] || (th[k] = { n: 0, v: 0, paid: 0, pv: 0, pieces: 0 }); o.n += r.q; o.v += r.v; o.pieces += (r.s.pieces || 0) * r.q; if (r.paid) { o.paid += r.paid; o.pv += r.v; } }
+    for (const r of rows) { const k = r.s.theme || "Unknown", o = th[k] || (th[k] = { n: 0, v: 0, paid: 0, pv: 0, pieces: 0 }); o.n += r.q; o.v += r.v; o.pieces += (r.s.pieces || 0) * r.q; if (r.paid) { o.paid += r.paid; o.pv += r.v; } }
     const thRows = Object.entries(th).sort((a, b) => b[1].v - a[1].v);
-    const themeTbl = `<table class="tbl"><tr><th>${t("Theme")}</th><th class="num">${t("Sets")}</th><th class="num">${t("Value")}</th><th class="num">${t("Share")}</th><th class="num">${t("Growth")}</th></tr>${thRows.map(([k, o]) => `<tr><td>${esc(k)}</td><td class="num">${o.n}</td><td class="num">${EUR0(o.v)}</td><td class="num">${value ? Math.round((o.v / value) * 100) : 0}%</td><td class="num ${o.pv >= o.paid ? "up" : "down"}">${o.paid ? pct(o.pv, o.paid) : "–"}</td></tr>`).join("")}</table>`;
+    const themeTbl = `<table class="tbl"><tr><th>${t("Theme")}</th><th class="num">${t("Sets")}</th><th class="num">${t("Value")}</th><th class="num">${t("Share")}</th><th class="num">${t("Growth")}</th></tr>${thRows.map(([k, o]) => `<tr class="click" data-cf="theme:${esc(k)}" title="${esc(t("Show these sets"))}"><td>${esc(k === "Unknown" ? t("Unknown") : k)} ›</td><td class="num">${o.n}</td><td class="num">${EUR0(o.v)}</td><td class="num">${value ? Math.round((o.v / value) * 100) : 0}%</td><td class="num ${o.pv >= o.paid ? "up" : "down"}">${o.paid ? pct(o.pv, o.paid) : "–"}</td></tr>`).join("")}</table>`;
     // bought and spent per year (purchase date)
     const by = {};
     for (const r of rows) { const y = (r.c.added || "").slice(0, 4); if (!y) continue; const o = by[y] || (by[y] = { n: 0, spent: 0 }); o.n += r.q; o.spent += r.paid || 0; }
@@ -1437,12 +1485,12 @@ class LegoTrackerPanel extends HTMLElement {
       <div class="two"><div class="panel"><h3>💎 ${t("Most valuable sets")}</h3>${list(top(rows, (r) => r.v), (r) => `<b>${EUR0(r.v)}</b>`)}</div>
         <div class="panel"><h3>💰 ${t("Biggest gain in euro")}</h3>${list(gainEur, (r) => `<b class="${r.v >= r.paid ? "up" : "down"}">${r.v - r.paid >= 0 ? "+" : ""}${EUR0(r.v - r.paid)}</b>`)}</div></div>
       <div class="two"><div class="panel"><h3>📈 ${t("Best return")}</h3>${list(roi, (r) => `<b class="${r.v >= r.paid ? "up" : "down"}">${pct(r.v, r.paid)}</b>`)}</div>
-        <div class="panel"><h3>📍 ${t("Sets per location")}</h3>${Object.keys(loc).length ? `<div class="chips">${Object.entries(loc).sort((a, b) => b[1] - a[1]).map(([k, n]) => `<span class="chip">${esc(k)} <b>${n}</b></span>`).join("")}</div>` : `<p>${t("No locations filled in yet.")}</p>`}</div></div>`;
+        <div class="panel"><h3>📍 ${t("Sets per location")}</h3>${Object.keys(loc).length ? `<div class="chips">${Object.entries(loc).sort((a, b) => b[1] - a[1]).map(([k, n]) => `<span class="chip" data-cf="loc:${esc(k)}" title="${esc(t("Show these sets"))}">${esc(k)} <b>${n}</b></span>`).join("")}</div>` : `<p>${t("No locations filled in yet.")}</p>`}</div></div>`;
   }
   vCollSets() {
     const list = this.sets.filter((s) => s.owned);
     if (!list.length) return `<div class="grid">${this.addTile("own")}</div>` + this.emptyState("📦", t("No sets in your collection yet."), `<button class="btn" data-goto="manage/import">⇪ ${t("Import")}</button>`);
-    return `${this.filterBar({ list, cond: true, viewToggle: true, sorts: [["value", "Highest value"], ["gain", "Biggest gain"], ["name", "Name"], ["number", "Set number"], ["year", "Year"]] })}
+    return `${this.filterBar({ list, cond: true, viewToggle: true, more: ["status", "year", "loc"], sorts: [["value", "Highest value"], ["gain", "Biggest gain"], ["name", "Name"], ["number", "Set number"], ["year", "Year"]] })}
       <div class="fbar" style="justify-content:flex-end">${this.state.cview === "table" ? `<button class="btn sm" data-addtile="own">＋ ${t("Add to my collection")}</button>` : ""}<button class="btn ghost sm" id="expcsv">⬇ ${t("Export CSV")}</button></div><div id="results" data-fn="rColl">${this.rColl()}</div>`;
   }
   collSort(list) {
@@ -2032,8 +2080,8 @@ class LegoTrackerPanel extends HTMLElement {
         <p>${t("The search URL decides how “Find links” finds a product; every shop has a default that you can change. Easiest: search the shop for e.g. “lego 10311”, copy the address bar and paste it here — the set number is replaced by {query} automatically. {query} = “LEGO + set number”, {number} = the set number, {locale} = the LEGO.com country. ↺ restores the default.", { query: "<code>{query}</code>", number: "<code>{number}</code>", locale: "<code>{locale}</code>" })}</p>
         <div class="form" style="max-width:420px"><label>${t("LEGO.com country (language-country)")}<input id="o_locale" value="${esc(st.lego_locale || "nl-be")}" placeholder="nl-be"></label></div>
         <div class="tscroll"><table class="tbl"><tr><th>${t("Shop")}</th><th>${t("Status")}</th><th>${t("Pause")}</th><th>${t("Search URL")}</th><th></th></tr>${shopRows}</table></div>
-        <h3 style="margin-top:16px">＋ ${t("Add your own shop")}</h3><div class="form"><label>${t("Name")}<input id="n_name" placeholder="${t("e.g. {example}", { example: "Intertoys" })}"></label><label>${t("Domain")}<input id="n_domain" placeholder="intertoys.be"></label>
-        <label style="grid-column:span 2">${t("Search URL")}<input id="n_search" placeholder="https://www.intertoys.be/zoeken?q=lego+10311"><div class="hint muted" id="n_search_prev"></div></label></div>
+        <h3 style="margin-top:16px">＋ ${t("Add your own shop")}</h3><div class="form"><label>${t("Name")}<input id="n_name" placeholder="${t("e.g. {example}", { example: "Example Shop" })}"></label><label>${t("Domain")}<input id="n_domain" placeholder="example-shop.be"></label>
+        <label style="grid-column:span 2">${t("Search URL")}<input id="n_search" placeholder="https://www.example-shop.be/search?q=lego+10311"><div class="hint muted" id="n_search_prev"></div></label></div>
         <p style="font-size:12px">${t("Prices are read from the standard product data (JSON-LD/meta) that most web shops have.")}</p><button class="btn ghost" id="n_add">＋ ${t("Add to the list")}</button></div>
       <div class="panel"><h3>🚫 ${t("Product filter")}</h3>
         <p>${t("A product whose title contains one of these words is never taken as the set (e.g. an LED kit or display case for that set number): it is skipped everywhere — shop searches, link check and comparison sites — and the next result with the set number counts.")}</p>
@@ -2122,10 +2170,81 @@ class LegoTrackerPanel extends HTMLElement {
       <div class="action"><b>🔗 ${t("Check links")}</b><p>${t("Judges all links again and shows suspicious or unchecked links, so you can approve or replace them.")}</p><button class="btn" data-goto="manage/links">${t("Go to link check")}</button></div></div></div>
       <div class="panel"><h3>⏰ ${t("Automatic checks")}</h3><p>${this.scheduleLine()} <a data-goto="manage/settings" style="cursor:pointer">${t("Change under Settings")} →</a></p>
       <p><b>${t("Last job:")}</b> ${lastTxt}</p>${pausedTxt ? `<p><b>${t("Paused after a block:")}</b> ${pausedTxt}. ${t("With the buttons you can choose to try anyway.")} <button class="btn ghost sm" data-resume="">▶ ${t("Lift all pauses")}</button></p>` : ""}</div>`;
-    return `${actions}<div class="panel"><h3>🏪 ${t("Shop status")}<span class="hsp"></span><span class="pill">${esc(this.state.data.transport)}</span></h3><p>${t("After a block a shop is paused automatically for a while (1 → 3 → 6 → 12 → 24 h) so the protection doesn't get stricter.")}</p></div>
+    return `${this.shopSettingsPanel()}${actions}<div class="panel"><h3>🏪 ${t("Shop status")}<span class="hsp"></span><span class="pill">${esc(this.state.data.transport)}</span></h3><p>${t("After a block a shop is paused automatically for a while (1 → 3 → 6 → 12 → 24 h) so the protection doesn't get stricter.")}</p></div>
       <div class="shops">${cards}</div>
       <div class="panel" style="margin-top:16px"><h3>⚠️ ${t("Offers without a price")} <span class="muted" style="font-weight:400">${failing.length}</span><span class="hsp"></span>${failing.length ? `<a class="btn ghost sm" data-goto="log/errors">${t("Fix in the logbook")} →</a>` : ""}</h3>${failing.length ? `<div class="tscroll"><table class="tbl"><tr><th>Set</th><th>${t("Shop")}</th><th>${t("Message")}</th></tr>${failing.map((f) => `<tr class="click" data-set="${esc(f.set_number)}"><td><b>${esc(f.set_number)}</b> ${esc(f.name || "")}</td><td>${esc(f.shop)}</td><td class="err">${esc(tx(f.error))}${f.suspect != null ? ` ${approveBtn(f.set_number, f.rid, f.suspect)}` : ""}</td></tr>`).join("")}</table></div>` : `<p class="ok">${t("All OK.")}</p>`}</div>
       <div class="panel"><h3>🧩 ${t("Does a shop keep blocking?")}</h3><p>1. ${t("Enter the price by hand: click a set → Shops → price field. A manual price always wins.")}<br>2. ${t("Install the {link} in Tampermonkey: your own browser sends the price when you visit a product page.", { link: `<a data-goto="manage/userscript" style="cursor:pointer">${t("userscript")}</a>` })}<br>3. ${t("Or switch off “pause automatically” per shop under {link}.", { link: `<a data-goto="manage/settings" style="cursor:pointer">${t("Settings")}</a>` })}<br>4. ${t("Use the action {action} from an automation or n8n.", { action: "<code>lego_tracker.report_price</code>" })}</p></div>`;
+  }
+  /** The legal terms, in full (Manage → Legal, the import wizard and the one-time acceptance). */
+  legalHtml() {
+    const sec = [
+      ["About this software", "LEGO Organizing Tool (LOT) is free software that runs entirely on your own Home Assistant. It contains no list of shops or websites and contacts no website by itself: which websites are contacted is decided only by the shop settings you import or enter yourself."],
+      ["Example settings", "The example shop settings file only shows how settings can be written. It is not a recommendation, not an instruction and not a statement that any website allows its pages to be read automatically. Whether and how you use it is your own decision."],
+      ["Your responsibility", "Everything that happens between your Home Assistant and the websites in your settings (page requests, searches, APIs, the browser relay and the userscript) happens on your initiative, from your own network and under your own responsibility. You are responsible for respecting the terms of use of those websites, their robots.txt and the law that applies to you, including copyright, database rights, rules on unauthorised access to computer systems and consumer law. Use the software only for personal, non-commercial purposes and keep the number of requests moderate."],
+      ["No warranty", "The software is provided \"as is\", without any warranty, express or implied, including fitness for a particular purpose and non-infringement. Prices, availability, deals, retirement dates and values can be wrong, incomplete or out of date: always check them at the shop before you buy."],
+      ["Limitation of liability", "To the fullest extent permitted by the applicable law, the author and the contributors are not liable for any damage, loss, claim, fine or other consequence arising from the use of the software or of shop settings, including claims by website operators or other third parties. Such claims concern the user who chose and used the settings. Nothing in these terms limits a liability that cannot be limited by law."],
+      ["Indemnity", "As far as the law allows, you hold the author and the contributors harmless from claims by third parties that arise from your use of the software or of your shop settings."],
+      ["Trademarks", "LEGO® is a trademark of the LEGO Group, which does not sponsor, authorise or endorse this software. Names of shops and websites are trademarks of their owners; this project is not affiliated with any of them."],
+      ["Your data", "Your sets, prices and settings stay on your own Home Assistant. The software does not send your collection or settings to its author; it only fetches a public news file to show news in the panel."],
+      ["Acceptance and withdrawal", "By importing shop settings, or by accepting the shop settings carried over from an earlier version, you confirm that you have read and accept these terms, that you bear all legal consequences of your settings and their use yourself, and that the author cannot be held liable. You can withdraw at any time under Manage → Legal: from then on no website from your settings is contacted."],
+      ["No legal advice", "These terms are no legal advice. If you are unsure what is allowed where you live, ask a lawyer before you use shop settings."],
+    ];
+    return sec.map(([h, p]) => `<h4 style="margin:12px 0 4px">${t(h)}</h4><p style="margin:0">${t(p)}</p>`).join("");
+  }
+  shopSettingsPanel() {
+    const ss = this.state.data.shop_settings || {};
+    const when = ss.accepted ? new Date(ss.accepted * 1000).toLocaleString(LANG) : null;
+    const state = ss.ready ? `✅ ${t("{n} shops and {m} comparison sites from your shop settings; terms accepted on {when}.", { n: ss.shops, m: ss.comparison_sites, when: esc(when) })}`
+      : ss.imported ? `⚠️ ${t("Shop settings present, terms not accepted yet: nothing is fetched.")}` : `⚠️ ${t("No shop settings imported: nothing is fetched.")}`;
+    return `<div class="panel"><h3>🗂️ ${t("Shop settings")}</h3><p>${state}</p><p class="muted">${t("Which shops and comparison sites your Home Assistant contacts, with their addresses, comes from a shop settings file you import. Export it to keep a copy or to move it to another installation.")}</p>
+      <button class="btn" id="ss_import">⬆ ${t("Import shop settings")}</button> ${ss.imported && !ss.ready ? `<button class="btn" id="ss_accept">⚖️ ${t("Read and accept")}</button> ` : ""}${ss.imported ? `<button class="btn ghost" id="ss_export">⬇ ${t("Export shop settings")}</button> <button class="btn ghost" id="ss_withdraw">✋ ${t("Withdraw and stop fetching")}</button>` : ""}</div>`;
+  }
+  vLegal() {
+    return `${this.shopSettingsPanel()}<div class="panel"><h3>⚖️ ${t("Legal information")}</h3>${this.legalHtml()}<p class="muted" style="margin-top:12px">${t("Terms version {v}.", { v: (this.state.data.shop_settings || {}).legal_version || 1 })}</p></div>`;
+  }
+  /** First step (no shop settings yet: import + accept) or the one-time acceptance (settings carried over). */
+  openShopSettings(forceImport = false) {
+    const ss = (this.state.data || {}).shop_settings || {}, accept = ss.imported && !ss.ready && !forceImport;
+    const dlg = this.shadowRoot.getElementById("dlg");
+    this._dlgGen = (this._dlgGen || 0) + 1; clearInterval(this._shopTimer);
+    let payload = null;
+    const intro = accept ? t("LOT is now version 1.0. Your shop settings were carried over from the previous version, but before anything is fetched again you have to read and accept the terms below once.")
+      : t("LOT contains no shops of its own: you choose which websites your Home Assistant contacts by importing a shop settings file. An example file shows how such a file is written.");
+    dlg.innerHTML = `<div class="dhead" style="grid-template-columns:1fr auto"><div><h2>⚖️ ${t(accept ? "Accept the terms" : "Import shop settings")}</h2><div class="muted">${t("Nothing is fetched until you agree.")}</div></div><div><button class="x" id="x" aria-label="${t("Not now")}" title="${t("Not now")}">✕</button></div></div>
+      <div class="dbody"><p>${intro}</p>
+      ${accept ? `<p><b>${t("Shops in your settings:")}</b> ${Object.values(this.state.data.retailers || {}).map(esc).join(", ")}</p>`
+        : `<label class="drop" id="ss_drop" style="padding:18px;display:block"><span class="big" style="font-size:26px">🗂️</span><span id="ss_name">${t("Choose or drop a shop settings file (.json)")}</span><input type="file" id="ss_file" accept=".json,application/json" hidden></label>
+      <p class="muted"><a href="https://github.com/emeryf81/mot/blob/main/examples/lot-shops.example.json" target="_blank" rel="noopener noreferrer">${t("Example of a shop settings file")} ↗</a></p><div id="ss_info"></div>`}
+      <div style="max-height:260px;overflow:auto;border:1px solid var(--lt-line);border-radius:10px;padding:4px 12px 12px;margin:10px 0;font-size:13px">${this.legalHtml()}</div>
+      <label class="chk" style="display:flex;gap:8px;align-items:flex-start;margin:10px 0"><input type="checkbox" id="ss_ok" style="margin-top:3px"> <span>${t("I have read and accept these terms. I alone am responsible for what my Home Assistant does with these shop settings and I bear all legal consequences; the author of LOT cannot be held liable.")}</span></label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="ss_go" disabled>${t(accept ? "Accept" : "Import")}</button><button class="btn ghost" id="ss_later">${t("Not now")}</button>${accept ? `<button class="btn ghost" id="ss_other">⬆ ${t("Import other shop settings")}</button>` : ""}</div></div>`;
+    if (!dlg.open) dlg.showModal();
+    const q = (id) => dlg.querySelector("#" + id), ok = q("ss_ok"), go = q("ss_go");
+    const sync = () => { go.disabled = !ok.checked || (!accept && !payload); };
+    ok.onchange = sync;
+    q("x").onclick = q("ss_later").onclick = () => this.closeDialog();
+    if (q("ss_other")) q("ss_other").onclick = () => this.openShopSettings(true);
+    if (!accept) {
+      const drop = q("ss_drop");
+      const pick = async (f) => {
+        if (!f) return;
+        try {
+          const j = JSON.parse(await f.text());
+          if (!j || j.format !== "lot-shop-settings" || !Array.isArray(j.shops)) throw new Error("format");
+          payload = j; q("ss_name").textContent = f.name;
+          q("ss_info").innerHTML = `<p><b>${t("{n} shops", { n: j.shops.length })}:</b> ${j.shops.map((x) => esc(x.name || x.id)).join(", ")}${(j.comparison_sites || []).length ? `<br><b>${t("{n} comparison sites", { n: j.comparison_sites.length })}:</b> ${j.comparison_sites.map((x) => esc(x.name || x.id)).join(", ")}` : ""}${Object.keys(j.data_sources || {}).length ? `<br><b>${t("Other sources (set data, set database, API)")}:</b> ${Object.values(j.data_sources).map((u) => { try { return esc(new URL(u).hostname); } catch (e) { return "?"; } }).filter((v, i, a) => a.indexOf(v) === i).join(", ")}` : ""}</p>`;
+        } catch (e) { payload = null; q("ss_info").innerHTML = ""; this.toast(t("This is not a shop settings file for this integration."), "err"); }
+        sync();
+      };
+      ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+      ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+      drop.addEventListener("drop", (e) => pick(e.dataTransfer.files[0])); q("ss_file").addEventListener("change", (e) => pick(e.target.files[0]));
+    }
+    go.onclick = () => this.busy(go, "…", async () => {
+      if (accept) await this._hass.callWS({ type: "lego_tracker/shop_settings/accept", accept: ok.checked });
+      else { const r = await this._hass.callWS({ type: "lego_tracker/shop_settings/import", settings: payload, accept: ok.checked }); this.toast(t("{n} shops imported", { n: r.shops }), "ok"); }
+      this.closeDialog(); await new Promise((res) => setTimeout(res, 1500)); await this.load();
+    });
   }
   vBackup() {
     return `<div class="two"><div class="panel"><h3>⬇ ${t("Export")}</h3><p>${t("Full backup (sets, shop links, price history, collection, timeline) as JSON, or only your collection as CSV (can be imported again).")}</p><button class="btn" id="expjson">⬇ ${t("Backup (JSON)")}</button> <button class="btn ghost" id="expcsv">⬇ ${t("Collection (CSV)")}</button></div>
@@ -2152,6 +2271,10 @@ class LegoTrackerPanel extends HTMLElement {
     on("[data-subtheme]", "click", (e) => { s.f.subtheme = e.currentTarget.dataset.subtheme || null; this.renderContent(); });
     on("[data-cond]", "click", (e) => { s.f.cond = e.currentTarget.dataset.cond || null; this.renderContent(); });
     on("[data-ret100]", "click", () => { s.f.ret100 = !s.f.ret100; this.renderContent(); });
+    on("[data-ff]", "change", (e) => { s.f[e.currentTarget.dataset.ff] = e.currentTarget.value || null; this.renderContent(); });
+    on("[data-ffclear]", "click", () => { const sort = s.f.sort; this.resetFilters(); s.f.sort = sort; this.renderContent(); });
+    // a statistic or a chip in the collection overview opens the collection list with that filter
+    on("[data-cf]", "click", (e) => { const [k, ...v] = e.currentTarget.dataset.cf.split(":"); s.section = "collection"; s.sub.collection = "sets"; this.resetFilters(); s.f[k] = k === "ret100" ? true : v.join(":"); this.persist(); this.render(true); });
     on("[data-addtile]", "click", (e) => this.goAdd(e.currentTarget.dataset.addtile));
     on("[data-addtile]", "keydown", (e) => { if (e.key === "Enter") this.goAdd(e.currentTarget.dataset.addtile); });
     on("[data-cown]", "click", (e) => { e.stopPropagation(); this.goAdd("own", this.sets.find((x) => x.set_number === e.currentTarget.dataset.cown)); });
@@ -2277,6 +2400,11 @@ class LegoTrackerPanel extends HTMLElement {
         s.section = "collection"; s.sub.collection = "sets"; this.persist(); this.render(true);
       });
     });
+    // shop settings (Shops & jobs, Legal)
+    const ssi = $("ss_import"); if (ssi) ssi.onclick = () => this.openShopSettings(true);
+    const ssa = $("ss_accept"); if (ssa) ssa.onclick = () => this.openShopSettings();
+    const sse = $("ss_export"); if (sse) sse.onclick = () => this.busy(sse, "…", async () => { const x = await this._hass.callWS({ type: "lego_tracker/shop_settings/export" }); const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(x, null, 2)], { type: "application/json" })); a.download = "lot-shop-settings.json"; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 3000); });
+    const ssw = $("ss_withdraw"); if (ssw) ssw.onclick = () => { if (!confirm(t("Remove the shop settings and withdraw your acceptance? From then on no shop is contacted; your sets and prices stay."))) return; this.busy(ssw, "…", async () => { await this._hass.callWS({ type: "lego_tracker/shop_settings/withdraw" }); await new Promise((res) => setTimeout(res, 1500)); await this.load(); }); };
     // backup
     const dl = (name, text, mime) => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: mime })); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 3000); };
     const ec = $("expcsv"); if (ec) ec.addEventListener("click", () => this.busy(ec, "…", async () => { const x = await this.svc("export_collection", {}, true); dl("lego_collection.csv", x.response.csv, "text/csv;charset=utf-8"); }));
@@ -2358,7 +2486,7 @@ class LegoTrackerPanel extends HTMLElement {
     $("n_add").addEventListener("click", () => {
       syncShops();
       const name = $("n_name").value.trim(), domain = $("n_domain").value.trim().replace(/^https?:\/\/(www\.)?/, "").split("/")[0].toLowerCase(), search = this.toTemplate($("n_search").value);
-      if (!name || !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(domain)) return this.toast(t("Enter a name and a valid domain (e.g. intertoys.be)"), "err");
+      if (!name || !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(domain)) return this.toast(t("Enter a name and a valid domain (e.g. example-shop.be)"), "err");
       if (search && (!search.startsWith("https://") || !/\{(query|number)\}/.test(search) || !search.includes(domain))) return this.toast(t("Search URL: https://, on the shop's domain and with {query}", { query: "{query}" }), "err");
       const id = "c_" + (name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || "shop").slice(0, 30);
       if (d.shops.some((x) => x.id === id)) return this.toast(t("This shop is already in the list"), "err");

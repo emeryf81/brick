@@ -6,7 +6,7 @@ STORAGE_KEY = f"{DOMAIN}.data"
 STORAGE_VERSION = 1
 
 PANEL_URL = "lego-tracker"
-API_LEVEL = 8          # raise together with API_LEVEL in the panel when the panel needs new server commands
+API_LEVEL = 9          # raise together with API_LEVEL in the panel when the panel needs new server commands
 PANEL_ELEMENT = "lego-tracker-panel"
 STATIC_URL = f"/{DOMAIN}_static"
 
@@ -73,39 +73,14 @@ DEFAULT_UPDATE_HOURS = 6
 DEFAULT_DIGEST_TIME = "08:00:00"
 DEFAULT_MIN_HISTORY_DAYS = 3
 
+# The shops come from the shop settings file the user imports (shops.apply_shop_options fills these):
 # retailer id -> (label, currency)
-RETAILERS: dict[str, tuple[str, str]] = {
-    "lego_com": ("LEGO.com", "EUR"),
-    "amazon_nl": ("Amazon.nl", "EUR"),
-    "amazon_de": ("Amazon.de", "EUR"),
-    "amazon_be": ("Amazon.com.be", "EUR"),
-    "bol": ("bol.com", "EUR"),
-    "kruidvat_be": ("Kruidvat.be", "EUR"),
-    "dreamland_be": ("Dreamland.be", "EUR"),
-    "smyths_be": ("Smyths Toys", "EUR"),
-}
-DEFAULT_RETAILERS = list(RETAILERS)
-BUILTIN_RETAILERS = tuple(RETAILERS)
-
-# Shops handled by the generic parser (JSON-LD / meta tags) and a search URL template.
-# {query} is replaced by the url-encoded "LEGO <set number>". Editable in the settings panel.
-GENERIC_SHOPS: dict[str, dict[str, str]] = {
-    "dreamland_be": {"domain": "dreamland.be", "search": "https://www.dreamland.be/e/nl/search?q={query}"},
-    # a search for the bare set number jumps straight to the product page (the result list is built with JavaScript)
-    "smyths_be": {"domain": "smythstoys.com", "search": "https://www.smythstoys.com/be/nl-be/search?text={number}"},
-}
-# Search URL per shop. {query} = url-encoded "LEGO <set number>", {number} = set number,
-# {locale} = LEGO.com locale (e.g. nl-be). All editable in the settings panel.
-DEFAULT_SEARCH: dict[str, str] = {
-    "lego_com": "https://www.lego.com/{locale}/search?q={number}",
-    "amazon_nl": "https://www.amazon.nl/s?k={query}",
-    "amazon_de": "https://www.amazon.de/s?k={query}",
-    "amazon_be": "https://www.amazon.com.be/s?k={query}",
-    "bol": "https://www.bol.com/nl/nl/s/?searchtext={query}",
-    "kruidvat_be": "https://www.kruidvat.be/nl/search?text={query}",
-    "dreamland_be": "https://www.dreamland.be/e/nl/search?q={query}",
-    "smyths_be": "https://www.smythstoys.com/be/nl-be/search?text={number}",
-}
+RETAILERS: dict[str, tuple[str, str]] = {}
+# shops read with the generic parser (JSON-LD / meta tags): id -> {"domain", "search"}
+GENERIC_SHOPS: dict[str, dict[str, str]] = {}
+# search URL per shop from the settings file. {query} = url-encoded "LEGO <set number>", {number} = set number,
+# {locale} = LEGO.com locale (e.g. nl-be). Editable in the settings panel.
+DEFAULT_SEARCH: dict[str, str] = {}
 CONF_LEGO_LOCALE = "lego_locale"
 DEFAULT_LEGO_LOCALE = "nl-be"
 CONF_CUSTOM_SHOPS = "custom_shops"          # [{"id","name","domain","search"}]

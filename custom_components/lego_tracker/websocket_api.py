@@ -14,6 +14,7 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
 from .const import API_LEVEL, CONF_DEV_FULL_REFRESH, DOMAIN, PANEL_URL, RETAILERS
+from .shops import home_of
 from .csv_import import analyze_csv
 from .themes import THEMES as LEGO_THEMES
 from .i18n import LocalizedError, T, tr
@@ -96,6 +97,10 @@ def _card(coord, num: str, with_history: bool = False) -> dict[str, Any]:
 def async_register_websocket(hass: HomeAssistant) -> None:
     """Register panel websocket commands and the userscript and relay HTTP views."""
     websocket_api.async_register_command(hass, ws_overview)
+    websocket_api.async_register_command(hass, ws_shop_settings_import)
+    websocket_api.async_register_command(hass, ws_shop_settings_export)
+    websocket_api.async_register_command(hass, ws_shop_settings_withdraw)
+    websocket_api.async_register_command(hass, ws_shop_settings_accept)
     websocket_api.async_register_command(hass, ws_set_detail)
     websocket_api.async_register_command(hass, ws_collection)
     websocket_api.async_register_command(hass, ws_update_set)
@@ -150,6 +155,7 @@ def ws_overview(hass, connection, msg):
 
     connection.send_result(msg["id"], {
         "version": VERSION, "api": API_LEVEL, "transport": coord.fetcher.transport,
+        "shop_settings": coord.shop_settings_info(),
         "new_sets_week": sum(1 for ts in coord.store.get("new_sets", {}).values() if time.time() - ts < 7 * 86400),
         "threshold": coord.threshold,
         "themes": coord.all_themes(),
@@ -321,6 +327,109 @@ async def ws_settings_set(hass, connection, msg):
 
 
 @websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/shop_settings/import", vol.Required("settings"): dict,
+                                  vol.Required("accept"): bool})
+@websocket_api.async_response
+async def ws_shop_settings_import(hass, connection, msg):
+    """Import a shop settings file. Only with the terms accepted (accept: true): then the shops in it are used."""
+    from .shops import (CONF_KEY_HOSTS, CONF_LEGAL, CONF_SHOP_PROFILE, LEGAL_VERSION, key_hosts, keys_for_moved_sources,
+                        validate_custom_shop, validate_settings)
+
+    coord = _coord(hass)
+    if coord is None:
+        connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
+        return
+    if msg["accept"] is not True:
+        connection.send_error(msg["id"], "invalid_format", T("Accept the terms to import shop settings."))
+        return
+    try:
+        profile = validate_settings(msg["settings"])
+    except (ValueError, TypeError, AttributeError) as err:     # any malformed file is refused with a message
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
+    dropped = keys_for_moved_sources(coord.entry.options, profile)
+    options = {**{k: v for k, v in coord.entry.options.items() if k not in dropped}, CONF_SHOP_PROFILE: profile,
+               CONF_LEGAL: {"accepted": time.time(), "version": LEGAL_VERSION, "user": connection.user.id if connection.user else None}}
+    if isinstance(extra := msg["settings"].get("custom_shops"), list):     # shops you added by hand (an exported file)
+        try:
+            mine = {s["id"]: s for s in coord.entry.options.get("custom_shops", []) or []}
+            mine.update({(v := validate_custom_shop(s))["id"]: v for s in extra if isinstance(s, dict)})
+        except ValueError as err:
+            connection.send_error(msg["id"], "invalid_format", str(err))
+            return
+        options["custom_shops"] = [s for rid, s in mine.items() if rid not in {p["id"] for p in profile["shops"]}]
+    if profile.get("lego_locale") and not coord.entry.options.get("lego_locale"):
+        options["lego_locale"] = profile["lego_locale"]
+    options[CONF_KEY_HOSTS] = key_hosts(profile, options)
+    if dropped:
+        coord.log("warning", "settings", T("The address of a source with your API key changed in the imported settings: the key was removed. Enter it again if you trust the new address."), source="panel")
+    coord.log("info", "settings", T("Shop settings imported: {n} shops, {m} comparison sites; terms accepted",
+                                    n=len(profile["shops"]), m=len(profile["comparison_sites"])), source="panel")
+    coord._save()
+    hass.config_entries.async_update_entry(coord.entry, options=options)
+    connection.send_result(msg["id"], {"imported": True, "shops": len(profile["shops"])})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/shop_settings/export"})
+@callback
+def ws_shop_settings_export(hass, connection, msg):
+    """The shop settings in force, as a file you can import again."""
+    from .shops import export_settings
+
+    coord = _coord(hass)
+    if coord is None:
+        connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
+        return
+    connection.send_result(msg["id"], export_settings(dict(coord.entry.options)))
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/shop_settings/accept", vol.Required("accept"): bool})
+@websocket_api.async_response
+async def ws_shop_settings_accept(hass, connection, msg):
+    """Accept the terms for the shop settings already in place (carried over from an earlier version)."""
+    from .shops import CONF_LEGAL, CONF_SHOP_PROFILE, LEGAL_VERSION
+
+    coord = _coord(hass)
+    if coord is None:
+        connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
+        return
+    if not coord.entry.options.get(CONF_SHOP_PROFILE):
+        connection.send_error(msg["id"], "invalid_format", T("There are no shop settings yet: import a settings file."))
+        return
+    if msg["accept"] is not True:
+        connection.send_error(msg["id"], "invalid_format", T("Accept the terms to import shop settings."))
+        return
+    coord.log("info", "settings", T("Terms for the shop settings accepted"), source="panel")
+    coord._save()
+    hass.config_entries.async_update_entry(coord.entry, options={
+        **coord.entry.options, CONF_LEGAL: {"accepted": time.time(), "version": LEGAL_VERSION,
+                                            "user": connection.user.id if connection.user else None}})
+    connection.send_result(msg["id"], {"accepted": True})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/shop_settings/withdraw"})
+@websocket_api.async_response
+async def ws_shop_settings_withdraw(hass, connection, msg):
+    """Remove the imported shop settings and the acceptance of the terms: from then on no shop is contacted.
+    Your sets, prices and links stay."""
+    from .shops import CONF_LEGAL, CONF_SETUP_VERSION, CONF_SHOP_PROFILE, revoke
+
+    coord = _coord(hass)
+    if coord is None:
+        connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
+        return
+    options = {k: v for k, v in coord.entry.options.items() if k not in (CONF_SHOP_PROFILE, CONF_LEGAL)} | {CONF_SETUP_VERSION: 1}
+    revoke()                    # at once, not only after the reload
+    coord.log("info", "settings", T("Shop settings removed and terms withdrawn: no shop is contacted any more"), source="panel")
+    coord._save()
+    hass.config_entries.async_update_entry(coord.entry, options=options)
+    connection.send_result(msg["id"], {"withdrawn": True})
+
+
+@websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/settings/test_key",
                                   vol.Required("source"): vol.In(["brickset", "rebrickable", "bol"]),
                                   vol.Optional("key"): str, vol.Optional("secret"): str})
@@ -335,7 +444,7 @@ async def ws_test_key(hass, connection, msg):
         ok, text = await coord.test_bol(msg.get("key"), msg.get("secret"))
         connection.send_result(msg["id"], {"ok": ok, "message": text})
         return
-    key = msg.get("key") or (coord.opt(coord.entry, f"{msg['source']}_api_key", "") if coord else "")
+    key = msg.get("key") or (coord.api_key(f"{msg['source']}_api_key") if coord else "")
     ok, text = await test_metadata_source(async_get_clientsession(hass), msg["source"], key)
     connection.send_result(msg["id"], {"ok": ok, "message": text})
 
@@ -422,7 +531,7 @@ async def ws_notify_test(hass, connection, msg):
         rule, "🧱 " + tr("Test notification LEGO Price Tracker"),
         tr("This is what a notification of '{rule}' looks like.", rule=rule["name"])
         + (" " + tr("Example: {set}", set=f"{sample.get('set_number')} {sample.get('name') or ''}".strip()) if sample else ""),
-        url="https://www.lego.com" if rule.get("link") else None, image=sample.get("image") if rule.get("image") else None,
+        url=home_of(next(iter(RETAILERS), "")) if rule.get("link") else None, image=sample.get("image") if rule.get("image") else None,
         force=True)
     connection.send_result(msg["id"], {"results": res})
 
@@ -752,6 +861,9 @@ class RelayView(HomeAssistantView):
             limit = max(1, min(100, int(request.query.get("limit", "40"))))
         except ValueError:
             limit = 40
+        if request.query.get("mode") == "check":               # asked before every page: still allowed to fetch?
+            from .shops import ready
+            return self.json({"ready": ready() and coord.relay_enabled})
         if request.query.get("mode") == "continuous":          # the userscript's continuous check
             return self.json(coord.continuous_items(min(limit, 50)))
         return self.json(coord.relay_items(limit))
@@ -797,7 +909,7 @@ class UserscriptView(HomeAssistantView):
     async def get(self, request: web.Request) -> web.Response:
         from . import VERSION
         from .i18n import tr
-        from .shops import all_domains
+        from .shops import all_domains, readers_by_domain
 
         hass = request.app[KEY_HASS]
         template = await hass.async_add_executor_job(
@@ -810,6 +922,7 @@ class UserscriptView(HomeAssistantView):
         # Home Assistant itself (browser relay): this address and the panel on any address
         matches += f"\n// @include      {base}/*\n// @include      *://*/{PANEL_URL}*"
         body = (template.replace("{{VERSION}}", VERSION).replace("{{MATCHES}}", matches)
+                .replace("{{READERS}}", json.dumps(readers_by_domain(), sort_keys=True))
                 .replace("{{HA_URL}}", base).replace("{{SELF_URL}}", base + self.url))
         # {{t:English}} -> translated text, {{tj:English}} -> translated JS string literal
         body = re.sub(r"\{\{tj:(.+?)\}\}", lambda m: json.dumps(tr(m.group(1))), body)
