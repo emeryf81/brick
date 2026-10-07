@@ -716,8 +716,8 @@ def test_amazon_without_a_price_is_out_of_stock_on_every_amazon_site():
         assert parsers.parse_page(rid, "<html>Type the characters you see in this image</html>").blocked
     finally:
         shops.apply_shop_options({})
-    # a page without a product title (not a product page) is not called "sold out"
-    assert not parsers.parse_page("amazon_de", "<html><body>Hallo</body></html>").unavailable
+    # any Amazon page without a price counts as not in stock, also one without a product title
+    assert parsers.parse_page("amazon_de", "<html><body>Hallo</body></html>").reason == "sold_out"
 
 
 def test_bol_com_site_choice_belgium_or_netherlands():

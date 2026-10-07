@@ -2041,11 +2041,12 @@ async def test_debug_toggle_overrides_debug_ancestor(hass: HomeAssistant, entry)
         parent.setLevel(old_parent_level)
 
 
+# price, shop and discount always belong to the cheapest offer; only its link may be a comparison or search page
 @pytest.mark.parametrize("best_url, fallback, expected_price, expected_retailer", [
     ("https://www.amazon.nl/dp/B012345678", True, 35.0, "amazon_nl"),
-    ("https://www.kieskeurig.be/lego/product/123", True, 39.99, "bol"),
-    ("https://www.amazon.nl/s?k=lego+10281", True, 39.99, "bol"),
-    (None, True, 39.99, "bol"),
+    ("https://www.kieskeurig.be/lego/product/123", True, 35.0, "amazon_nl"),
+    ("https://www.amazon.nl/s?k=lego+10281", True, 35.0, "amazon_nl"),
+    (None, True, 35.0, "amazon_nl"),
     ("https://www.kieskeurig.be/lego/product/123", False, 35.0, "amazon_nl"),
     (None, False, 35.0, "amazon_nl"),
 ])
@@ -2091,10 +2092,10 @@ async def test_notification_offer_values_stay_together(
 
 
 @pytest.mark.parametrize("shops, expected_price, expected_retailer", [
-    ([], 39.99, "bol"),
+    ([], 35.0, "amazon_nl"),
     (["amazon_nl"], 35.0, "amazon_nl"),
-    (["amazon_nl", "amazon_de"], 45.0, "amazon_de"),
-    (["amazon_nl", "amazon_de", "bol"], 39.99, "bol"),
+    (["amazon_nl", "amazon_de"], 35.0, "amazon_nl"),
+    (["amazon_nl", "amazon_de", "bol"], 35.0, "amazon_nl"),
 ])
 async def test_notification_fallback_respects_rule_shops(
     hass: HomeAssistant, entry, shops, expected_price, expected_retailer,
@@ -3038,3 +3039,41 @@ async def test_deal_of_the_day_notification_once_a_day_from_its_time(hass: HomeA
         await c.notifier.send(rule, f"n{i}", "m")
     q = c.store["notify_queue"]["q"]
     assert len(q) == 50 and q[0]["title"] == "⭐ dotd" and q[-1]["title"] == "n59"
+
+
+async def test_deal_notification_keeps_price_shop_and_discount_together(hass: HomeAssistant, entry, no_network):
+    """The cheapest price is known only through a comparison site (Amazon via Shoparize): the notification
+    names that price and that shop with its discount, never LEGO.com's regular price next to Amazon's discount."""
+    from unittest.mock import patch as _patch
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "11382", "rrp": 129.99}, blocking=True)
+    c.store["offers"]["11382"].update({
+        "lego_com": {"url": "https://www.lego.com/nl-be/product/11382", "history": [[1, 129.99]], "last_price": 129.99, "available": True},
+        "amazon_be": {"url": "https://www.shoparize.com/be/q?q=lego+11382", "history": [[1, 88.99]], "last_price": 88.99, "available": True}})
+    st = {"best_price": 88.99, "best_retailer": "amazon_be", "best_url": "https://www.shoparize.com/be/q?q=lego+11382", "discount_rrp": 31.5}
+    click = "https://track.shoparize.com/site.php?pos=0&url=https%3A%2F%2Fwww.amazon.com.be%2Fdp%2FB0GGSLFWNB"
+    with _patch.object(c, "compare_prices", lambda num: {"amazon_be": {"price": 88.99, "url": click, "source": "shoparize"}}):
+        price, rid, url = c.notifier.shop_offer("11382", st)
+    assert (price, rid) == (88.99, "amazon_be") and url == "https://www.amazon.com.be/dp/B0GGSLFWNB"
+    with _patch.object(c, "compare_prices", lambda num: {}):
+        assert c.notifier.shop_offer("11382", st)[:2] == (88.99, "amazon_be")       # never LEGO.com's 129.99
+    # a rule for certain shops: the cheapest of those shops, with that shop's own price
+    assert c.notifier.shop_offer("11382", st, ["lego_com"]) == (129.99, "lego_com", "https://www.lego.com/nl-be/product/11382")
+
+
+async def test_old_amazon_no_price_errors_become_out_of_stock(hass: HomeAssistant, entry, no_network):
+    """Amazon 'price not found' errors stored by earlier versions leave Open errors at the next start (as
+    'not in stock'), without counting as solved errors; other shops' errors stay."""
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
+    c.store["offers"]["10281"].update({
+        "amazon_nl": {"url": "https://www.amazon.nl/dp/B0AAAAAAAA", "history": [], "error": "price not found on the page", "available": False},
+        "bol": {"url": "https://www.bol.com/nl/nl/p/x/1/", "history": [], "error": "price not found on the page", "available": False}})
+    c._track_errors()
+    assert {"10281|amazon_nl", "10281|bol"} <= set(c.store["err_track"]["open"])
+    c._amazon_no_price_is_out_of_stock()
+    o = c.store["offers"]["10281"]["amazon_nl"]
+    assert o["error"] is None and o["unavailable"] == "sold_out" and "10281|amazon_nl" not in c.open_error_keys()
+    assert "10281|bol" in c.open_error_keys()
+    c._track_errors()
+    assert not any(k == "10281|amazon_nl" for _, k, _ in c.store["err_track"]["solved"])

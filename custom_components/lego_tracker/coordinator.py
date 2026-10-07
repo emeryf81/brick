@@ -129,6 +129,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.scan = sc.get("sets") or {}
         self._drop_old_source_links()
         self._bol_links_to_site()
+        self._amazon_no_price_is_out_of_stock()
         self._fix_lost_commas()
         self._rename_market_source()
         self._watch_dates(first=True)
@@ -919,6 +920,25 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for e in (self.store.get("compare", {}).get("brickeconomy") or {}).values():
             if e.get("name") == old:
                 e["name"] = new
+
+    AMAZON_NO_PRICE = ("price not found on the page",)
+
+    def _amazon_no_price_is_out_of_stock(self) -> None:
+        """An Amazon page without a price means not in stock, never an error (since 0.10.0). Errors stored by
+        earlier versions become that warning at every start; they leave Open errors without counting as solved."""
+        from .parsers import is_amazon
+
+        track = (self.store.get("err_track") or {}).get("open") or {}
+        moved = 0
+        for num, offers in self.store["offers"].items():
+            for rid, o in offers.items():
+                if is_amazon(rid) and o.get("error") in self.AMAZON_NO_PRICE and not o.get("manual_price"):
+                    o.update(error=None, available=False, unavailable="sold_out")
+                    o.pop("ignored_error", None)
+                    track.pop(f"{num}|{rid}", None)
+                    moved += 1
+        if moved:
+            self.log("info", "shop", T("{n} Amazon pages without a price are now 'not in stock' instead of an error", n=moved), source="server")
 
     def _bol_links_to_site(self) -> None:
         """Your bol.com links point at the bol.com site chosen in Settings (bol.com/nl/nl or bol.com/be/nl),

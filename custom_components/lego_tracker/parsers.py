@@ -441,8 +441,8 @@ def parse_page(retailer: str, page: str, set_number: str | None = None) -> Parse
     amazon = is_amazon(retailer)
     parser = parse_amazon if amazon else PARSERS.get(retailer, parse_generic)
     result = parser(page)
-    if amazon and result.price is None and not result.blocked and (result.title or result.unavailable):
-        # an Amazon product page without a price in the buy box: not in stock (at Amazon), never an error
+    if amazon and result.price is None and not result.blocked:
+        # an Amazon page without a price in the buy box: not in stock (at Amazon), never an error
         result.unavailable, result.reason = True, "sold_out"
         return result
     if result.price is None and not result.blocked and not result.unavailable:

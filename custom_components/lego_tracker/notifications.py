@@ -235,20 +235,33 @@ class Notifier:
 
     def shop_offer(self, num: str, status: dict[str, Any],
                    shops: list[str] | None = None) -> tuple[float | None, str | None, str | None]:
-        """The product page at the cheapest shop (never a comparison page or a search page when a real
-        product link exists), so one tap opens the item where it is cheapest."""
+        """(price, shop, link) of the cheapest offer: the price and shop the deal is about, always together,
+        never a dearer shop's price next to the cheapest shop's discount. The link is that shop's product page;
+        a price that only a comparison site knows links to the comparison site's click-out to that shop
+        (the shop's own address when the click-out carries it), and only then to the comparison page."""
+        from urllib.parse import parse_qs, urlparse
+
         from .compare import is_compare_url
         from .parsers import is_search_url
 
-        best = status.get("best_url")
-        selected = (status.get("best_price"), status.get("best_retailer"), best)
-        if best and not is_compare_url(best) and not is_search_url(best):
-            return selected
+        real = lambda u: bool(u) and not is_compare_url(u) and not is_search_url(u)  # noqa: E731
+        price, rid, best = status.get("best_price"), status.get("best_retailer"), status.get("best_url")
         offers = self.store["offers"].get(num, {})
-        priced = sorted((o["last_price"], rid, o["url"]) for rid, o in offers.items()
-                        if (not shops or rid in shops) and o.get("available") and o.get("last_price") and o.get("url")
-                        and not is_compare_url(o["url"]) and not is_search_url(o["url"]))
-        return priced[0] if priced else selected
+        if shops and rid not in shops:              # a rule for certain shops: the cheapest of those shops
+            priced = sorted((o["last_price"], r, o["url"]) for r, o in offers.items()
+                            if r in shops and o.get("available") and o.get("last_price") and o.get("url"))
+            if not priced:
+                return price, rid, best
+            price, rid, best = priced[0]
+        if real(best):
+            return price, rid, best
+        if real(url := (offers.get(rid) or {}).get("url")):
+            return price, rid, url
+        click = (self.coord.compare_prices(num).get(rid) or {}).get("url") if rid else None
+        if click:
+            target = (parse_qs(urlparse(click).query).get("url") or [""])[0]
+            return price, rid, target if target.startswith("https://") else click
+        return price, rid, best
 
     # ---------------------------------------------------------------- events
     async def on_set_change(self, num: str, before: dict[str, Any], after: dict[str, Any]) -> None:
