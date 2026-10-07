@@ -438,8 +438,13 @@ PARSERS = {
 def parse_page(retailer: str, page: str, set_number: str | None = None) -> Parsed:
     if retailer == "lego_com":
         return parse_lego(page, set_number)       # never the generic fallback: it may read a recommended product
-    parser = PARSERS.get(retailer, parse_generic)
+    amazon = is_amazon(retailer)
+    parser = parse_amazon if amazon else PARSERS.get(retailer, parse_generic)
     result = parser(page)
+    if amazon and result.price is None and not result.blocked and (result.title or result.unavailable):
+        # an Amazon product page without a price in the buy box: not in stock (at Amazon), never an error
+        result.unavailable, result.reason = True, "sold_out"
+        return result
     if result.price is None and not result.blocked and not result.unavailable:
         fallback = parse_generic(page)
         if fallback.price is not None:
@@ -452,14 +457,22 @@ def parse_page(retailer: str, page: str, set_number: str | None = None) -> Parse
 
 
 # --------------------------------------------------------------- URL handling
+def is_amazon(retailer: str) -> bool:
+    """Any Amazon site: the built-in ones and a shop you add yourself on amazon.fr, amazon.it, amazon.co.uk..."""
+    if retailer in AMAZON_DOMAINS:
+        return True
+    return bool(re.fullmatch(r"(?:www\.)?amazon\.(?:[a-z]{2,3}|com?\.[a-z]{2})", (domain_of(retailer) or "").lower()))
+
+
 def amazon_url(retailer: str, asin: str) -> str:
-    return f"https://www.{AMAZON_DOMAINS[retailer]}/dp/{asin}"
+    domain = AMAZON_DOMAINS.get(retailer) or (domain_of(retailer) or "").removeprefix("www.")
+    return f"https://www.{domain}/dp/{asin}"
 
 
 def normalize_url(retailer: str, url_or_id: str) -> str:
     """Accept a full URL, or for Amazon a bare ASIN."""
     value = url_or_id.strip()
-    if retailer in AMAZON_DOMAINS:
+    if is_amazon(retailer):
         m = re.search(r"(?:/dp/|/gp/product/|^)(B[0-9A-Z]{9}|\d{9}[\dX])(?:[/?#]|$)", value)
         if m:
             return amazon_url(retailer, m.group(1))
@@ -624,7 +637,7 @@ def find_search_result(retailer: str, page: str, set_number: str, skip: set[str]
     """First search hit whose *title* passes title_check (set number, LEGO, no accessory/knock-off).
     skip: url_keys of links you blocked for this set; the next good hit is taken instead."""
     ok = lambda u: url_key(retailer, u) not in skip  # noqa: E731
-    if retailer in AMAZON_DOMAINS:
+    if is_amazon(retailer):
         for asin, title in _amazon_results(page):
             if title_check(title, set_number)[0] == "ok" and ok(amazon_url(retailer, asin)):
                 return amazon_url(retailer, asin)
@@ -768,7 +781,7 @@ def retailer_from_url(url: str) -> str | None:
 
 def url_key(retailer: str, url: str) -> str:
     """Stable identity of a product page (ASIN for Amazon, path without query otherwise)."""
-    if retailer in AMAZON_DOMAINS:
+    if is_amazon(retailer):
         m = re.search(r"/(?:dp|gp/product)/([A-Z0-9]{10})", url)
         if m:
             return m.group(1)

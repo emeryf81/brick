@@ -694,3 +694,27 @@ def test_parse_lego_status_words_in_the_product_section_and_meta():
     assert p.price is None and p.reason == "discontinued"
     p = parsers.parse_page("lego_com", f"<html><head>{canon}{meta.format(a='out of stock')}</head></html>", "60500")
     assert p.price is None and p.reason == "sold_out" and p.list_price == 29.99
+
+
+def test_amazon_without_a_price_is_out_of_stock_on_every_amazon_site():
+    """An Amazon product page without a price in the buy box means the set is not in stock there: a warning,
+    never an error. That holds for the built-in Amazon shops and for one you add yourself (amazon.fr...)."""
+    from lego_pkg import shops
+    page = '<html><span id="productTitle">LEGO Icons 10280 Bloemenboeket</span><div id="buybox">See all buying options</div></html>'
+    p = parsers.parse_page("amazon_nl", page)
+    assert p.price is None and p.unavailable and p.reason == "sold_out" and p.title.startswith("LEGO Icons")
+    shops.apply_shop_options({"custom_shops": [{"name": "Amazon FR", "domain": "amazon.fr",
+                                                "search": "https://www.amazon.fr/s?k={query}"}]})
+    try:
+        rid = shops.shop_id("Amazon FR")
+        assert parsers.is_amazon(rid) and not parsers.is_amazon("bol")
+        p = parsers.parse_page(rid, page)
+        assert p.unavailable and p.reason == "sold_out"
+        assert parsers.normalize_url(rid, "B0BX8YQ8M1") == "https://www.amazon.fr/dp/B0BX8YQ8M1"
+        assert parsers.url_key(rid, "https://www.amazon.fr/dp/B0BX8YQ8M1?th=1") == "B0BX8YQ8M1"
+        # a captcha page is still blocked, not "sold out"
+        assert parsers.parse_page(rid, "<html>Type the characters you see in this image</html>").blocked
+    finally:
+        shops.apply_shop_options({})
+    # a page without a product title (not a product page) is not called "sold out"
+    assert not parsers.parse_page("amazon_de", "<html><body>Hallo</body></html>").unavailable
