@@ -39,7 +39,7 @@ from .i18n import DEFAULT_LANGUAGE, LANGUAGES, LocalizedError, T, resolve, set_l
 from .notifications import Notifier, default_rules
 from .bol_api import BolApi, BolApiError
 from . import catalog, sitemaps, compare, setdb, scan
-from .shops import all_domains, domain_of
+from .shops import all_domains, bol_site, bol_site_url, domain_of
 from .parsers import Parsed, title_check, wrong_product
 from .shops import SEARCH, valid_search
 from .parsers import BUILTIN_WORDS, KNOCKOFF_RE, find_search_result, is_search_url, search_url, accessory_word, set_custom_words, clean_title, normalize_url, retailer_from_url, url_key
@@ -128,6 +128,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if (sc := await self._scan_store.async_load()):
             self.scan = sc.get("sets") or {}
         self._drop_old_source_links()
+        self._bol_links_to_site()
         self._fix_lost_commas()
         self._rename_market_source()
         self._watch_dates(first=True)
@@ -717,10 +718,9 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # ------------------------------------------------------------ bol.com API
     @property
     def bol_country(self) -> str:
-        c = str(self.opt(self.entry, CONF_BOL_COUNTRY, "auto") or "auto").upper()
-        if c in ("NL", "BE"):
-            return c
-        return "BE" if str(self.opt(self.entry, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE)).lower().endswith("-be") else "NL"
+        """The bol.com site asked for prices and links (scraping and API alike): "NL" or "BE"."""
+        return bol_site({CONF_BOL_COUNTRY: self.opt(self.entry, CONF_BOL_COUNTRY, "auto"),
+                         CONF_LEGO_LOCALE: self.opt(self.entry, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE)}).upper()
 
     @property
     def bol_api(self) -> BolApi | None:
@@ -902,6 +902,13 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for e in (self.store.get("compare", {}).get("brickeconomy") or {}).values():
             if e.get("name") == old:
                 e["name"] = new
+
+    def _bol_links_to_site(self) -> None:
+        """Your bol.com links point at the bol.com site chosen in Settings (bol.com/nl/nl or bol.com/be/nl),
+        so prices, links you open and the browser relay all use the same site."""
+        for offers in self.store["offers"].values():
+            if (o := offers.get("bol")) and o.get("url") and (new := bol_site_url(o["url"])) != o["url"]:
+                o["url"] = new
 
     def _fix_lost_commas(self) -> None:
         """Older panels used number fields in which some phone keyboards dropped the decimal comma
@@ -1976,7 +1983,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "cycle_choices": list(CYCLE_CHOICES), "watch_cycle_choices": list(WATCH_CYCLE_CHOICES), "watch_limit": self.watch_limit,
             "dev": {k: self.dev(k) for k in (CONF_DEV_FIXED_TIMES, CONF_DEV_FULL_REFRESH, CONF_DEV_FREE_CYCLE, CONF_DEV_WATCH_UNLIMITED)},
             "language": o.get(CONF_LANGUAGE, DEFAULT_LANGUAGE), "languages": LANGUAGES,
-            "bol_country": o.get(CONF_BOL_COUNTRY, "auto"), "bol_api": bool(self.bol_api),
+            "bol_country": self.bol_country, "bol_api": bool(self.bol_api),
             "browser_relay": bool(o.get(CONF_RELAY, True)), "compare": self.compare_enabled,
             "market_value": self.market_enabled, "ticker": self.ticker, "deal_filter": self.deal_filter,
             "catalog_scan": self.scan_per_day, "scan_choices": list(scan.PER_DAY_CHOICES),

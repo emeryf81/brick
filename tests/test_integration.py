@@ -846,9 +846,10 @@ async def test_bol_api_finds_and_prices_without_scraping(hass: HomeAssistant, en
          "offer": {"price": 37.99}}]})
     aioclient_mock.get(_re.compile(r"https://api\.bol\.com/marketing/catalog/v1/products/5702016912340/offers/best.*"),
                        json={"ean": "5702016912340", "price": 36.5, "strikethroughPrice": 49.99, "deliveryDescription": "Op voorraad"})
-    hass.config_entries.async_update_entry(entry, options={**entry.options, "bol_client_id": "client-id-123", "bol_client_secret": "s3cr3t/key+=="})
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "bol_client_id": "client-id-123", "bol_client_secret": "s3cr3t/key+==",
+                                                                  "bol_country": "BE"})
     c = await _setup(hass, entry)
-    assert c.bol_api and c.bol_country == "BE"                      # lego_locale nl-be
+    assert c.bol_api and c.bol_country == "BE"                      # bol.com/be/nl chosen in Settings
     await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281", "rrp": 49.99}, blocking=True)
     res = await c.fetch_shop("10281", "bol")
     o = c.store["offers"]["10281"]["bol"]
@@ -2908,3 +2909,16 @@ async def test_lego_out_of_the_range_takes_no_price_and_rests(hass: HomeAssistan
     no_network.return_value = (Parsed(24.99, "Treinstation"), None)
     await c.lego_lookup("60050", force=True)
     assert "unavailable" not in o and "discontinued_at" not in o
+
+
+async def test_bol_links_move_to_the_chosen_bol_site(hass: HomeAssistant, entry, no_network):
+    """Choosing bol.com/be/nl moves your bol.com links there (and the page is fetched from that site)."""
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
+    await hass.services.async_call(DOMAIN, "set_offer", {"set_number": "10281", "retailer": "bol",
+                                                         "url": "https://www.bol.com/nl/nl/p/lego-bonsai/9300000038297067/"}, blocking=True)
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "bol_country": "BE"})
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][entry.entry_id]
+    assert c.bol_country == "BE"
+    assert c.store["offers"]["10281"]["bol"]["url"] == "https://www.bol.com/be/nl/p/lego-bonsai/9300000038297067/"

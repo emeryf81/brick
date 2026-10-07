@@ -13,7 +13,8 @@ from .i18n import LocalizedError
 from .const import BUILTIN_RETAILERS, DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, GENERIC_SHOPS, RETAILERS
 
 SEARCH: dict[str, str] = dict(DEFAULT_SEARCH)      # effective search template per shop
-LOCALE = {"lego": DEFAULT_LEGO_LOCALE}
+LOCALE = {"lego": DEFAULT_LEGO_LOCALE, "bol": "nl"}  # "bol": which bol.com site is asked, "nl" (bol.com/nl/nl) or "be"
+BOL_PATH_RE = re.compile(r"(bol\.com)/(?:nl|be)/nl/", re.I)
 
 _BUILTIN_GENERIC = {k: dict(v) for k, v in GENERIC_SHOPS.items()}
 FIXED_DOMAINS = {"lego_com": "lego.com", "amazon_nl": "amazon.nl", "amazon_de": "amazon.de", "amazon_be": "amazon.com.be",
@@ -66,6 +67,20 @@ def apply_shop_options(options: dict[str, Any]) -> None:
             if rid in GENERIC_SHOPS:
                 GENERIC_SHOPS[rid]["search"] = tpl
     LOCALE["lego"] = (options.get("lego_locale") or DEFAULT_LEGO_LOCALE).lower()
+    LOCALE["bol"] = bol_site(options)
+    if SEARCH.get("bol") == DEFAULT_SEARCH.get("bol"):     # your own search URL for bol.com stays as you wrote it
+        SEARCH["bol"] = bol_site_url(SEARCH["bol"])
+
+
+def bol_site(options: dict[str, Any]) -> str:
+    """The bol.com site to ask: "be" (bol.com/be/nl) or "nl" (bol.com/nl/nl), as chosen in Settings.
+    Not chosen yet ("auto"): bol.com/nl/nl, the site that was always asked before the choice existed."""
+    return "be" if str(options.get("bol_country") or "").upper() == "BE" else "nl"
+
+
+def bol_site_url(url: str) -> str:
+    """The same bol.com page on the chosen site (bol.com/nl/nl/p/... ↔ bol.com/be/nl/p/...)."""
+    return BOL_PATH_RE.sub(lambda m: f"{m.group(1)}/{LOCALE['bol']}/nl/", url or "")
 
 
 def domain_of(rid: str) -> str | None:

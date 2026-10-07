@@ -15,7 +15,7 @@ from urllib.parse import quote_plus, urlparse
 from .const import GENERIC_SHOPS
 from .i18n import T
 from .models import parse_price
-from .shops import LOCALE, SEARCH, all_domains, domain_of
+from .shops import BOL_PATH_RE, LOCALE, SEARCH, all_domains, bol_site_url, domain_of
 
 
 @dataclass
@@ -642,8 +642,8 @@ def find_search_result(retailer: str, page: str, set_number: str, skip: set[str]
             if title_check(title, set_number)[0] == "ok" and ok(amazon_url(retailer, asin)):
                 return amazon_url(retailer, asin)
     elif retailer == "bol":
-        for href in dict.fromkeys(re.findall(r'href="(/nl/nl/p/[^"]+)"', page)):
-            url = "https://www.bol.com" + href.split("?")[0]
+        for href in dict.fromkeys(re.findall(r'href="(/(?:nl|be)/nl/p/[^"]+)"', page)):
+            url = bol_site_url("https://www.bol.com" + href.split("?")[0])
             if title_check(f"lego {slug_title(url) or ''}", set_number)[0] == "ok" and ok(url):
                 return url
     elif retailer == "kruidvat_be":
@@ -785,5 +785,7 @@ def url_key(retailer: str, url: str) -> str:
         m = re.search(r"/(?:dp|gp/product)/([A-Z0-9]{10})", url)
         if m:
             return m.group(1)
+    if retailer == "bol":                              # the same product on bol.com/nl/nl and bol.com/be/nl
+        url = BOL_PATH_RE.sub(r"\1/nl/nl/", url)
     parsed = urlparse(url)
     return parsed.path.rstrip("/").lower()

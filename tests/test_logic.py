@@ -718,3 +718,25 @@ def test_amazon_without_a_price_is_out_of_stock_on_every_amazon_site():
         shops.apply_shop_options({})
     # a page without a product title (not a product page) is not called "sold out"
     assert not parsers.parse_page("amazon_de", "<html><body>Hallo</body></html>").unavailable
+
+
+def test_bol_com_site_choice_belgium_or_netherlands():
+    """bol.com/nl/nl or bol.com/be/nl: only the chosen site is asked (search, links, the same product key)."""
+    from lego_pkg import shops
+    try:
+        shops.apply_shop_options({"bol_country": "BE"})
+        assert shops.LOCALE["bol"] == "be" and "bol.com/be/nl/" in parsers.search_url("bol", "10280")
+        assert shops.bol_site_url("https://www.bol.com/nl/nl/p/lego-10280/9300000/") == "https://www.bol.com/be/nl/p/lego-10280/9300000/"
+        page = '<a href="/nl/nl/p/lego-icons-10280-bloemenboeket/9300000123/">x</a>'
+        assert parsers.find_search_result("bol", page, "10280") == "https://www.bol.com/be/nl/p/lego-icons-10280-bloemenboeket/9300000123/"
+        # the same product on both sites is one product (a link you blocked stays blocked)
+        assert parsers.url_key("bol", "https://www.bol.com/be/nl/p/x/93/") == parsers.url_key("bol", "https://www.bol.com/nl/nl/p/x/93")
+        shops.apply_shop_options({"bol_country": "NL"})
+        assert shops.LOCALE["bol"] == "nl" and "bol.com/nl/nl/" in parsers.search_url("bol", "10280")
+        shops.apply_shop_options({"bol_country": "auto", "lego_locale": "nl-be"})   # not chosen yet: bol.com/nl/nl, as before
+        assert shops.LOCALE["bol"] == "nl"
+        # your own search URL for bol.com is kept as you wrote it
+        shops.apply_shop_options({"bol_country": "BE", "shop_search": {"bol": "https://www.bol.com/nl/nl/s/?searchtext={query}&x=1"}})
+        assert parsers.search_url("bol", "1").startswith("https://www.bol.com/nl/nl/s/")
+    finally:
+        shops.apply_shop_options({})

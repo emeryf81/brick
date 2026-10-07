@@ -1979,8 +1979,9 @@ class LegoTrackerPanel extends HTMLElement {
       <div class="panel"><h3>🛒 ${"bol.com API"}${st.bol_api ? ` <span class="lk ok">${t("active")}</span>` : ""}</h3>
         <p>${t("bol.com blocks most servers, so the reliable way is bol.com's own API: free with a bol.com affiliate account (Partnerprogramma). Create API credentials there (client id + secret) and paste them here. Prices and links for bol.com then come from the API, without scraping or blocks.")} <a href="https://partner.bol.com" target="_blank" rel="noopener noreferrer">partner.bol.com ↗</a></p>
         ${keyRow("bol_client_id", t("Client id"), "", "https://partner.bol.com")}
-        ${keyRow("bol_client_secret", t("Client secret"), "", "https://partner.bol.com")}
-        <div class="form" style="max-width:420px"><label>${t("bol.com country")}<select id="o_bolc">${[["auto", t("Automatic (from the LEGO.com country)")], ["NL", "bol.com NL"], ["BE", "bol.com BE"]].map(([v, l]) => `<option value="${v}" ${st.bol_country === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label></div></div>
+        ${keyRow("bol_client_secret", t("Client secret"), "", "https://partner.bol.com")}</div>
+      <div class="panel"><h3>🇳🇱🇧🇪 ${t("bol.com: which site")}</h3><p>${t("bol.com has a Dutch and a Belgian site with their own prices. Only the site you pick here is asked, for prices, for finding links and through the API; your links are moved to it.")}</p>
+        <div class="radio">${[["NL", "bol.com/nl/nl", t("Netherlands")], ["BE", "bol.com/be/nl", t("Belgium")]].map(([v, l, d]) => `<label class="${st.bol_country === v ? "on" : ""}"><input type="radio" name="bolc" value="${v}" ${st.bol_country === v ? "checked" : ""}><b>${l}</b><span>${d}</span></label>`).join("")}</div></div>
       <div class="panel"><h3>🔁 ${t("Browser relay")}</h3>
         <p>${t("With the userscript installed, your own browser fetches the shop pages that fail on the server (for example bol.com or Amazon) in the background while Home Assistant is open, and sends the prices. Your browser is a normal visitor, so it is rarely blocked. See Manage → Userscript.")}</p>
         <div class="form"><label class="chk"><input type="checkbox" id="o_relay" ${st.browser_relay ? "checked" : ""}> ${t("Browser relay on")}</label>
@@ -2275,7 +2276,7 @@ class LegoTrackerPanel extends HTMLElement {
       const se = tr.querySelector(".s_search"); if (se) { x.search = se.value.trim() || x.default_search || ""; const c = d.custom.find((y) => y.id === x.id); if (c) c.search = x.search; }
     });
     const radios = (name) => root.querySelectorAll(`input[name=${name}]`).forEach((r) => r.addEventListener("change", () => r.closest(".radio").querySelectorAll("label").forEach((l) => l.classList.toggle("on", l.querySelector("input").checked))));
-    radios("vsrc"); radios("rmode");
+    radios("vsrc"); radios("rmode"); radios("bolc");
     root.querySelectorAll("input[name=rmode]").forEach((r) => r.addEventListener("change", () => { d.mode = r.value; $("rm_spread").hidden = r.value !== "spread"; $("rm_times").hidden = r.value !== "times"; }));
     const rateHints = () => {
       const r = (this.state.data.schedule || {}).rates, watched = r ? r.watched : this.sets.filter((x) => x.watched).length;
@@ -2331,7 +2332,7 @@ class LegoTrackerPanel extends HTMLElement {
       // a number field some phone keyboards leave empty: keep the saved number instead of 0
       const tkn = (k) => { const v = parseInt(String($("o_tkn_" + k).value).replace(/\D/g, ""), 10); return Number.isFinite(v) ? Math.max(0, Math.min(50, v)) : ((st.ticker || {})["max_" + k] ?? 3); };
       f.ticker = { ...Object.fromEntries(["watch", "deals", "news"].flatMap((k) => [[k, $("o_tk_" + k).checked], ["max_" + k, tkn(k)]])), shuffle: $("o_tk_shuffle").checked };
-      f.bol_country = $("o_bolc").value; f.browser_relay = $("o_relay").checked; f.relay_hours = +$("o_relayh").value || 6;
+      f.bol_country = (root.querySelector("input[name=bolc]:checked") || {}).value || "NL"; f.browser_relay = $("o_relay").checked; f.relay_hours = +$("o_relayh").value || 6;
       f.block_words = lines($("o_block").value); f.allow_words = lines($("o_allow").value);
       for (const k of ["brickset_api_key", "rebrickable_api_key", "bol_client_id", "bol_client_secret"]) { const el = $("k_" + k), v = el.value.trim(); if (v) f[k] = v; else if (el.dataset.clear) f[k] = ""; }
       if (!f.retailers.length) return this.toast(t("Switch on at least one shop"), "err");
