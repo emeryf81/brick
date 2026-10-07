@@ -694,3 +694,75 @@ def test_parse_lego_status_words_in_the_product_section_and_meta():
     assert p.price is None and p.reason == "discontinued"
     p = parsers.parse_page("lego_com", f"<html><head>{canon}{meta.format(a='out of stock')}</head></html>", "60500")
     assert p.price is None and p.reason == "sold_out" and p.list_price == 29.99
+
+
+def test_amazon_without_a_price_is_out_of_stock_on_every_amazon_site():
+    """An Amazon product page without a price in the buy box means the set is not in stock there: a warning,
+    never an error. That holds for the built-in Amazon shops and for one you add yourself (amazon.fr...)."""
+    from lego_pkg import shops
+    page = '<html><span id="productTitle">LEGO Icons 10280 Bloemenboeket</span><div id="buybox">See all buying options</div></html>'
+    p = parsers.parse_page("amazon_nl", page)
+    assert p.price is None and p.unavailable and p.reason == "sold_out" and p.title.startswith("LEGO Icons")
+    shops.apply_shop_options({"custom_shops": [{"name": "Amazon FR", "domain": "amazon.fr",
+                                                "search": "https://www.amazon.fr/s?k={query}"}]})
+    try:
+        rid = shops.shop_id("Amazon FR")
+        assert parsers.is_amazon(rid) and not parsers.is_amazon("bol")
+        p = parsers.parse_page(rid, page)
+        assert p.unavailable and p.reason == "sold_out"
+        assert parsers.normalize_url(rid, "B0BX8YQ8M1") == "https://www.amazon.fr/dp/B0BX8YQ8M1"
+        assert parsers.url_key(rid, "https://www.amazon.fr/dp/B0BX8YQ8M1?th=1") == "B0BX8YQ8M1"
+        # a captcha page is still blocked, not "sold out"
+        assert parsers.parse_page(rid, "<html>Type the characters you see in this image</html>").blocked
+    finally:
+        shops.apply_shop_options({})
+    # a page without a product title (not a product page) is not called "sold out"
+    assert not parsers.parse_page("amazon_de", "<html><body>Hallo</body></html>").unavailable
+
+
+def test_bol_com_site_choice_belgium_or_netherlands():
+    """bol.com/nl/nl or bol.com/be/nl: only the chosen site is asked (search, links, the same product key)."""
+    from lego_pkg import shops
+    try:
+        shops.apply_shop_options({"bol_country": "BE"})
+        assert shops.LOCALE["bol"] == "be" and "bol.com/be/nl/" in parsers.search_url("bol", "10280")
+        assert shops.bol_site_url("https://www.bol.com/nl/nl/p/lego-10280/9300000/") == "https://www.bol.com/be/nl/p/lego-10280/9300000/"
+        page = '<a href="/nl/nl/p/lego-icons-10280-bloemenboeket/9300000123/">x</a>'
+        assert parsers.find_search_result("bol", page, "10280") == "https://www.bol.com/be/nl/p/lego-icons-10280-bloemenboeket/9300000123/"
+        # the same product on both sites is one product (a link you blocked stays blocked)
+        assert parsers.url_key("bol", "https://www.bol.com/be/nl/p/x/93/") == parsers.url_key("bol", "https://www.bol.com/nl/nl/p/x/93")
+        shops.apply_shop_options({"bol_country": "NL"})
+        assert shops.LOCALE["bol"] == "nl" and "bol.com/nl/nl/" in parsers.search_url("bol", "10280")
+        shops.apply_shop_options({"bol_country": "auto", "lego_locale": "nl-be"})   # not chosen yet: bol.com/nl/nl, as before
+        assert shops.LOCALE["bol"] == "nl"
+        # your own search URL for bol.com is kept as you wrote it
+        shops.apply_shop_options({"bol_country": "BE", "shop_search": {"bol": "https://www.bol.com/nl/nl/s/?searchtext={query}&x=1"}})
+        assert parsers.search_url("bol", "1").startswith("https://www.bol.com/nl/nl/s/")
+    finally:
+        shops.apply_shop_options({})
+
+
+def test_parser_lab_explains_why_there_is_no_or_a_wrong_price():
+    """The lab says in plain words what goes wrong: amounts on the page in places the parser doesn't trust,
+    bot protection, a price far below the RRP, an Amazon page without a buy box, a JavaScript shell."""
+    from lego_pkg import lab
+    texts = lambda r: " ".join(f["text"] for f in r["findings"])  # noqa: E731
+    page = "<html><title>LEGO 10280 Bloemen</title><body><h1>LEGO Icons 10280 Bloemenboeket</h1>" + "tekst " * 2000 + \
+           "<div class='x'>Nu maar 49,99 €</div><div>Verzending 4,99 €</div></body></html>"
+    p = parsers.parse_page("c_shop", page, "10280")
+    r = lab.analyze("c_shop", page, parsers.Parsed(None, "LEGO Icons 10280 Bloemenboeket"), "10280", url="https://shop.be/p/10280")
+    assert r["verdict"] == "no_price" and "49.99" in texts(r) and r["amounts"][0]["price"] in (49.99, 4.99)
+    blocked = "<html>Type the characters you see in this image</html>"
+    r = lab.analyze("amazon_nl", blocked, parsers.parse_page("amazon_nl", blocked), "10280")
+    assert r["verdict"] == "blocked" and "Type the characters" in texts(r)
+    r = lab.analyze("c_shop", page, parsers.Parsed(9.99, "LEGO 10280 lichtset"), "10280", rrp=49.99)
+    assert r["verdict"] == "suspect" and "35%" in texts(r)
+    amz = '<html><span id="productTitle">LEGO 10280</span></html>'
+    r = lab.analyze("amazon_nl", amz, parsers.parse_page("amazon_nl", amz), "10280")
+    assert r["verdict"] == "unavailable" and "buy box" in texts(r)
+    shell = '<html><body><div id="app"></div><noscript>Please enable JavaScript</noscript></body></html>'
+    r = lab.analyze("c_shop", shell, parsers.Parsed(None), "10280")
+    assert "JavaScript" in texts(r) and r["verdict"] == "no_price"
+    r = lab.analyze("c_shop", "", parsers.Parsed(None), "10280", status=404, error="page not found (HTTP 404)")
+    assert r["verdict"] == "error" and "out of date" in texts(r)
+    assert p.price is None or p.price == 49.99

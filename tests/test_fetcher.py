@@ -123,3 +123,20 @@ async def test_oversized_pages_are_refused(hass, aiohttp_server, impersonate, mo
     parsed, err = await f.fetch_offer("bol", str(srv.make_url("/p")))
     assert err is None and parsed.price == 12.34
     await f.async_close()
+
+
+def test_redirects_are_anchored_to_the_shops_own_domain():
+    """A shop's pages may only redirect within the shop's domain, not within a shared suffix like ne.jp."""
+    from custom_components.lego_tracker import client, shops
+    shops.apply_shop_options({"custom_shops": [{"name": "Foo JP", "domain": "foo.ne.jp", "search": ""}]})
+    try:
+        rid = shops.shop_id("Foo JP")
+        home = client.redirect_home(rid, "https://www.foo.ne.jp/p/1")
+        assert home == "foo.ne.jp"
+        client.check_url("https://shop.foo.ne.jp/x", home)
+        with pytest.raises(ValueError):
+            client.check_url("https://bar.ne.jp/x", home)
+        assert client.redirect_home("bol", "https://www.bol.com/nl/nl/p/1") == "bol.com"
+        assert client.redirect_home("kieskeurig", "https://www.kieskeurig.nl/x") == "kieskeurig.nl"   # no shop domain
+    finally:
+        shops.apply_shop_options({})

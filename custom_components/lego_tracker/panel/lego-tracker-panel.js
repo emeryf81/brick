@@ -78,7 +78,7 @@ const signPct = (v) => (v == null ? "–" : `${v > 0 ? "+" : ""}${v.toLocaleStri
 const DATE = (ts, o = { day: "2-digit", month: "short" }) => new Date(ts * 1000).toLocaleDateString(LOC, o);
 const TIME = (ts) => new Date(ts * 1000).toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" });
 /** What this panel needs from the server (API_LEVEL in const.py). Different = Home Assistant still runs older code. */
-const API_LEVEL = 7;
+const API_LEVEL = 8;
 const SRC = { kieskeurig: "Kieskeurig", shoparize: "Shoparize", channable: "Channable Shopping", producthero: "Producthero", brickeconomy: "Market value" };
 /** How a price was read, as one letter: ⓤ your own browser (userscript), ⓢ ⓚ ⓒ ⓟ ⓑ a comparison site, ⌂ the shop's own site. */
 const VIA_MARK = { relay: "ⓤ", userscript: "ⓤ", shoparize: "ⓢ", kieskeurig: "ⓚ", channable: "ⓒ", producthero: "ⓟ", brickeconomy: "ⓜ" };
@@ -115,7 +115,12 @@ const ago = (ts) => {
 };
 const dur = (sec) => (sec >= 5400 ? t("{n} h", { n: (sec / 3600).toFixed(1) }) : sec >= 90 ? t("{n} min", { n: Math.round(sec / 60) }) : t("{n} s", { n: Math.round(sec) }));
 const COLORS = ["#d01012", "#0057a6", "#00852b", "#f5a800", "#7a3c9e", "#00a3da", "#e76318", "#6c6e68"];
-const CONDITIONS = ["Sealed", "Opened", "Built", "Incomplete"];   // stored in English, shown with t()
+const CONDITIONS = ["Sealed", "Opened", "Built", "Incomplete"];
+/** Colour themes for the whole panel: [key, name, swatches]. "ha" = the colours of your Home Assistant theme. */
+const COLOR_THEMES = [["ha", "Home Assistant", ["var(--primary-color,#03a9f4)", "var(--card-background-color,#fff)", "var(--primary-background-color,#f3f4f7)"]],
+  ["lego", "LEGO", ["#d01012", "#f5c400", "#fff"]], ["ocean", "Ocean", ["#0067b8", "#e7f1fb", "#fff"]], ["forest", "Forest", ["#1b7f3b", "#e8f4ec", "#fff"]],
+  ["violet", "Violet", ["#7a3c9e", "#f1e9f6", "#fff"]], ["sunset", "Sunset", ["#e3611a", "#fdeee4", "#fff"]], ["light", "Light", ["#0057a6", "#fff", "#f3f4f7"]],
+  ["dark", "Dark", ["#5b9bff", "#1c1f26", "#111318"]]];   // stored in English, shown with t()
 const REDUCED = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 const lastAt = (pts, t) => { let r = null; for (const p of pts) { if (p[0] <= t) r = p; else break; } return r; };
 
@@ -208,6 +213,18 @@ const STYLE = `
 --lt-line:var(--divider-color,#e1e3e8);--lt-accent:var(--primary-color,#0057a6);--lt-on-accent:var(--text-primary-color,#fff);--lt-soft:color-mix(in srgb,var(--lt-accent) 10%,var(--lt-card));
 --lt-red:#d01012;--lt-green:#00852b;--lt-yellow:#f5a800;--lt-purple:#7a3c9e;--lt-radius:16px;--lt-shadow:var(--ha-card-box-shadow,0 1px 2px rgba(0,0,0,.06),0 4px 16px rgba(0,0,0,.06));
 display:block;background:var(--lt-bg);color:var(--lt-text);min-height:100vh;font-family:var(--paper-font-body1_-_font-family,Roboto,system-ui,sans-serif);-webkit-font-smoothing:antialiased}
+/* colour themes (Settings → Colours); none set = the colours of your Home Assistant theme */
+:host([data-colors="lego"]){--lt-accent:#d01012;--lt-on-accent:#fff;--lt-soft:#fff4cc}
+:host([data-colors="ocean"]){--lt-accent:#0067b8;--lt-on-accent:#fff}
+:host([data-colors="forest"]){--lt-accent:#1b7f3b;--lt-on-accent:#fff}
+:host([data-colors="violet"]){--lt-accent:#7a3c9e;--lt-on-accent:#fff}
+:host([data-colors="sunset"]){--lt-accent:#e3611a;--lt-on-accent:#fff}
+:host([data-colors="light"]){--lt-bg:#f3f4f7;--lt-card:#fff;--lt-text:#1b1c20;--lt-muted:#6b6f7a;--lt-line:#e1e3e8;--lt-accent:#0057a6;--lt-on-accent:#fff;color-scheme:light}
+:host([data-colors="dark"]){--lt-bg:#111318;--lt-card:#1c1f26;--lt-text:#e8eaf0;--lt-muted:#9aa0ad;--lt-line:#2c313b;--lt-accent:#5b9bff;--lt-on-accent:#0b1020;--lt-shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.35);color-scheme:dark}
+.colrow{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:8px;margin-top:10px}
+.colsw{display:flex;flex-direction:column;gap:6px;align-items:center;padding:10px 6px;border:2px solid var(--lt-line);border-radius:12px;background:var(--lt-card);cursor:pointer;font-size:13px}
+.colsw.on{border-color:var(--lt-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--lt-accent) 25%,transparent)}.colsw i{display:flex;gap:3px}.colsw i b{width:18px;height:18px;border-radius:50%;border:1px solid rgba(0,0,0,.12)}
+input[type=range].colrange{width:100%;accent-color:var(--lt-accent)}
 *{box-sizing:border-box}[hidden]{display:none!important}
 .wrap{max-width:1280px;margin:0 auto;padding:12px 16px 64px}
 header{display:flex;align-items:center;gap:12px;padding:6px 0 14px}
@@ -274,10 +291,22 @@ input[type=range]{padding:0;accent-color:var(--lt-accent)}input[type=checkbox]{a
 .thr{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--lt-muted);background:var(--lt-card);border:1px solid var(--lt-line);border-radius:10px;padding:6px 12px}
 .chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
 .chip{padding:5px 12px;border-radius:99px;background:var(--lt-card);border:1px solid var(--lt-line);cursor:pointer;font-size:13px;transition:all .2s;user-select:none}
+.bk-bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;position:sticky;top:0;z-index:3;background:var(--lt-card);padding:6px 0}
+.tbl.bk input,.tbl.bk select{padding:5px 7px;font-size:13px;min-width:90px;width:100%}.tbl.bk input[type=checkbox]{min-width:0;width:auto}.tbl.bk .bk-num{width:84px;min-width:70px}.tbl.bk .bk-wide{min-width:200px}
+.tbl.bk input[type=date]{min-width:130px}.tbl.bk td{padding:4px 5px;vertical-align:middle}.tbl.bk td.c{text-align:center}.tbl.bk tr.dirty td{background:color-mix(in srgb,var(--lt-yellow) 12%,transparent)}
+.tbl.bk tr.bk-copy td{border-top:0}.tbl.bk tr.bk-new td{background:color-mix(in srgb,var(--lt-green) 7%,transparent)}.tbl.bk .bk-sticky{position:sticky;left:0;background:var(--lt-card);z-index:1;white-space:nowrap}
+.labform{grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}.labres{border:1px solid var(--lt-line);border-left:4px solid var(--lt-muted);border-radius:12px;padding:12px 14px;background:var(--lt-bg)}
+.labres.lv-ok{border-left-color:var(--lt-green)}.labres.lv-warn{border-left-color:var(--lt-yellow)}.labres.lv-bad{border-left-color:var(--lt-red)}
+code{word-break:break-all}
+@media(max-width:640px){.rule{flex-wrap:wrap}.rule>div:last-child{width:100%;justify-content:flex-start!important}.labgrid{flex-direction:column}}
+.labres .kv{display:grid;grid-template-columns:minmax(120px,180px) 1fr;gap:10px;justify-content:start;text-align:left}.labres .kv b{text-align:left;font-weight:600}
+.labgrid{display:flex;gap:14px;align-items:flex-start;justify-content:space-between}.labgrid>div{flex:1;min-width:0}.labgrid .kv b{word-break:break-word}
+.labfind{list-style:none;padding:0;margin:0;display:grid;gap:6px}.labfind li{display:flex;gap:8px;font-size:14px;line-height:1.4}.labfind li.lv-bad{color:var(--lt-red)}.labfind li.lv-warn{color:var(--lt-yellow)}
+.labhead{white-space:pre-wrap;word-break:break-all;font-size:11px;max-height:220px;overflow:auto;background:var(--lt-card);padding:8px;border-radius:8px}
 .chip:hover{border-color:var(--lt-accent)}.chip.on{background:var(--lt-accent);color:var(--lt-on-accent);border-color:transparent}.chip.sm{font-size:12px;padding:3px 10px}
 .toggle{display:inline-flex;border:1px solid var(--lt-line);border-radius:10px;overflow:hidden}.toggle button{border:0;background:var(--lt-card);padding:8px 11px;cursor:pointer}.toggle button.on{background:var(--lt-soft);color:var(--lt-accent)}
 /* layout */
-.cols{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:16px}@media(max-width:980px){.cols{grid-template-columns:1fr}}
+.cols{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:16px}@media(max-width:980px){.cols{grid-template-columns:minmax(0,1fr)}}
 .panel{background:var(--lt-card);border-radius:var(--lt-radius);padding:16px;box-shadow:var(--lt-shadow);margin-bottom:16px}
 .panel h3{margin:0 0 12px;font-size:16px;display:flex;align-items:center;gap:8px}.panel h3 .hsp{flex:1}
 .panel p{margin:0 0 10px;color:var(--lt-muted);font-size:14px;line-height:1.5}
@@ -336,7 +365,7 @@ h2.sec{font-size:16px;margin:18px 0 10px;display:flex;align-items:center;gap:8px
 .bars{display:flex;align-items:flex-end;gap:6px;height:170px;padding-top:18px;overflow-x:auto}
 .bar{flex:1;min-width:30px;display:flex;flex-direction:column;align-items:center;height:100%;justify-content:flex-end}
 .bf{width:70%;height:var(--h);background:linear-gradient(var(--lt-accent),color-mix(in srgb,var(--lt-accent) 60%,var(--lt-card)));border-radius:6px 6px 2px 2px;animation:grow .8s cubic-bezier(.3,1.2,.5,1) both;animation-delay:calc(var(--i) * 40ms);transform-origin:bottom}
-.pbars{display:flex;align-items:flex-end;gap:4px;height:170px;padding-top:14px;overflow-x:auto}.pbar{flex:1;min-width:26px;display:flex;flex-direction:column;height:100%;justify-content:flex-end}
+.pbars{display:flex;align-items:flex-end;gap:4px;height:170px;padding-top:14px;overflow-x:auto}.pbar{flex:1;min-width:0;display:flex;flex-direction:column;height:100%;justify-content:flex-end}
 .pcols{flex:1;display:flex;align-items:flex-end;gap:2px;justify-content:center}.pc{width:42%;max-width:16px;height:var(--h);min-height:1px;border-radius:4px 4px 1px 1px;position:relative;animation:grow .8s cubic-bezier(.3,1.2,.5,1) both;animation-delay:calc(var(--i) * 25ms);transform-origin:bottom}
 .pc.ok{background:var(--lt-green)}.pc.bad{background:var(--lt-red)}.pc span{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);font-size:10px;color:var(--lt-muted)}
 .pbar .bl{text-align:center;white-space:nowrap}
@@ -413,7 +442,7 @@ const SECTIONS = {
   deals: { label: "🏷️ Deals & watchlist", hint: "sets you keep an eye on", subs: [["today", "Today"], ["watch", "Watchlist"], ["all", "All prices"], ["new", "New sets"], ["lego", "All LEGO sets"], ["dset", "Settings"]] },
   collection: { label: "📦 My collection", hint: "what you own", subs: [["overview", "Overview"], ["sets", "Sets"]] },
   log: { label: "📜 Logbook", hint: "checks, prices, errors", subs: [["all", "Everything"], ["checks", "Shop checks"], ["errors", "Open errors"]] },
-  manage: { label: "⚙️ Manage", hint: "add, import, shops, settings", subs: [["add", "Add"], ["import", "Import"], ["links", "Link check"], ["notify", "Notifications"], ["shops", "Shops & jobs"], ["settings", "Settings"], ["userscript", "Userscript"], ["backup", "Backup"]] },
+  manage: { label: "⚙️ Manage", hint: "add, import, shops, settings", subs: [["add", "Add"], ["import", "Import"], ["edit", "Edit all"], ["links", "Link check"], ["notify", "Notifications"], ["shops", "Shops & jobs"], ["lab", "Parser lab"], ["settings", "Settings"], ["userscript", "Userscript"], ["backup", "Backup"]] },
 };
 
 class LegoTrackerPanel extends HTMLElement {
@@ -439,6 +468,7 @@ class LegoTrackerPanel extends HTMLElement {
       for (const [k, v] of Object.entries(saved.sub || {})) if (SECTIONS[k] && SECTIONS[k].subs.some(([x]) => x === v)) this.state.sub[k] = v;
     } catch (e) { /* storage unavailable */ }
     this.resetFilters();
+    this.applyColors(this.colorTheme());
     // approving a suspicious price works the same everywhere (set dialog, shops & jobs, logbook)
     this.shadowRoot.addEventListener("click", (e) => {
       const b = e.target.closest && e.target.closest(".apprb"); if (!b) return;
@@ -555,6 +585,8 @@ class LegoTrackerPanel extends HTMLElement {
   }
   set narrow(v) { this._narrow = v; }
   set panel(_) {}
+  colorTheme() { try { const c = localStorage.getItem("lego_tracker_colors"); return COLOR_THEMES.some(([k]) => k === c) ? c : "ha"; } catch (e) { return "ha"; } }
+  applyColors(key) { if (key && key !== "ha") this.dataset.colors = key; else delete this.dataset.colors; }
   persist() { try { localStorage.setItem("lego_tracker_ui", JSON.stringify({ section: this.state.section, sub: this.state.sub, cview: this.state.cview, range: this.state.range })); } catch (e) { /* ignore */ } }
 
   // ---------------------------------------------------------------- data
@@ -927,7 +959,7 @@ class LegoTrackerPanel extends HTMLElement {
     const s = this.state, el = this.shadowRoot.getElementById("content"); if (!el) return;
     if (s.err) { el.innerHTML = `<div class="empty"><span class="big">⚠️</span>${t("Could not load data: {error}", { error: esc(s.err) })}<br><br><button class="btn" id="retry">${t("Try again")}</button></div>`; el.querySelector("#retry").onclick = () => this.load(true); return; }
     if (!s.data) { el.innerHTML = `<div class="kpis">${"<div class='skel' style='height:86px'></div>".repeat(4)}</div><div class="grid">${"<div class='skel' style='height:260px'></div>".repeat(8)}</div>`; return; }
-    const view = { deals: { today: this.vToday, watch: this.vWatch, all: this.vAll, new: this.vNewSets, lego: this.vCatalog, dset: this.vDealSettings }, collection: { overview: this.vCollOverview, sets: this.vCollSets }, log: { all: this.vLog, checks: this.vLog, errors: this.vErrors }, manage: { notify: this.vNotify, add: this.vAdd, import: this.vImport, links: this.vLinks, shops: this.vShops, settings: this.vSettings, userscript: this.vUserscript, backup: this.vBackup, secret: this.vSecret } }[s.section][s.sub[s.section]];
+    const view = { deals: { today: this.vToday, watch: this.vWatch, all: this.vAll, new: this.vNewSets, lego: this.vCatalog, dset: this.vDealSettings }, collection: { overview: this.vCollOverview, sets: this.vCollSets }, log: { all: this.vLog, checks: this.vLog, errors: this.vErrors }, manage: { notify: this.vNotify, add: this.vAdd, import: this.vImport, links: this.vLinks, shops: this.vShops, lab: this.vLab, edit: this.vBulk, settings: this.vSettings, userscript: this.vUserscript, backup: this.vBackup, secret: this.vSecret } }[s.section][s.sub[s.section]];
     el.className = animate && !REDUCED ? "enter" : "";
     el.innerHTML = view.call(this);
     this.bindContent(el);
@@ -1605,7 +1637,8 @@ class LegoTrackerPanel extends HTMLElement {
         <div class="kv"><span>${t("Message")}</span><b>${esc(tx(e.message))}</b></div>
         <div class="kv"><span>${t("Source")}</span><b>${esc(e.source || "")}</b></div>${e.url ? `<div class="kv"><span>${t("Link")}</span><a href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">${esc(e.url.slice(0, 80))} ↗</a></div>` : ""}
         ${e.price != null ? `<div class="kv"><span>${t("Price")}</span><b>${e.old_price != null ? EUR(e.old_price) + " → " : ""}${EUR(e.price)}</b></div>` : ""}
-        ${e.results ? `<h4 style="margin:10px 0 4px">${t("Result per shop")}</h4>${this.shopResults(e, true)}` : ""}`;
+        ${e.results ? `<h4 style="margin:10px 0 4px">${t("Result per shop")}</h4>${this.shopResults(e, true)}` : ""}
+        ${Array.isArray(e.details) && e.details.length ? `<h4 style="margin:10px 0 4px">🧠 ${t("Analysis")}</h4><ul style="margin:0;padding-left:18px">${e.details.map((d) => `<li>${esc(tx(d))}</li>`).join("")}</ul>` : ""}`;
       const failed = e.results ? Object.entries(e.results).find(([, r]) => r.ok === false) : null;
       const rid = e.retailer || (failed ? failed[0] : null);
       const fixable = s && rid && (e.level === "error" || e.level === "warning") && ["fetch", "link", "userscript", "discover", "price", "check"].includes(e.kind);
@@ -1765,6 +1798,7 @@ class LegoTrackerPanel extends HTMLElement {
       set: { ...base, name: t("Specific sets"), scope: { type: "sets", themes: [], sets: [] }, triggers: ["price_below", "price_drop"], params: { price_below: 50, drop_pct: 10 } },
       retire: { ...base, name: t("Retiring sets"), scope: { type: "watchlist", themes: [], sets: [] }, triggers: ["retiring_soon"] },
       digest: { ...base, name: t("Daily digest"), triggers: ["digest"], cooldown_hours: 0, image: false, link: false },
+      dotd: { ...base, name: t("Deal of the day"), scope: { type: "watchlist", themes: [], sets: [] }, triggers: ["deal_of_day"], params: { dotd_time: "09:00" }, cooldown_hours: 0 },
       problems: { ...base, name: t("Report problems"), triggers: ["problems"], targets: [{ type: "persistent" }], image: false, link: false },
     }[kind];
   }
@@ -1789,7 +1823,7 @@ class LegoTrackerPanel extends HTMLElement {
     const list = d.rules.map((r, i) => `<div class="rule ${r.enabled ? "" : "off"}" data-ri="${i}"><label class="switch" title="${t("On/off")}"><input type="checkbox" class="r_on" ${r.enabled ? "checked" : ""}><i></i></label>
       <div style="flex:1;min-width:0"><b>${esc(r.name)}</b>${d.queued[r.id] ? ` <span class="tag">🌙 ${t("{n} queued", { n: d.queued[r.id] })}</span>` : ""}<div class="sum">${this.ruleSummary(r)}</div></div>
       <div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end"><button class="btn ghost sm r_edit">✎ ${t("Edit")}</button><button class="btn ghost sm r_test" title="${t("Send a test notification")}">🔔</button><button class="btn ghost sm r_dup" title="${t("Duplicate")}">⧉</button><button class="btn danger sm r_del" title="${t("Delete")}">🗑</button></div></div>`).join("");
-    const tpl = [["deals", "🏷️ " + t("All deals")], ["watch", "👀 " + t("Watchlist lowest price")], ["theme", "🎨 " + t("Theme below an amount")], ["set", "🧱 " + t("Specific sets")], ["retire", "⏳ " + t("Retiring soon")], ["digest", "🗞️ " + t("Daily digest")], ["problems", "⚠️ " + t("Problems")]];
+    const tpl = [["deals", "🏷️ " + t("All deals")], ["watch", "👀 " + t("Watchlist lowest price")], ["theme", "🎨 " + t("Theme below an amount")], ["set", "🧱 " + t("Specific sets")], ["retire", "⏳ " + t("Retiring soon")], ["dotd", "⭐ " + t("Deal of the day")], ["digest", "🗞️ " + t("Daily digest")], ["problems", "⚠️ " + t("Problems")]];
     const log = d.log.slice(0, 15).map((l) => `<li><span class="ic">${l.queued ? "🌙" : l.ok ? "✅" : "⚠️"}</span><div><b>${esc(tx(l.title))}</b><div>${esc(tx(l.message.split("\n")[0]))}</div><div class="t">${esc(l.rule)} · ${DATE(l.ts, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div></div></li>`).join("");
     return `<div class="cols" data-nf="1"><div><div class="panel"><h3>🔔 ${t("Notification rules")}<span class="hsp"></span></h3><p>${t("Each rule decides for which sets, when, and to whom and how you get a notification. Every notification also fires the event {event} for your own automations, and ends up in the Logbook.", { event: "<code>lego_tracker_notification</code>" })}</p>
       ${list || this.emptyState("🔕", t("No rules yet. Pick a template below."))}</div>
@@ -1814,6 +1848,7 @@ class LegoTrackerPanel extends HTMLElement {
     const pc = (k, list) => `<select data-param="${k}">${opt(list.map((v) => [v, k !== "min_score" ? `${v}%` : v]), p[k] ?? list[Math.floor(list.length / 2)])}</select>`;
     const trigRow = (k) => { const tg = o.triggers[k]; const on = r.triggers.includes(k);
       const par = { discount_pct: pc("discount_pct", [10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70]), drop_pct: pc("drop_pct", [5, 10, 15, 20, 25, 30, 40, 50]), min_score: pc("min_score", [45, 50, 60, 70, 80, 90]),
+        dotd_time: `<span style="display:flex;gap:4px;align-items:center">${t("at")} <select data-param="dotd_time" data-str="1">${opt(Array.from({ length: 48 }, (_, i) => { const v = `${String(Math.floor(i / 2)).padStart(2, "0")}:${i % 2 ? "30" : "00"}`; return [v, v]; }), p.dotd_time || "09:00")}</select></span>`,
         price_below: `<span style="display:flex;gap:4px;align-items:center">€ <input data-param="price_below" type="number" min="1" step="1" value="${esc(p.price_below ?? "")}" placeholder="${t("amount")}" style="width:90px"></span>` }[tg.param] || "";
       return `<div class="trig"><input type="checkbox" data-trig="${k}" ${on ? "checked" : ""}><label style="cursor:pointer" data-trigl="${k}">${esc(t(tg.label))}${tg.per_set ? "" : ` <span class="muted" style="font-size:12px">(${t("general")})</span>`}</label><div>${par}</div></div>`; };
     const perSet = Object.keys(o.triggers).filter((k) => o.triggers[k].per_set), general = Object.keys(o.triggers).filter((k) => !o.triggers[k].per_set);
@@ -1866,7 +1901,7 @@ class LegoTrackerPanel extends HTMLElement {
       const v = (id) => (root.querySelector("#" + id) || {}).value;
       if ($("n_name")) r.name = $("n_name").value; if ($("n_enabled")) r.enabled = $("n_enabled").checked;
       root.querySelectorAll("[data-trig]").forEach((c) => { const k = c.dataset.trig; r.triggers = r.triggers.filter((x) => x !== k); if (c.checked) r.triggers.push(k); });
-      root.querySelectorAll("[data-param]").forEach((c) => { r.params[c.dataset.param] = c.value === "" ? undefined : +c.value; });
+      root.querySelectorAll("[data-param]").forEach((c) => { r.params[c.dataset.param] = c.value === "" ? undefined : c.dataset.str ? c.value : +c.value; });
       root.querySelectorAll(".tgt").forEach((el) => { const tg = r.targets[+el.dataset.ti]; el.querySelectorAll("[data-tf]").forEach((f) => { if (f.dataset.tf === "type") return; tg[f.dataset.tf] = f.dataset.tf === "to" ? f.value.split(/[,;\s]+/).filter(Boolean) : f.value; }); });
       if ($("n_cool")) r.cooldown_hours = +v("n_cool");
       if ($("n_qon")) r.quiet = v("n_qon") ? { from: v("n_qf") || "22:00", to: v("n_qt") || "07:00" } : null;
@@ -1956,7 +1991,7 @@ class LegoTrackerPanel extends HTMLElement {
       <td>${x.builtin ? "" : `<button class="btn danger sm s_del" title="${t("Remove shop")}">🗑</button>`}</td></tr>`).join("");
     const langs = st.languages || {}, mode = d.mode, dev = st.dev || {};
     const perHour = (h) => { const n = (this.state.data.schedule || {}).total || this.sets.length; return n ? Math.round((n / h) * 10) / 10 : 0; };
-    return `<div class="panel"><h3>🌐 ${t("Language")}</h3><div class="form" style="max-width:520px"><label>${t("Language of the panel, notifications and userscript")}<select id="o_lang"><option value="auto" ${st.language === "auto" ? "selected" : ""}>${t("Automatic (Home Assistant language)")}</option>${Object.entries(langs).map(([k, l]) => `<option value="${k}" ${st.language === k ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label></div></div>
+    return `${this.colorsPanel()}<div class="panel"><h3>🌐 ${t("Language")}</h3><div class="form" style="max-width:520px"><label>${t("Language of the panel, notifications and userscript")}<select id="o_lang"><option value="auto" ${st.language === "auto" ? "selected" : ""}>${t("Automatic (Home Assistant language)")}</option>${Object.entries(langs).map(([k, l]) => `<option value="${k}" ${st.language === k ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label></div></div>
       <div class="panel"><h3>🔔 ${t("Notifications")}</h3><p class="muted" style="font-size:13px">${t("What counts as a deal, and which themes, prices and sets are left out, is set under Deals → Settings.")} <a data-goto="deals/dset" style="cursor:pointer">🏷️ ${t("Deal settings")} →</a></p>
         <div class="form"><label>${t("Notifications")}<a class="btn ghost sm" data-goto="manage/notify" style="cursor:pointer;margin-top:4px;align-self:flex-start">🔔 ${t("Go to Notifications")}</a><input id="o_notify" type="hidden" value="${esc(st.notify_service)}"></label>
         <label>${t("Daily digest at")}<input id="o_digest" type="time" value="${esc(st.digest_time)}"></label></div></div>
@@ -1979,8 +2014,9 @@ class LegoTrackerPanel extends HTMLElement {
       <div class="panel"><h3>🛒 ${"bol.com API"}${st.bol_api ? ` <span class="lk ok">${t("active")}</span>` : ""}</h3>
         <p>${t("bol.com blocks most servers, so the reliable way is bol.com's own API: free with a bol.com affiliate account (Partnerprogramma). Create API credentials there (client id + secret) and paste them here. Prices and links for bol.com then come from the API, without scraping or blocks.")} <a href="https://partner.bol.com" target="_blank" rel="noopener noreferrer">partner.bol.com ↗</a></p>
         ${keyRow("bol_client_id", t("Client id"), "", "https://partner.bol.com")}
-        ${keyRow("bol_client_secret", t("Client secret"), "", "https://partner.bol.com")}
-        <div class="form" style="max-width:420px"><label>${t("bol.com country")}<select id="o_bolc">${[["auto", t("Automatic (from the LEGO.com country)")], ["NL", "bol.com NL"], ["BE", "bol.com BE"]].map(([v, l]) => `<option value="${v}" ${st.bol_country === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label></div></div>
+        ${keyRow("bol_client_secret", t("Client secret"), "", "https://partner.bol.com")}</div>
+      <div class="panel"><h3>🇳🇱🇧🇪 ${t("bol.com: which site")}</h3><p>${t("bol.com has a Dutch and a Belgian site with their own prices. Only the site you pick here is asked, for prices, for finding links and through the API; your links are moved to it.")}</p>
+        <div class="radio">${[["NL", "bol.com/nl/nl", t("Netherlands")], ["BE", "bol.com/be/nl", t("Belgium")]].map(([v, l, d]) => `<label class="${st.bol_country === v ? "on" : ""}"><input type="radio" name="bolc" value="${v}" ${st.bol_country === v ? "checked" : ""}><b>${l}</b><span>${d}</span></label>`).join("")}</div></div>
       <div class="panel"><h3>🔁 ${t("Browser relay")}</h3>
         <p>${t("With the userscript installed, your own browser fetches the shop pages that fail on the server (for example bol.com or Amazon) in the background while Home Assistant is open, and sends the prices. Your browser is a normal visitor, so it is rarely blocked. See Manage → Userscript.")}</p>
         <div class="form"><label class="chk"><input type="checkbox" id="o_relay" ${st.browser_relay ? "checked" : ""}> ${t("Browser relay on")}</label>
@@ -2193,6 +2229,8 @@ class LegoTrackerPanel extends HTMLElement {
     if ($("relaybox")) this.bindRelay($("relaybox"));
     if ($("contbox")) this.bindCont($("contbox"));
     if ($("d_res")) this.bindSecret(root, $);
+    if ($("lb_go")) this.bindLab(root, $);
+    if ($("bk_tbl")) this.bindBulk(root, $);
     if ($("x_cmp")) this.bindCompare(root, $);
     if ($("o_save")) this.bindSettings(root, $);
     if ($("df_save")) this.bindDealSettings(root, $);
@@ -2255,7 +2293,26 @@ class LegoTrackerPanel extends HTMLElement {
       });
     }
   }
+  /** Settings → Colours: a slider (and swatches) to switch the colours of the whole panel, in this browser. */
+  colorsPanel() {
+    const cur = this.colorTheme(), i = COLOR_THEMES.findIndex(([k]) => k === cur);
+    return `<div class="panel"><h3>🎨 ${t("Colours")}</h3><p>${t("Slide to switch the colours of the whole panel. “Home Assistant” (the default) follows the theme of your Home Assistant; the choice is kept in this browser.")}</p>
+      <label style="display:block"><b id="col_name">${esc(t(COLOR_THEMES[i][1]))}</b><input type="range" class="colrange" id="col_range" min="0" max="${COLOR_THEMES.length - 1}" step="1" value="${i}" aria-label="${esc(t("Colours"))}"></label>
+      <div class="colrow">${COLOR_THEMES.map(([k, l, sw], j) => `<button class="colsw${k === cur ? " on" : ""}" data-col="${j}" type="button"><i>${sw.map((c) => `<b style="background:${c}"></b>`).join("")}</i>${esc(t(l))}</button>`).join("")}</div></div>`;
+  }
+  bindColors(root) {
+    const rng = root.querySelector("#col_range"); if (!rng) return;
+    const pick = (j) => {
+      const [k, l] = COLOR_THEMES[j];
+      try { if (k === "ha") localStorage.removeItem("lego_tracker_colors"); else localStorage.setItem("lego_tracker_colors", k); } catch (e) { /* private window */ }
+      this.applyColors(k); rng.value = j; root.querySelector("#col_name").textContent = t(l);
+      root.querySelectorAll(".colsw").forEach((b) => b.classList.toggle("on", +b.dataset.col === j));
+    };
+    rng.addEventListener("input", () => pick(+rng.value));
+    root.querySelectorAll(".colsw").forEach((b) => b.onclick = () => pick(+b.dataset.col));
+  }
   bindSettings(root, $) {
+    this.bindColors(root);
     const lines = (v) => v.split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean);
     let ft;
     const ftest = () => { clearTimeout(ft); ft = setTimeout(async () => {
@@ -2275,7 +2332,7 @@ class LegoTrackerPanel extends HTMLElement {
       const se = tr.querySelector(".s_search"); if (se) { x.search = se.value.trim() || x.default_search || ""; const c = d.custom.find((y) => y.id === x.id); if (c) c.search = x.search; }
     });
     const radios = (name) => root.querySelectorAll(`input[name=${name}]`).forEach((r) => r.addEventListener("change", () => r.closest(".radio").querySelectorAll("label").forEach((l) => l.classList.toggle("on", l.querySelector("input").checked))));
-    radios("vsrc"); radios("rmode");
+    radios("vsrc"); radios("rmode"); radios("bolc");
     root.querySelectorAll("input[name=rmode]").forEach((r) => r.addEventListener("change", () => { d.mode = r.value; $("rm_spread").hidden = r.value !== "spread"; $("rm_times").hidden = r.value !== "times"; }));
     const rateHints = () => {
       const r = (this.state.data.schedule || {}).rates, watched = r ? r.watched : this.sets.filter((x) => x.watched).length;
@@ -2331,7 +2388,7 @@ class LegoTrackerPanel extends HTMLElement {
       // a number field some phone keyboards leave empty: keep the saved number instead of 0
       const tkn = (k) => { const v = parseInt(String($("o_tkn_" + k).value).replace(/\D/g, ""), 10); return Number.isFinite(v) ? Math.max(0, Math.min(50, v)) : ((st.ticker || {})["max_" + k] ?? 3); };
       f.ticker = { ...Object.fromEntries(["watch", "deals", "news"].flatMap((k) => [[k, $("o_tk_" + k).checked], ["max_" + k, tkn(k)]])), shuffle: $("o_tk_shuffle").checked };
-      f.bol_country = $("o_bolc").value; f.browser_relay = $("o_relay").checked; f.relay_hours = +$("o_relayh").value || 6;
+      f.bol_country = (root.querySelector("input[name=bolc]:checked") || {}).value || "NL"; f.browser_relay = $("o_relay").checked; f.relay_hours = +$("o_relayh").value || 6;
       f.block_words = lines($("o_block").value); f.allow_words = lines($("o_allow").value);
       for (const k of ["brickset_api_key", "rebrickable_api_key", "bol_client_id", "bol_client_secret"]) { const el = $("k_" + k), v = el.value.trim(); if (v) f[k] = v; else if (el.dataset.clear) f[k] = ""; }
       if (!f.retailers.length) return this.toast(t("Switch on at least one shop"), "err");
@@ -2373,6 +2430,230 @@ class LegoTrackerPanel extends HTMLElement {
     });
   }
 
+  // ---------------------------------------------------------------- edit all (Manage → Edit all)
+  /** A working copy of every set (and every copy you own), edited in place and saved in one go. */
+  bulkDraft() {
+    const B = (this.state.bulk = this.state.bulk || { q: "", scope: "all", draft: null, dirty: new Set(), fresh: [], errors: {} });
+    if (!B.draft) {
+      B.draft = {};
+      for (const x of this.sets) {
+        const c = x.collection;
+        B.draft[x.set_number] = { name: x.name || "", theme: x.theme || "", rrp: x.rrp ?? "", watch: !!x.watched, owned: !!c,
+          value: c && c.current_value != null ? c.current_value : "",
+          copies: c ? ((c.copies && c.copies.length ? c.copies : [c])).map((k) => ({ paid: k.paid ?? "", added: k.added || "", condition: k.condition || "", location: k.location || "", notes: k.notes || "" })) : [] };
+      }
+      B.orig = JSON.parse(JSON.stringify(B.draft));
+    }
+    return B;
+  }
+  vBulk() {
+    const B = this.bulkDraft(), q = B.q.trim().toLowerCase();
+    const list = this.sets.slice().sort((a, b) => a.set_number.localeCompare(b.set_number, undefined, { numeric: true }))
+      .filter((x) => { const d = B.draft[x.set_number]; if (!d) return false;
+        if (B.scope === "owned" && !d.owned) return false; if (B.scope === "watch" && !d.watch) return false;
+        return !q || x.set_number.includes(q) || (d.name || "").toLowerCase().includes(q) || (d.theme || "").toLowerCase().includes(q) || d.copies.some((c) => (c.location || "").toLowerCase().includes(q)); });
+    const today = new Date().toISOString().slice(0, 10);
+    const inp = (n, i, f, v, extra = "") => `<input data-n="${esc(n)}" data-i="${i}" data-f="${f}" value="${esc(v)}" ${extra}>`;
+    const cond = (n, i, v) => `<select data-n="${esc(n)}" data-i="${i}" data-f="condition"><option value="">–</option>${CONDITIONS.map((c) => `<option value="${c}" ${v === c ? "selected" : ""}>${t(c)}</option>`).join("")}</select>`;
+    const copyCells = (n, i, c) => `<td>${inp(n, i, "paid", c.paid, 'inputmode="decimal" class="bk-num" placeholder="€"')}</td><td>${inp(n, i, "added", c.added, `type="date" max="${today}"`)}</td>
+      <td>${cond(n, i, c.condition)}</td><td>${inp(n, i, "location", c.location, `placeholder="${esc(t("e.g. {example}", { example: t("attic, cupboard 2") }))}"`)}</td><td>${inp(n, i, "notes", c.notes)}</td>`;
+    const blank = `<td colspan="5" class="muted" style="font-size:12px">${t("not in your collection")}</td>`;
+    const rows = list.map((x) => {
+      const n = x.set_number, d = B.draft[n], err = B.errors[n], dirty = B.dirty.has(n) ? " dirty" : "";
+      const first = `<tr class="bk-set${dirty}" data-row="${esc(n)}"><td class="bk-sticky"><b>${esc(n)}</b>${err ? `<div class="bad" style="font-size:11px;max-width:160px">${esc(tx(err))}</div>` : ""}</td>
+        <td>${inp(n, -1, "name", d.name, 'class="bk-wide"')}</td><td>${inp(n, -1, "theme", d.theme)}</td><td>${inp(n, -1, "rrp", d.rrp, 'inputmode="decimal" class="bk-num"')}</td>
+        <td class="c"><input type="checkbox" data-n="${esc(n)}" data-i="-1" data-f="watch" ${d.watch ? "checked" : ""}></td>
+        <td class="c"><input type="checkbox" data-n="${esc(n)}" data-i="-1" data-f="owned" ${d.owned ? "checked" : ""}></td>
+        <td>${d.owned ? inp(n, -1, "value", d.value, 'inputmode="decimal" class="bk-num" placeholder="' + esc(t("automatic")) + '"') : ""}</td>
+        ${d.owned && d.copies[0] ? copyCells(n, 0, d.copies[0]) : blank}
+        <td class="oact">${d.owned ? `<button class="btn ghost sm" data-bkadd="${esc(n)}" type="button" title="${esc(t("Add a copy"))}">＋</button>` : ""}${d.copies.length > 1 ? `<button class="btn ghost sm" data-bkdel="${esc(n)}" data-ci="0" type="button" title="${esc(t("Remove this copy"))}">−</button>` : ""}</td></tr>`;
+      const more = d.owned ? d.copies.slice(1).map((c, j) => `<tr class="bk-copy${dirty}"><td class="bk-sticky muted" style="font-size:12px">↳ ${t("copy {n}", { n: j + 2 })}</td><td colspan="6"></td>${copyCells(n, j + 1, c)}
+        <td class="oact"><button class="btn ghost sm" data-bkdel="${esc(n)}" data-ci="${j + 1}" type="button" title="${esc(t("Remove this copy"))}">−</button></td></tr>`).join("") : "";
+      return first + more;
+    }).join("");
+    const fresh = B.fresh.map((r, i) => `<tr class="bk-new"><td class="bk-sticky"><input data-new="${i}" data-f="set_number" value="${esc(r.set_number)}" placeholder="${esc(t("Set number"))}" inputmode="numeric" style="width:90px"></td>
+      <td><input data-new="${i}" data-f="name" value="${esc(r.name)}" placeholder="${esc(t("automatic"))}" class="bk-wide"></td><td><input data-new="${i}" data-f="theme" value="${esc(r.theme)}"></td>
+      <td><input data-new="${i}" data-f="rrp" value="${esc(r.rrp)}" inputmode="decimal" class="bk-num"></td>
+      <td class="c"><input type="checkbox" data-new="${i}" data-f="watch" ${r.watch ? "checked" : ""}></td><td class="c"><input type="checkbox" data-new="${i}" data-f="owned" ${r.owned ? "checked" : ""}></td>
+      <td><input data-new="${i}" data-f="value" value="${esc(r.value)}" inputmode="decimal" class="bk-num" placeholder="${esc(t("automatic"))}"></td>
+      <td><input data-new="${i}" data-f="paid" value="${esc(r.paid)}" inputmode="decimal" class="bk-num" placeholder="€"></td><td><input data-new="${i}" data-f="added" type="date" max="${today}" value="${esc(r.added)}"></td>
+      <td><select data-new="${i}" data-f="condition"><option value="">–</option>${CONDITIONS.map((c) => `<option value="${c}" ${r.condition === c ? "selected" : ""}>${t(c)}</option>`).join("")}</select></td>
+      <td><input data-new="${i}" data-f="location" value="${esc(r.location)}"></td><td><input data-new="${i}" data-f="notes" value="${esc(r.notes)}"></td>
+      <td class="oact"><button class="btn ghost sm" data-bknewdel="${i}" type="button">✕</button></td></tr>`).join("");
+    const changes = B.dirty.size + B.fresh.filter((r) => r.set_number.trim()).length;
+    return `<div class="panel"><h3>✏️ ${t("Edit all")}</h3>
+      <p>${t("Every set in one table: change names, RRP, your own value, and for every copy you own the price paid, purchase date, condition, location and notes. Add new sets at the bottom. Nothing is saved until you press Save; a set with a wrong value is shown in red and the others are saved.")}</p>
+      <div class="bk-bar"><input id="bk_q" type="search" value="${esc(B.q)}" placeholder="🔎 ${esc(t("Search by number, name, theme or location"))}" style="flex:1;min-width:180px">
+        <div class="chips" style="margin:0">${[["all", t("All")], ["owned", t("My collection")], ["watch", t("Watchlist")]].map(([k, l]) => `<button class="chip${B.scope === k ? " on" : ""}" data-bkscope="${k}" type="button">${l}</button>`).join("")}</div>
+        <span class="hsp"></span><button class="btn ghost" id="bk_undo" type="button" ${changes ? "" : "disabled"}>↺ ${t("Undo changes")}</button>
+        <button class="btn" id="bk_save" type="button" ${changes ? "" : "disabled"}>💾 ${t("Save ({n})", { n: changes })}</button></div>
+      <div class="tscroll"><table class="tbl bk" id="bk_tbl"><thead><tr><th class="bk-sticky">Set</th><th>${t("Name")}</th><th>${t("Theme")}</th><th>${t("RRP")}</th><th title="${esc(t("Watchlist"))}">👁</th><th title="${esc(t("In my collection"))}">📦</th><th>${t("Own value")}</th>
+        <th>${t("Paid")}</th><th>${t("Purchase date")}</th><th>${t("Condition")}</th><th>${t("Location")}</th><th>${t("Notes")}</th><th></th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="13" class="muted">${t("No sets with this filter.")}</td></tr>`}${fresh}</tbody></table></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="btn ghost" id="bk_new1" type="button">＋ ${t("New set")}</button><button class="btn ghost" id="bk_new5" type="button">＋ ${t("5 new sets")}</button></div></div>`;
+  }
+  bindBulk(root, $) {
+    const B = this.bulkDraft(), num = (v) => String(v ?? "").trim().replace("€", "").replace(",", ".");
+    const refreshBar = () => { const n = B.dirty.size + B.fresh.filter((r) => r.set_number.trim()).length, sv = $("bk_save"), ud = $("bk_undo");
+      sv.disabled = ud.disabled = !n; sv.innerHTML = `💾 ${t("Save ({n})", { n })}`; };
+    const rerender = () => { const y = window.scrollY, sc = root.querySelector(".tscroll"), x = sc ? sc.scrollLeft : 0; this.renderContent(); window.scrollTo(0, y); const sc2 = this.shadowRoot.querySelector("#content .tscroll"); if (sc2) sc2.scrollLeft = x; };
+    root.querySelectorAll("[data-n]").forEach((el) => el.addEventListener(el.type === "checkbox" || el.tagName === "SELECT" ? "change" : "input", () => {
+      const n = el.dataset.n, i = +el.dataset.i, f = el.dataset.f, d = B.draft[n], v = el.type === "checkbox" ? el.checked : el.value;
+      if (i < 0) d[f] = v; else d.copies[i][f] = v;
+      B.dirty.add(n); delete B.errors[n];
+      if (f === "owned") { if (v && !d.copies.length) d.copies = [{ paid: "", added: "", condition: "", location: "", notes: "" }]; rerender(); return; }
+      const tr = el.closest("tr"); if (tr) tr.classList.add("dirty");
+      refreshBar();
+    }));
+    root.querySelectorAll("[data-new]").forEach((el) => el.addEventListener(el.type === "checkbox" || el.tagName === "SELECT" ? "change" : "input", () => {
+      B.fresh[+el.dataset.new][el.dataset.f] = el.type === "checkbox" ? el.checked : el.value; refreshBar();
+    }));
+    root.querySelectorAll("[data-bkadd]").forEach((b) => b.onclick = () => { const n = b.dataset.bkadd, d = B.draft[n], last = d.copies[d.copies.length - 1] || {};
+      d.copies.push({ paid: "", added: "", condition: last.condition || "", location: last.location || "", notes: "" }); B.dirty.add(n); rerender(); });
+    root.querySelectorAll("[data-bkdel]").forEach((b) => b.onclick = () => { const n = b.dataset.bkdel; B.draft[n].copies.splice(+b.dataset.ci, 1); B.dirty.add(n); rerender(); });
+    root.querySelectorAll("[data-bknewdel]").forEach((b) => b.onclick = () => { B.fresh.splice(+b.dataset.bknewdel, 1); rerender(); });
+    root.querySelectorAll("[data-bkscope]").forEach((b) => b.onclick = () => { B.scope = b.dataset.bkscope; rerender(); });
+    const q = $("bk_q"); q.oninput = () => { B.q = q.value; clearTimeout(this._bkT); this._bkT = setTimeout(() => { rerender(); const q2 = this.shadowRoot.getElementById("bk_q"); if (q2) { q2.focus(); q2.setSelectionRange(q2.value.length, q2.value.length); } }, 250); };
+    const blankNew = () => ({ set_number: "", name: "", theme: "", rrp: "", watch: false, owned: true, value: "", paid: "", added: "", condition: "", location: "", notes: "" });
+    $("bk_new1").onclick = () => { B.fresh.push(blankNew()); rerender(); };
+    $("bk_new5").onclick = () => { for (let i = 0; i < 5; i++) B.fresh.push(blankNew()); rerender(); };
+    $("bk_undo").onclick = () => { if (!confirm(t("Undo changes") + "?")) return; B.draft = null; B.dirty.clear(); B.fresh = []; B.errors = {}; rerender(); };
+    $("bk_save").onclick = () => this.busy($("bk_save"), "…", async () => {
+      const sets = [];
+      for (const n of B.dirty) {
+        const d = B.draft[n], o = B.orig[n], f = {};
+        for (const k of ["name", "theme"]) if (d[k] !== o[k]) f[k] = d[k].trim();
+        if (num(d.rrp) !== num(o.rrp)) f.rrp = num(d.rrp) === "" ? "" : +num(d.rrp);
+        if (d.watch !== o.watch) f.watch = d.watch;
+        if (!d.owned) { if (o.owned) f.owned = false; }
+        else {
+          if (num(d.value) !== num(o.value)) f.current_value = num(d.value) === "" ? "" : +num(d.value);
+          if (JSON.stringify(d.copies) !== JSON.stringify(o.copies) || !o.owned) f.copies = d.copies.map((c) => ({ ...c, paid: num(c.paid) }));
+        }
+        if (Object.keys(f).length) sets.push({ set_number: n, fields: f });
+      }
+      for (const r of B.fresh) {
+        if (!r.set_number.trim()) continue;
+        const f = {};
+        if (r.name.trim()) f.name = r.name.trim(); if (r.theme.trim()) f.theme = r.theme.trim(); if (num(r.rrp)) f.rrp = +num(r.rrp);
+        f.watch = !!r.watch;
+        if (r.owned) { f.copies = [{ paid: num(r.paid), added: r.added, condition: r.condition, location: r.location, notes: r.notes }]; if (num(r.value)) f.current_value = +num(r.value); }
+        sets.push({ set_number: r.set_number.trim(), new: true, owned: !!r.owned, fields: f });
+      }
+      if (!sets.length) { B.dirty.clear(); refreshBar(); return; }
+      const res = await this._hass.callWS({ type: "lego_tracker/bulk_update", sets });
+      B.errors = res.errors || {};
+      const failedNew = B.fresh.filter((r) => r.set_number.trim() && Object.keys(B.errors).some((k) => k === r.set_number.trim() || k.startsWith(r.set_number.trim())));
+      await this.load();
+      const keepDirty = [...B.dirty].filter((n) => B.errors[n]);
+      const keep = keepDirty.map((n) => [n, B.draft[n]]);
+      B.draft = null; this.bulkDraft();
+      for (const [n, d] of keep) if (B.draft[n]) { B.draft[n] = d; }
+      B.dirty = new Set(keepDirty); B.fresh = failedNew;
+      const nErr = Object.keys(B.errors).length;
+      this.toast(nErr ? t("{n} saved, {e} with an error (in red)", { n: res.saved, e: nErr }) : t("{n} saved", { n: res.saved }), nErr ? "err" : "ok");
+      this.renderContent();
+    });
+  }
+  // ---------------------------------------------------------------- parser lab (Manage → Parser lab)
+  labRuns() {
+    if (!this._labRuns) { try { this._labRuns = JSON.parse(localStorage.getItem("lego_tracker_lab") || "[]"); } catch (e) { this._labRuns = []; } }
+    return this._labRuns;
+  }
+  saveLabRuns() { try { localStorage.setItem("lego_tracker_lab", JSON.stringify(this._labRuns.slice(0, 50))); } catch (e) { /* private window */ } }
+  /** One result: verdict, what was read, the analysis in plain words and the amounts found on the page. */
+  labResultHtml(r) {
+    const verdict = { ok: ["ok", "✅", t("Price read")], unavailable: ["warn", "ℹ️", t("No price on purpose (not in stock / out of the range)")],
+      suspect: ["warn", "⚠️", t("Price read, but it looks wrong")], no_price: ["bad", "⛔", t("No price read")],
+      blocked: ["bad", "🛡️", t("Blocked by the shop")], error: ["bad", "⛔", t("Page not fetched")] }[r.verdict] || ["", "", r.verdict];
+    const icon = { ok: "✅", info: "ℹ️", warn: "⚠️", bad: "⛔" };
+    const row = (k, v) => (v == null || v === "" ? "" : `<div class="kv"><span>${k}</span><b>${v}</b></div>`);
+    return `<div class="labres lv-${verdict[0]}"><h4 style="margin:0 0 8px">${verdict[1]} ${esc(verdict[2])}${r.price != null ? ` · ${EUR(r.price)}` : ""}</h4>
+      <div class="labgrid"><div>
+        ${row(t("Shop"), esc(r.shop || r.retailer))}${row("Set", esc(r.set_number || ""))}
+        ${row(t("Address"), r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.url.slice(0, 70))} ↗</a>` : (r.pasted ? t("pasted HTML") : ""))}
+        ${row(t("Title"), esc(r.title || ""))}${row(t("Price"), r.price != null ? EUR(r.price) : "–")}${row(t("Regular price"), r.list_price != null ? EUR(r.list_price) : "")}
+        ${row(t("RRP"), r.rrp != null ? EUR(r.rrp) : "")}${row(t("Last price of this link"), r.known != null ? EUR(r.known) : "")}
+        ${row("HTTP", r.status != null ? esc(r.status) : "")}${row(t("Size"), r.size ? `${Math.round(r.size / 1024)} KB` : "")}${row(t("Time"), r.ms ? `${r.ms} ms` : "")}
+        ${row(t("Ended up at"), r.final_url && r.final_url !== r.url ? esc(r.final_url.slice(0, 90)) : "")}${row(t("Error"), r.error ? esc(tx(r.error)) : "")}
+      </div>${r.image ? `<img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" style="max-width:120px;max-height:120px;object-fit:contain;border-radius:8px;background:#fff">` : ""}</div>
+      <h4 style="margin:12px 0 6px">🧠 ${t("Analysis")}</h4><ul class="labfind">${(r.findings || []).map((f) => `<li class="lv-${esc(f.level)}"><span>${icon[f.level] || "•"}</span> ${esc(tx(f.text))}</li>`).join("")}</ul>
+      ${(r.amounts || []).length ? `<details><summary style="cursor:pointer">${t("Amounts found on the page ({n})", { n: r.amounts.length })}</summary><table class="tbl" style="margin-top:6px">${r.amounts.map((a) => `<tr><td class="num"><b>${EUR(a.price)}</b></td><td class="num muted">×${a.count}</td><td class="muted" style="font-size:12px">…${esc(a.context)}…</td></tr>`).join("")}</table></details>` : ""}
+      ${r.head ? `<details><summary style="cursor:pointer">${t("Start of the page (HTML)")}</summary><pre class="labhead">${esc(r.head)}</pre></details>` : ""}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="btn ghost sm" data-lablog="${esc(String(r.ts))}" type="button">📜 ${t("Send to the logbook")}</button>
+        <button class="btn ghost sm" data-labcsv="${esc(String(r.ts))}" type="button">⬇ ${t("Export (CSV)")}</button></div></div>`;
+  }
+  vLab() {
+    const L = (this.state.lab = this.state.lab || { shop: "", num: "", url: "", paste: false, links: null, cur: null }), runs = this.labRuns();
+    const shops = Object.entries(this.state.data.retailers).sort((a, b) => a[1].localeCompare(b[1]));
+    const sets = this.sets.slice().sort((a, b) => a.set_number.localeCompare(b.set_number, undefined, { numeric: true }));
+    const lk = L.links || {}, chip = (k, label) => (lk[k] ? `<button class="chip${L.url === lk[k] ? " on" : ""}" data-labchip="${esc(lk[k])}" type="button">${label}</button>` : "");
+    const verdictIcon = { ok: "✅", unavailable: "ℹ️", suspect: "⚠️", no_price: "⛔", blocked: "🛡️", error: "⛔" };
+    return `<div class="panel"><h3>🔬 ${t("Parser lab")}</h3>
+      <p>${t("Test how a shop page is read: pick a shop and a set, the address is filled in (your link, the product page or the shop's search page). Change it if you like, then fetch it. You see what is read and, below it, an analysis of what goes wrong when there is no price or a price that looks wrong.")}</p>
+      <div class="form labform">
+        <label>${t("Shop")}<select id="lb_shop"><option value="">–</option>${shops.map(([k, v]) => `<option value="${esc(k)}" ${L.shop === k ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></label>
+        <label>Set<select id="lb_num"><option value="">–</option>${sets.map((x) => `<option value="${esc(x.set_number)}" ${L.num === x.set_number ? "selected" : ""}>${esc(x.set_number)} · ${esc((x.name || "").slice(0, 40))}</option>`).join("")}</select></label>
+        <label style="grid-column:1/-1">${t("Address")}<input id="lb_url" value="${esc(L.url)}" placeholder="https://…" inputmode="url"></label>
+      </div>
+      <div class="chips" style="margin:6px 0 10px">${chip("link", "🔗 " + t("Your link"))}${chip("product", "🧱 " + t("Product page"))}${chip("search", "🔍 " + t("Search page"))}</div>
+      <label class="chk" style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input type="checkbox" id="lb_paste" ${L.paste ? "checked" : ""}> ${t("Paste the HTML myself (e.g. from your browser: right-click → View page source)")}</label>
+      <textarea id="lb_html" rows="5" ${L.paste ? "" : "hidden"} style="width:100%;font-family:monospace;font-size:12px" placeholder="&lt;html&gt;…"></textarea>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="btn" id="lb_go" type="button">🔬 ${t("Test and analyse")}</button></div>
+      <div id="lb_res" style="margin-top:12px">${L.cur ? this.labResultHtml(L.cur) : ""}</div></div>
+      <div class="panel"><h3>🗂️ ${t("Tests in this browser ({n})", { n: runs.length })}</h3>
+        ${runs.length ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"><button class="btn ghost sm" id="lb_csv" type="button">⬇ ${t("Export all (CSV)")}</button><button class="btn ghost sm" id="lb_logall" type="button">📜 ${t("Send the failed ones to the logbook")}</button><button class="btn ghost sm" id="lb_clear" type="button">🗑 ${t("Clear")}</button></div>
+        <div class="tscroll"><table class="tbl"><tr><th>${t("Time")}</th><th>${t("Shop")}</th><th>Set</th><th></th><th class="num">${t("Price")}</th><th>${t("Analysis")}</th></tr>${runs.map((r) => `<tr class="click" data-labopen="${esc(String(r.ts))}"><td class="muted" style="white-space:nowrap">${DATE(r.ts, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</td><td>${esc(r.shop || r.retailer)}</td><td><b>${esc(r.set_number || "")}</b></td><td>${verdictIcon[r.verdict] || ""}</td><td class="num">${r.price != null ? EUR(r.price) : "–"}</td><td class="ell muted" style="font-size:12px;max-width:360px">${esc(tx(((r.findings || []).find((f) => f.level === "bad" || f.level === "warn") || (r.findings || [])[0] || {}).text || ""))}</td></tr>`).join("")}</table></div>`
+        : `<p class="muted">${t("No tests yet. Every test is kept here (in this browser) so you can compare and export them.")}</p>`}</div>`;
+  }
+  labCsv(runs) {
+    const cell = (v) => { const x = v == null ? "" : String(v); return /[";\n]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x; };
+    const head = ["time", "shop", "set", "url", "http", "verdict", "price", "regular_price", "rrp", "last_price", "title", "size_kb", "ms", "final_url", "error", "analysis", "amounts"];
+    const rows = runs.map((r) => [new Date(r.ts * 1000).toISOString(), r.shop || r.retailer, r.set_number, r.url, r.status, r.verdict, r.price, r.list_price, r.rrp, r.known, r.title,
+      r.size ? Math.round(r.size / 1024) : "", r.ms, r.final_url, r.error, (r.findings || []).map((f) => `[${f.level}] ${tx(f.text)}`).join(" | "),
+      (r.amounts || []).map((a) => `${a.price}×${a.count}`).join(" ")].map(cell).join(";"));
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob(["﻿" + [head.join(";"), ...rows].join("\n")], { type: "text/csv;charset=utf-8" }));
+    a.download = `lego-parser-lab-${new Date().toISOString().slice(0, 10)}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  }
+  bindLab(root, $) {
+    const L = this.state.lab, ws = (args) => this._hass.callWS({ type: "lego_tracker/lab", ...args });
+    const fill = async () => {
+      L.links = null;
+      if (L.shop && L.num) {
+        try { L.links = await ws({ action: "links", retailer: L.shop, set_number: L.num }); L.url = L.links.suggested || L.url; } catch (e) { this.toast(tx(e.message), "err"); }
+      }
+      this.renderContent();
+    };
+    $("lb_shop").onchange = (e) => { L.shop = e.target.value; fill(); };
+    $("lb_num").onchange = (e) => { L.num = e.target.value; fill(); };
+    $("lb_url").oninput = (e) => { L.url = e.target.value; };
+    $("lb_paste").onchange = (e) => { L.paste = e.target.checked; $("lb_html").hidden = !L.paste; };
+    root.querySelectorAll("[data-labchip]").forEach((b) => b.onclick = () => { L.url = b.dataset.labchip; this.renderContent(); });
+    const find = (ts) => (L.cur && String(L.cur.ts) === ts ? L.cur : this.labRuns().find((r) => String(r.ts) === ts));
+    const toLog = async (r) => { const { head, ...rest } = r; await ws({ action: "log", result: rest }); };
+    const bindRes = (el) => {
+      el.querySelectorAll("[data-lablog]").forEach((b) => b.onclick = () => this.busy(b, "…", async () => { await toLog(find(b.dataset.lablog)); this.toast(t("In the logbook"), "ok"); }));
+      el.querySelectorAll("[data-labcsv]").forEach((b) => b.onclick = () => this.labCsv([find(b.dataset.labcsv)]));
+    };
+    bindRes(root);
+    $("lb_go").onclick = () => this.busy($("lb_go"), "…", async () => {
+      const html = L.paste ? $("lb_html").value : "";
+      if (!L.url && !html) { this.toast(t("Give an address, or paste the HTML."), "err"); return; }
+      const r = await ws({ action: "run", retailer: L.shop || null, set_number: L.num || null, url: L.url, html });
+      L.cur = r;
+      const runs = this.labRuns(); runs.unshift({ ...r, head: undefined }); runs.splice(50); this.saveLabRuns();
+      this.renderContent();
+    });
+    const csv = $("lb_csv"); if (csv) csv.onclick = () => this.labCsv(this.labRuns());
+    const la = $("lb_logall"); if (la) la.onclick = () => this.busy(la, "…", async () => {
+      const bad = this.labRuns().filter((r) => !["ok", "unavailable"].includes(r.verdict));
+      for (const r of bad) await toLog(r);
+      this.toast(t("{n} sent to the logbook", { n: bad.length }), "ok");
+    });
+    const cl = $("lb_clear"); if (cl) cl.onclick = () => { if (!confirm(t("Clear") + "?")) return; this._labRuns = []; this.saveLabRuns(); L.cur = null; this.renderContent(); };
+    root.querySelectorAll("[data-labopen]").forEach((tr) => tr.onclick = () => { L.cur = find(tr.dataset.labopen); this.renderContent(); });
+  }
   // ---------------------------------------------------------------- secret options (hidden link in the Manage tabs)
   vSecret() {
     const st = this.state.settings;
@@ -2387,7 +2668,6 @@ class LegoTrackerPanel extends HTMLElement {
       ${devRow("dev_watch_unlimited", t("Unlimited watchlist"), t("More than 100 sets on the watchlist."))}</div>`;
     const resets = [["sitemaps", t("Sitemaps")], ["relay_searched", t("Browser searches")], ["shop_js", t("JavaScript shops")], ["cooldowns", t("Shop pauses")],
       ["manual", t("Waiting times")], ["trace", t("Request trace")], ["suspects", t("Suspicious / approved prices")], ["compare_debug", t("Comparison pages")]];
-    const shopOpts = Object.entries(this.state.data.retailers).map(([k, v]) => `<option value="${esc(k)}">${esc(v)}</option>`).join("");
     const tools = `<div class="panel"><h3>🧰 ${t("Tools")}</h3>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
         <button class="btn ghost sm" id="d_stats" type="button">📊 ${t("Storage")}</button>
@@ -2397,11 +2677,7 @@ class LegoTrackerPanel extends HTMLElement {
         <label class="chk" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="d_debug"> ${t("Debug logging")}</label></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px"><b style="font-size:13px">${t("Reset")}:</b>
         ${resets.map(([k, l]) => `<button class="btn ghost sm d_reset" data-what="${k}" type="button">↺ ${esc(l)}</button>`).join("")}</div>
-      <details><summary style="cursor:pointer"><b>🔎 ${t("Parser playground")}</b> <span class="muted" style="font-size:12px">${t("paste the HTML of a product page, or fetch a URL, and see what is read")}</span></summary>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0"><select id="d_shop"><option value="">${t("From the URL")}</option>${shopOpts}</select>
-          <input id="d_url" placeholder="https://…" style="flex:1;min-width:200px"><input id="d_num" placeholder="${t("Set number")}" style="width:90px">
-          <button class="btn ghost sm" id="d_fetch" type="button">🌐 ${t("Fetch URL")}</button><button class="btn ghost sm" id="d_parse" type="button">🔎 ${t("Read pasted HTML")}</button></div>
-        <textarea id="d_html" rows="5" style="width:100%;font-family:monospace;font-size:12px" placeholder="&lt;html&gt;…"></textarea></details>
+      <p class="muted" style="font-size:12px">🔬 ${t("Testing a shop page: Manage → Parser lab.")}</p>
       <div id="d_res" style="margin-top:8px"></div></div>`;
     return devPanel + tools + `<div class="panel"><h3>🕵️ ${t("Secret options")}</h3>
       <div class="rule${st.market_value ? "" : " off"}"><label class="switch"><input type="checkbox" id="x_market" ${st.market_value ? "checked" : ""}><i></i></label><div style="flex:1"><b>💎 ${t("Market value")}</b><div class="sum">${t("The market value of every set (new and used) and the expected retirement date. Fetched once a day per set, spread over the whole day. Sets you own get it as their value; the set window shows it.")}</div></div></div></div>`;
@@ -2451,10 +2727,6 @@ class LegoTrackerPanel extends HTMLElement {
     root.querySelectorAll(".d_reset").forEach((b) => b.onclick = () => this.busy(b, "…", async () => {
       const r = await dev({ action: "reset", what: b.dataset.what }); this.toast(t("{n} removed", { n: r.removed }), "ok");
     }));
-    const pv = () => ({ retailer: $("d_shop").value || undefined, url: $("d_url").value.trim(), set_number: $("d_num").value.trim() || undefined });
-    const showParse = (r) => { out.innerHTML = kv(Object.fromEntries(Object.entries(r).filter(([k]) => k !== "head"))) + (r.head ? `<pre style="white-space:pre-wrap;font-size:11px;max-height:200px;overflow:auto">${esc(r.head)}</pre>` : ""); };
-    on("d_parse", async () => showParse(await dev({ action: "parse", html: $("d_html").value, ...pv() })));
-    on("d_fetch", async () => showParse(await dev({ action: "fetch", ...pv() })));
     root.querySelectorAll(".x_dev").forEach((el) => el.addEventListener("change", () => this.busy(null, "", async () => {
       await this._hass.callWS({ type: "lego_tracker/settings/set", fields: { [el.dataset.key]: el.checked } });
       await new Promise((r) => setTimeout(r, 1500));

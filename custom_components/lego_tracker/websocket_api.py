@@ -16,7 +16,7 @@ from homeassistant.core import HomeAssistant, callback
 from .const import API_LEVEL, CONF_DEV_FULL_REFRESH, DOMAIN, PANEL_URL, RETAILERS
 from .csv_import import analyze_csv
 from .themes import THEMES as LEGO_THEMES
-from .i18n import tr
+from .i18n import LocalizedError, T, tr
 from .models import combined_history, copies, copy_value, normalize_set_number, offer_price
 
 
@@ -99,6 +99,7 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_set_detail)
     websocket_api.async_register_command(hass, ws_collection)
     websocket_api.async_register_command(hass, ws_update_set)
+    websocket_api.async_register_command(hass, ws_bulk_update)
     websocket_api.async_register_command(hass, ws_import_preview)
     websocket_api.async_register_command(hass, ws_job)
     websocket_api.async_register_command(hass, ws_settings_get)
@@ -127,6 +128,7 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_notify_set)
     websocket_api.async_register_command(hass, ws_notify_test)
     websocket_api.async_register_command(hass, ws_dev_tool)
+    websocket_api.async_register_command(hass, ws_lab)
     websocket_api.async_register_command(hass, ws_ticker)
     websocket_api.async_register_command(hass, ws_new_sets)
     websocket_api.async_register_command(hass, ws_catalog)
@@ -223,6 +225,42 @@ def ws_update_set(hass, connection, msg):
         connection.send_error(msg["id"], "invalid_format", str(err))
         return
     connection.send_result(msg["id"], _card(coord, num))
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({
+    vol.Required("type"): f"{DOMAIN}/bulk_update",
+    vol.Required("sets"): vol.All([{vol.Required("set_number"): str, vol.Optional("new", default=False): bool,
+                                    vol.Optional("owned", default=False): bool, vol.Optional("fields", default={}): dict}],
+                                  vol.Length(max=2000)),
+})
+@websocket_api.async_response
+async def ws_bulk_update(hass, connection, msg):
+    """Manage → Edit all: change (or add) many sets at once. Every set is checked on its own: a set with a
+    wrong value is reported and left as it was, the others are saved."""
+    coord = _coord(hass)
+    done, added, errors = 0, 0, {}
+    for item in msg["sets"]:
+        try:
+            num = normalize_set_number(item["set_number"])
+        except ValueError as err:
+            errors[item["set_number"]] = str(err)
+            continue
+        try:
+            if num not in coord.store["sets"]:
+                if not item["new"]:
+                    raise LocalizedError("Set {number} is not tracked.", number=num)
+                coord.check_set_fields(num, item["fields"])      # a wrong value: the set isn't added at all
+                await coord.add_set(num, owned={"qty": 1} if item["owned"] else None, discover=False,
+                                    watch=False if item["fields"].get("watch") is False else None)
+                added += 1
+            if item["fields"]:
+                coord.update_set(num, item["fields"])
+            done += 1
+        except ValueError as err:
+            errors[num] = str(err)
+    coord.push_update()
+    connection.send_result(msg["id"], {"saved": done, "added": added, "errors": errors})
 
 
 @websocket_api.require_admin
@@ -819,6 +857,37 @@ async def ws_dev_tool(hass, connection, msg):
             out = {"debug": devtools.set_debug(msg["on"])}
         else:
             out = json.loads(json.dumps(devtools.dump(coord), default=str))
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid", str(err))
+        return
+    connection.send_result(msg["id"], out)
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/lab",
+                                  vol.Required("action"): vol.In(["links", "run", "log"]),
+                                  vol.Optional("retailer"): vol.Any(None, str), vol.Optional("set_number"): vol.Any(None, str),
+                                  vol.Optional("url", default=""): vol.All(str, vol.Length(max=2000)),
+                                  vol.Optional("html", default=""): vol.All(str, vol.Length(max=5_000_000)),
+                                  vol.Optional("result"): dict})
+@websocket_api.async_response
+async def ws_lab(hass, connection, msg):
+    """Parser lab (Manage → Parser lab): addresses for a shop + set, a test run with analysis, or a result to the log."""
+    from . import lab
+
+    coord = _coord(hass)
+    num = normalize_set_number(msg["set_number"]) if msg.get("set_number") else None
+    try:
+        if msg["action"] == "links":
+            if not (msg.get("retailer") and num):
+                raise ValueError(T("Pick a shop and a set."))
+            out: Any = lab.links(coord, msg["retailer"], num)
+        elif msg["action"] == "run":
+            out = await lab.run(coord, msg.get("retailer"), num, msg["url"].strip(), msg["html"])
+        else:
+            lab.to_log(coord, msg.get("result") or {})
+            coord.push_update()
+            out = {"ok": True}
     except ValueError as err:
         connection.send_error(msg["id"], "invalid", str(err))
         return

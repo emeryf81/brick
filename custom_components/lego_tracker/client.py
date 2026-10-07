@@ -14,7 +14,7 @@ import aiohttp
 
 from .models import normalize_set_number
 from .i18n import T
-from .shops import domain_of
+from .shops import bol_site_url, domain_of
 from .parsers import Parsed, find_search_result, is_search_url, lego_number, title_check, lego_product_url, parse_brickset_page, parse_page, search_url, url_key
 
 _LOGGER = logging.getLogger(__name__)
@@ -75,6 +75,14 @@ def registrable(host: str) -> str:
         return host
     keep = 3 if len(labels) >= 3 and labels[-2] in ("com", "co", "org", "net", "gov", "ac", "edu") else 2
     return ".".join(labels[-keep:])
+
+
+def redirect_home(retailer: str, url: str) -> str:
+    """The site a request (and its redirects) must stay on: a shop's own domain for its pages (so a suffix like
+    ne.jp or co.uk is never "the site"); for comparison sites, which have no shop domain, the registrable part."""
+    host = (urlparse(url).hostname or "").lower().rstrip(".")
+    dom = (domain_of(retailer) or "").lower()
+    return dom if dom and (host == dom or host.endswith("." + dom)) else registrable(host)
 
 
 def check_url(url: str, home: str) -> None:
@@ -176,7 +184,7 @@ class Fetcher:
         if referer:
             headers.update({"Referer": referer, "Sec-Fetch-Site": "same-origin"})
         sess = self._session(retailer)
-        home = registrable(urlparse(url).hostname or "")
+        home = redirect_home(retailer, url)
         for _hop in range(MAX_REDIRECTS + 1):
             check_url(url, home)
             if self._curl_ok:
@@ -248,6 +256,8 @@ class Fetcher:
         async with lock:
             await self._wait_turn(site, search)
             origin = ORIGINS.get(retailer) or (f"https://www.{d}/" if (d := domain_of(retailer)) else None)
+            if retailer == "bol" and origin:
+                origin = bol_site_url(origin)
             if origin and retailer not in self._warmed:   # look like a visitor: home page first
                 self._warmed.add(retailer)
                 try:
@@ -303,6 +313,8 @@ class Fetcher:
             return None, None, 0, T("not a LEGO.com product page with a set number in the address")
         if not force and (left := self.cooldown_left(retailer)) > 0:
             return None, None, 0, T("paused {hours} h after being blocked", hours=f"{left / 3600:.1f}")
+        if retailer == "bol":
+            url = bol_site_url(url)                         # the bol.com site chosen in Settings (NL or BE)
         try:
             status, page = await self._get(retailer, url)
         except Aborted:

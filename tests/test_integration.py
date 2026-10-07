@@ -846,9 +846,10 @@ async def test_bol_api_finds_and_prices_without_scraping(hass: HomeAssistant, en
          "offer": {"price": 37.99}}]})
     aioclient_mock.get(_re.compile(r"https://api\.bol\.com/marketing/catalog/v1/products/5702016912340/offers/best.*"),
                        json={"ean": "5702016912340", "price": 36.5, "strikethroughPrice": 49.99, "deliveryDescription": "Op voorraad"})
-    hass.config_entries.async_update_entry(entry, options={**entry.options, "bol_client_id": "client-id-123", "bol_client_secret": "s3cr3t/key+=="})
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "bol_client_id": "client-id-123", "bol_client_secret": "s3cr3t/key+==",
+                                                                  "bol_country": "BE"})
     c = await _setup(hass, entry)
-    assert c.bol_api and c.bol_country == "BE"                      # lego_locale nl-be
+    assert c.bol_api and c.bol_country == "BE"                      # bol.com/be/nl chosen in Settings
     await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281", "rrp": 49.99}, blocking=True)
     res = await c.fetch_shop("10281", "bol")
     o = c.store["offers"]["10281"]["bol"]
@@ -2908,3 +2909,132 @@ async def test_lego_out_of_the_range_takes_no_price_and_rests(hass: HomeAssistan
     no_network.return_value = (Parsed(24.99, "Treinstation"), None)
     await c.lego_lookup("60050", force=True)
     assert "unavailable" not in o and "discontinued_at" not in o
+
+
+async def test_bol_links_move_to_the_chosen_bol_site(hass: HomeAssistant, entry, no_network):
+    """Choosing bol.com/be/nl moves your bol.com links there (and the page is fetched from that site)."""
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281"}, blocking=True)
+    await hass.services.async_call(DOMAIN, "set_offer", {"set_number": "10281", "retailer": "bol",
+                                                         "url": "https://www.bol.com/nl/nl/p/lego-bonsai/9300000038297067/"}, blocking=True)
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "bol_country": "BE"})
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN][entry.entry_id]
+    assert c.bol_country == "BE"
+    assert c.store["offers"]["10281"]["bol"]["url"] == "https://www.bol.com/be/nl/p/lego-bonsai/9300000038297067/"
+
+
+async def test_parser_lab_links_run_and_log(hass: HomeAssistant, entry, hass_ws_client, no_network):
+    """Manage → Parser lab: the address is filled in for a shop + set, a pasted page is read and analysed,
+    and a result can go to the logbook with its analysis."""
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281", "rrp": 49.99}, blocking=True)
+    await hass.services.async_call(DOMAIN, "set_offer", {"set_number": "10281", "retailer": "bol",
+                                                         "url": "https://www.bol.com/nl/nl/p/lego-bonsai/9300000038297067/"}, blocking=True)
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/lab", "action": "links", "retailer": "bol", "set_number": "10281"})
+    links = (await ws.receive_json())["result"]
+    assert links["suggested"] == links["link"] == "https://www.bol.com/nl/nl/p/lego-bonsai/9300000038297067/" and "searchtext" in links["search"]
+    await ws.send_json({"id": 2, "type": "lego_tracker/lab", "action": "links", "retailer": "lego_com", "set_number": "10281"})
+    assert "/product/10281" in (await ws.receive_json())["result"]["suggested"]
+    page = '<html><h1>LEGO Icons 10281 Bonsai</h1><script type="application/ld+json">{"@type":"Product","name":"LEGO 10281 Bonsaiboom","offers":{"price":"12.99"}}</script></html>'
+    await ws.send_json({"id": 3, "type": "lego_tracker/lab", "action": "run", "retailer": "bol", "set_number": "10281",
+                        "url": links["link"], "html": page})
+    r = (await ws.receive_json())["result"]
+    assert r["price"] == 12.99 and r["verdict"] == "suspect" and r["pasted"] and any("35%" in f["text"] for f in r["findings"])
+    await ws.send_json({"id": 4, "type": "lego_tracker/lab", "action": "log", "result": {k: v for k, v in r.items() if k != "head"}})
+    assert (await ws.receive_json())["success"]
+    entry_ = c.store["activity"][-1]
+    assert entry_["kind"] == "lab" and entry_["set_number"] == "10281" and entry_["level"] == "warning" and entry_["details"]
+    await ws.send_json({"id": 5, "type": "lego_tracker/lab", "action": "run", "retailer": "nope", "url": "https://x.be"})
+    assert not (await ws.receive_json())["success"]
+    # only addresses on the chosen shop's own site (never another site or the local network)
+    for i, bad in enumerate(("https://evil.example/p/1", "http://192.168.1.10/", "https://bol.com.evil.example/x"), 6):
+        await ws.send_json({"id": i, "type": "lego_tracker/lab", "action": "run", "retailer": "bol", "url": bad})
+        res = await ws.receive_json()
+        assert not res["success"] and "not on bol.com" in res["error"]["message"]
+
+
+async def test_edit_all_saves_many_sets_and_copies_at_once(hass: HomeAssistant, entry, hass_ws_client, no_network):
+    """Manage → Edit all: names, RRP, own value, every copy (price, date, condition, location) and new sets in
+    one save; a set with a wrong value is reported and left as it was, the others are saved."""
+    c = await _setup(hass, entry)
+    for n in ("10281", "10311"):
+        await hass.services.async_call(DOMAIN, "add_set", {"set_number": n}, blocking=True)
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/bulk_update", "sets": [
+        {"set_number": "10281", "fields": {"name": "Bonsai", "rrp": 49.99, "current_value": 60, "copies": [
+            {"paid": "39,99", "added": "2024-05-01", "condition": "Sealed", "location": "zolder"},
+            {"paid": 35, "added": "2024-06-01", "condition": "Built", "location": "kast 2"}]}},
+        {"set_number": "10311", "fields": {"rrp": "not a price"}},
+        {"set_number": "42143", "new": True, "owned": True, "fields": {"copies": [{"paid": 300, "location": "kelder"}]}},
+        {"set_number": "99999", "fields": {"name": "x"}},
+    ]})
+    r = (await ws.receive_json())["result"]
+    assert r["saved"] == 2 and r["added"] == 1 and set(r["errors"]) == {"10311", "99999"}
+    coll = c.store["collection"]["10281"]
+    assert c.store["sets"]["10281"]["name"] == "Bonsai" and c.store["sets"]["10281"]["rrp"] == 49.99
+    assert [x["location"] for x in coll["items"]] == ["zolder", "kast 2"] and coll["items"][0]["paid"] == 39.99
+    assert coll["qty"] == 2 and coll["current_value"] == 60
+    assert c.store["collection"]["42143"]["items"][0]["location"] == "kelder"
+    assert "rrp" not in c.store["sets"]["10311"] or c.store["sets"]["10311"]["rrp"] != "not a price"
+    # out of the collection again
+    await ws.send_json({"id": 2, "type": "lego_tracker/bulk_update", "sets": [{"set_number": "42143", "fields": {"owned": False}}]})
+    assert (await ws.receive_json())["result"]["saved"] == 1 and "42143" not in c.store["collection"]
+    # a new set with a wrong value is not added at all
+    await ws.send_json({"id": 3, "type": "lego_tracker/bulk_update", "sets": [
+        {"set_number": "60380", "new": True, "owned": True, "fields": {"copies": [{"paid": "abc"}]}}]})
+    r = (await ws.receive_json())["result"]
+    assert r["added"] == 0 and "60380" in r["errors"] and "60380" not in c.store["sets"] and "60380" not in c.store["collection"]
+    # a new set you neither own nor watch: tracked, not on the watchlist
+    await ws.send_json({"id": 4, "type": "lego_tracker/bulk_update", "sets": [
+        {"set_number": "60380", "new": True, "owned": False, "fields": {"watch": False}}]})
+    assert (await ws.receive_json())["result"]["added"] == 1 and not c.is_watched("60380")
+
+
+async def test_deal_of_the_day_notification_once_a_day_from_its_time(hass: HomeAssistant, entry, no_network):
+    """A rule with "Deal of the day" sends the best deal of the rule's sets once a day, from the chosen time."""
+    from datetime import datetime
+    from pytest_homeassistant_custom_component.common import async_mock_service
+    from homeassistant.util import dt as dt_util
+    from custom_components.lego_tracker.notifications import validate_rules
+
+    c = await _setup(hass, entry)
+    pn = async_mock_service(hass, "persistent_notification", "create")
+    for n, rrp, price in (("10311", 50, 30.0), ("10281", 50, 45.0)):
+        await hass.services.async_call(DOMAIN, "add_set", {"set_number": n, "rrp": rrp}, blocking=True)
+        c.store["offers"][n]["bol"] = {"url": f"https://www.bol.com/nl/nl/p/lego-{n}/1/", "history": []}
+        no_network.return_value = (Parsed(price=price, title=f"LEGO {n}"), None)
+        await c.refresh_set(n, ["bol"])
+    c.async_set_updated_data(c.compute())
+    assert c.deal_of_the_day()[0] == "10311"
+    c.store["notify_rules"] = validate_rules([{"name": "Deal of the day", "scope": {"type": "watchlist"}, "triggers": ["deal_of_day"],
+                                               "params": {"dotd_time": "09:30"}, "targets": [{"type": "persistent"}]}])
+    tz = dt_util.get_default_time_zone()
+    n0 = len(pn)
+    await c.notifier.deal_of_the_day(datetime(2026, 10, 7, 9, 0, tzinfo=tz))       # not yet
+    assert len(pn) == n0
+    await c.notifier.deal_of_the_day(datetime(2026, 10, 7, 9, 35, tzinfo=tz))
+    await hass.async_block_till_done()
+    assert len(pn) == n0 + 1 and "10311" in pn[-1].data["title"] and "€30.00" in pn[-1].data["message"]
+    await c.notifier.deal_of_the_day(datetime(2026, 10, 7, 18, 0, tzinfo=tz))      # once a day
+    assert len(pn) == n0 + 1
+    await c.notifier.deal_of_the_day(datetime(2026, 10, 8, 9, 31, tzinfo=tz))      # the next day again
+    await hass.async_block_till_done()
+    assert len(pn) == n0 + 2
+    with pytest.raises(ValueError):
+        validate_rules([{"name": "x", "triggers": ["deal_of_day"], "params": {"dotd_time": "25:99"}, "targets": [{"type": "persistent"}]}])
+    # during quiet hours it waits in the queue and is never cut off behind other notifications
+    c.store["notify_queue"] = {"q": [{"title": f"t{i}", "message": "m", "url": None} for i in range(20)]
+                               + [{"title": "⭐ Deal of the day: 10311", "message": "€30.00", "url": None, "dotd": True}]}
+    c.store["notify_rules"] = validate_rules([{"id": "q", "name": "q", "triggers": ["digest"], "targets": [{"type": "persistent"}]}])
+    await c.notifier.flush_queues()
+    await hass.async_block_till_done()
+    assert "Deal of the day: 10311" in pn[-1].data["message"] and "6 more" in pn[-1].data["message"]
+    # the queue keeps the newest 50, never without the deal of the day
+    rule = c.store["notify_rules"][0] | {"quiet": {"from": "00:00", "to": "23:59"}, "targets": [{"type": "notify", "service": "notify.phone"}]}
+    c.store["notify_queue"] = {"q": [{"title": "⭐ dotd", "message": "m", "url": None, "dotd": True}]}
+    for i in range(60):
+        await c.notifier.send(rule, f"n{i}", "m")
+    q = c.store["notify_queue"]["q"]
+    assert len(q) == 50 and q[0]["title"] == "⭐ dotd" and q[-1]["title"] == "n59"
