@@ -304,6 +304,11 @@ The icon and logo live in `custom_components/lego_tracker/brand/` (`icon.png`, `
 
 The integration shows as **B.R.I.C.K.** in HACS, the integrations list, the sidebar and the panel. The internal domain (`lego_tracker`) and the entity IDs of existing installations are unchanged, so automations and history keep working; new installations get entity IDs starting with `sensor.brick_`. The panel's address is now `/brick`.
 
+## Contact
+B.R.I.C.K. is made by **Emery Frijters** from Belgium, a LEGO collector and Home Assistant user. I wanted to keep better track of my own collection: what I have, where it is, what it is worth and when a set on my wishlist is on sale. That is how this app started. I work on it in my spare time, together with a group of beta testers whose reports make it better every week.
+
+Found a bug or have an idea? Please open an [issue](https://github.com/emeryf81/lot/issues), so others can follow along. Like the app? [Buy me a coffee](https://www.buymeacoffee.com/emeryf).
+
 ## Development
 ```
 # logic tests (Python 3.11+)
