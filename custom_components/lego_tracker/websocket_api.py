@@ -1020,7 +1020,7 @@ class UserscriptView(HomeAssistantView):
 @websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/dev/tool",
                                   vol.Required("action"): vol.In(["stats", "reset", "parse", "fetch", "queue", "outliers",
-                                                                  "debug", "dump"]),
+                                                                  "debug", "dump", "health", "schedule", "jobs", "sources"]),
                                   vol.Optional("what", default=""): str, vol.Optional("retailer"): str,
                                   vol.Optional("html", default=""): vol.All(str, vol.Length(max=5_000_000)),
                                   vol.Optional("url", default=""): str, vol.Optional("set_number"): str,
@@ -1054,6 +1054,16 @@ async def ws_dev_tool(hass, connection, msg):
                 coord.push_update()
         elif a == "debug":
             out = {"debug": devtools.set_debug(msg["on"])}
+        elif a == "health":
+            out = {"findings": devtools.health(coord, msg["apply"])}
+            if msg["apply"]:
+                coord.push_update()
+        elif a == "schedule":
+            out = devtools.schedule(coord)
+        elif a == "jobs":
+            out = {"jobs": devtools.jobs(coord)}
+        elif a == "sources":
+            out = devtools.sources(coord)
         else:
             out = json.loads(json.dumps(devtools.dump(coord), default=str))
     except ValueError as err:

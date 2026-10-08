@@ -3387,3 +3387,42 @@ async def test_names_of_earlier_versions_are_upgraded(hass: HomeAssistant, entry
     assert "brickeconomy" not in c.store["compare"] and c.store["compare"]["market"]["10281"]["name"] == "Market value"
     assert (s["name_source"], s["pieces_source"], s["image_source"]) == ("set_data_api", "set_data_page", "set_data_api+parts_api")
     assert s["rrp_source"] == "official"
+
+
+async def test_developer_data_check_schedule_jobs_and_sources(hass: HomeAssistant, entry, hass_ws_client, no_network):
+    """Developer tools: the data check finds inconsistencies and repairs only the safe ones; what runs when, the last
+    jobs and where set data comes from are shown."""
+    c = await _setup(hass, entry)
+    await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281", "owned": True}, blocking=True)
+    c.store["offers"]["99999"] = {"bol": {"url": "https://www.bol.com/nl/nl/p/x/1/", "history": []}}
+    c.store["offers"]["10281"]["amazon_nl"] = {"url": "https://www.amazon.nl/dp/B0AAAAAAAA", "history": [[200, 30.0], [100, 31.0]]}
+    c.store["collection"]["10281"] = {"qty": 3, "items": [{"paid": 30}]}
+    c.store["sets"]["10281"].update(pieces=5, rrp=49.99, pieces_source="import")
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/dev/tool", "action": "health"})
+    kinds = {f["kind"]: f for f in (await ws.receive_json())["result"]["findings"]}
+    assert {"orphan_offers", "unsorted_history", "quantity_out_of_step", "suspicious_piece_counts"} <= set(kinds)
+    assert kinds["orphan_offers"]["repairable"] and not kinds["suspicious_piece_counts"]["repairable"]
+    await ws.send_json({"id": 2, "type": "lego_tracker/dev/tool", "action": "health", "apply": True})
+    await ws.receive_json()
+    assert "99999" not in c.store["offers"] and c.store["collection"]["10281"]["qty"] == 1
+    assert c.store["offers"]["10281"]["amazon_nl"]["history"] == [[100, 31.0], [200, 30.0]]
+    assert c.store["sets"]["10281"]["pieces"] == 5                       # not safe to repair: left for you
+    c.store["job_history"] = [{"kind": "refresh", "label": "Refreshing prices", "total": 2, "done": 2, "started": 100.0, "finished": 160.0}]
+    await ws.send_json({"id": 3, "type": "lego_tracker/dev/tool", "action": "jobs"})
+    assert (await ws.receive_json())["result"]["jobs"][0]["seconds"] == 60
+    await ws.send_json({"id": 4, "type": "lego_tracker/dev/tool", "action": "schedule"})
+    r = (await ws.receive_json())["result"]
+    assert "price_checks" in r and "set_database" in r and "deal_scan" in r
+    await ws.send_json({"id": 5, "type": "lego_tracker/dev/tool", "action": "sources"})
+    assert (await ws.receive_json())["result"]["pieces"] == {"import": 1}
+
+
+async def test_piece_counts_read_wrongly_are_removed(hass: HomeAssistant, entry, no_network):
+    """A count of 5 pieces for a €349 set came from a thousands separator read wrongly: it is removed (and looked up
+    again); a count you typed yourself and a real small set stay."""
+    c = await _setup(hass, entry)
+    c.store["sets"].update({"10256": {"rrp": 349.99, "pieces": 5}, "10281": {"rrp": 49.99, "pieces": 7, "pieces_source": "user"},
+                            "30668": {"rrp": 3.99, "pieces": 6}})
+    c._fix_piece_counts()
+    assert "pieces" not in c.store["sets"]["10256"] and c.store["sets"]["10281"]["pieces"] == 7 and c.store["sets"]["30668"]["pieces"] == 6

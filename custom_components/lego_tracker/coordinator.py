@@ -717,6 +717,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             job["current"] = None
             job["finished"] = time.time()
             self.last_job = dict(job)
+            hist = self.store.setdefault("job_history", [])          # developer tools: the last jobs and how long they took
+            hist.append({k: job.get(k) for k in ("kind", "label", "total", "done", "updated", "found", "errors", "skipped",
+                                                 "started", "finished", "cancelled")})
+            del hist[: max(0, len(hist) - 30)]
             parts = [T("{n} updated", n=job["updated"]) if job.get("updated") else "",
                      T("{n} links found", n=job["found"]) if job.get("found") else "",
                      T("{n} skipped (paused)", n=job["skipped"]) if job.get("skipped") else "",

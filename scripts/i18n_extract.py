@@ -25,7 +25,7 @@ for m in re.finditer(r'(?:label|hint): ' + STR, sec): add(m.group(1))
 for m in re.finditer(r'\["\w+", ' + STR + r'\]', sec): add(m.group(1))
 for blk in re.findall(r'sorts: \[(.*?)\]\s*\}', js): 
     for m in re.finditer(r'\["\w+", ' + STR + r'\]', blk): add(m.group(1))
-for m in re.finditer(r'(?:srcLabel|SOURCE_WORDS) = \{(.*?)\};', js, re.S):
+for m in re.finditer(r'(?:srcLabel|SOURCE_WORDS|KINDS) = \{(.*?)\};', js, re.S):
     for x in re.finditer(r': ' + STR, m.group(1)): add(x.group(1))
 for m in re.finditer(r'const ic = \{(.*?)\};', js):
     for x in re.finditer(r'\["[^"]*", ' + STR + r'\]', m.group(1)): add(x.group(1))

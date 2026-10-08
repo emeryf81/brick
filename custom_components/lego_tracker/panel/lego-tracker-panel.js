@@ -3025,6 +3025,10 @@ class LegoTrackerPanel extends HTMLElement {
         <button class="btn ghost sm" id="d_stats" type="button">📊 ${t("Storage")}</button>
         <button class="btn ghost sm" id="d_queue" type="button">📋 ${t("Userscript queue")}</button>
         <button class="btn ghost sm" id="d_out" type="button">📉 ${t("Find outlier prices")}</button>
+        <button class="btn ghost sm" id="d_health" type="button">🩺 ${t("Data check")}</button>
+        <button class="btn ghost sm" id="d_sched" type="button">🗓 ${t("What runs when")}</button>
+        <button class="btn ghost sm" id="d_jobs" type="button">🧾 ${t("Last jobs")}</button>
+        <button class="btn ghost sm" id="d_src" type="button">🧬 ${t("Where set data comes from")}</button>
         <button class="btn ghost sm" id="d_dump" type="button">⬇ ${t("Debug dump (JSON)")}</button>
         <label class="chk" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="d_debug"> ${t("Debug logging")}</label></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px"><b style="font-size:13px">${t("Reset")}:</b>
@@ -3070,6 +3074,39 @@ class LegoTrackerPanel extends HTMLElement {
       on("d_outx", async () => { if (!confirm(t("Remove these {n} prices", { n: pts.length }) + "?")) return; const r = await dev({ action: "outliers", apply: true }); showOutliers(r.points, true); await this.load(); });
     };
     on("d_out", async () => showOutliers((await dev({ action: "outliers" })).points, false));
+    const KINDS = { orphan_offers: "Shop links of sets that are no longer tracked", orphan_collection: "Collection entries without a set",
+      bad_set_numbers: "Set numbers in an unusual form", links_of_unknown_shops: "Links of shops that are no longer in your shop settings",
+      unsorted_history: "Price histories out of order", same_link_for_several_sets: "The same link for several sets",
+      quantity_out_of_step: "Quantity out of step with the copies", suspicious_piece_counts: "Suspicious piece counts",
+      suspicious_rrp: "Suspicious RRPs", future_purchase_dates: "Purchase dates in the future" };
+    const showHealth = (list, applied) => {
+      const fixable = list.filter((f) => f.repairable).length;
+      out.innerHTML = !list.length ? `<p class="ok">✓ ${t("No problems found in the stored data.")}</p>` : `<div class="tscroll"><table class="tbl">${list.map((f) => `<tr><td><b>${esc(t(KINDS[f.kind] || f.kind))}</b><div class="muted" style="font-size:12px">${esc(f.examples.join(" · "))}</div></td>
+        <td class="num">${f.count}</td><td>${f.repairable ? `<span class="ok">${t("can be repaired")}</span>` : `<span class="muted">${t("check by hand")}</span>`}</td></tr>`).join("")}</table></div>
+        ${applied ? `<p class="ok">✓ ${t("Repaired")}</p>` : fixable ? `<button class="btn sm" id="d_fix" type="button">🛠 ${t("Repair what is safe ({n})", { n: fixable })}</button>` : ""}`;
+      on("d_fix", async () => { if (!confirm(t("Repair what is safe ({n})", { n: fixable }) + "?")) return; const r = await dev({ action: "health", apply: true }); showHealth(r.findings.filter((f) => !f.repairable), true); await this.load(); });
+    };
+    on("d_health", async () => showHealth((await dev({ action: "health" })).findings, false));
+    const when = (ts) => (ts ? `${DATE(ts, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : "–");
+    on("d_sched", async () => {
+      const r = await dev({ action: "schedule" }), pc = r.price_checks || {};
+      const row = (k, v) => `<tr><td class="muted">${esc(k)}</td><td>${v}</td></tr>`;
+      out.innerHTML = `<table class="tbl">${row(t("Price checks"), `${esc(pc.mode || "")} · ${t("next")}: ${when(pc.next)}${pc.next_set ? ` (${esc(pc.next_set)})` : ""}${pc.per_hour ? ` · ${t("{n} per hour", { n: pc.per_hour })}` : ""}`)}
+        ${row(t("Market value"), r.market_value.on ? `${t("next")}: ${when(r.market_value.next)}` : t("off"))}
+        ${row(t("Set database"), `${t("updated")}: ${when(r.set_database.updated)} · ${t("next")}: ${when(r.set_database.next)} · ${INT(r.set_database.sets)}`)}
+        ${row(t("Deals on every LEGO set"), `${r.deal_scan.today || 0}/${r.deal_scan.per_day} ${t("today")} · ${INT(r.deal_scan.candidates)} ${t("candidates")}`)}
+        ${Object.entries(r.sitemaps || {}).map(([k, v]) => row(`🗺 ${k}`, `${t("next")}: ${when(v)}`)).join("")}
+        ${Object.entries(r.paused || {}).map(([k, v]) => row(`⏸ ${k}`, `${t("until")} ${when(v)}`)).join("")}</table>`;
+    });
+    on("d_jobs", async () => {
+      const r = await dev({ action: "jobs" });
+      out.innerHTML = !r.jobs.length ? `<p class="muted">${t("No jobs yet.")}</p>` : `<div class="tscroll"><table class="tbl"><tr><th>${t("Job")}</th><th>${t("Started")}</th><th class="num">${t("Sets")}</th><th class="num">${t("Updated")}</th><th class="num">${t("Errors")}</th><th class="num">${t("Time")}</th></tr>
+        ${r.jobs.map((j) => `<tr><td>${esc(tx(j.label || j.kind))}${j.cancelled ? ` <span class="warn">${t("stopped")}</span>` : ""}</td><td>${when(j.started)}</td><td class="num">${j.done}/${j.total}</td><td class="num">${j.updated || 0}</td><td class="num">${j.errors || 0}</td><td class="num">${j.seconds != null ? dur(j.seconds) : "–"}</td></tr>`).join("")}</table></div>`;
+    });
+    on("d_src", async () => {
+      const r = await dev({ action: "sources" }), F = { name: t("Name"), rrp: t("RRP"), image: t("Image"), pieces: t("Pieces"), theme: t("Theme") };
+      out.innerHTML = `<div class="tscroll"><table class="tbl">${Object.entries(r).map(([f, c]) => `<tr><td><b>${esc(F[f] || f)}</b></td><td>${Object.entries(c).sort((a, b) => b[1] - a[1]).map(([k, n]) => `<span class="chip sm">${esc(k === "missing" ? t("missing") : k === "unknown" ? t("unknown") : srcName(k))} <b>${n}</b></span>`).join(" ")}</td></tr>`).join("")}</table></div>`;
+    });
     on("d_dump", async () => {
       const r = await dev({ action: "dump" }), a = document.createElement("a");
       a.href = URL.createObjectURL(new Blob([JSON.stringify(r, null, 1)], { type: "application/json" }));

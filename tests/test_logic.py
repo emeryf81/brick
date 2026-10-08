@@ -888,3 +888,10 @@ async def test_metadata_prefers_the_official_piece_count(monkeypatch):
     meta, source = await client.lookup_metadata(None, "", "key", "10281")
     assert meta["pieces"] == 878 and meta["_from"]["pieces"] == "set_data_page" and meta["name"] == "Bonsai"
     assert source == "parts_api+set_data_page"
+
+
+def test_csv_piece_count_with_a_thousands_separator():
+    """5.923, 5,923 and 5 923 are five thousand nine hundred and twenty-three pieces, not 5."""
+    text = "Number;Name;Pieces\n10256;Taj Mahal;5.923\n10270;Bookshop;2,504\n10297;Boutique Hotel;3 066\n10281;Bonsai;878\n"
+    rows, _ = csv_import.parse_collection_csv(text)
+    assert {r["set_number"]: r.get("pieces") for r in rows} == {"10256": 5923, "10270": 2504, "10297": 3066, "10281": 878}
