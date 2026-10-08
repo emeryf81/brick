@@ -197,6 +197,7 @@
 "Collection entries without a set": "Sammlungseinträge ohne Set",
 "Collection growth": "Wachstum der Sammlung",
 "Collection item {number} without a set.": "Sammlungseintrag {number} ohne Set.",
+"Collection item {number}: invalid copies.": "Sammlungseintrag {number}: ungültige Exemplare.",
 "Collection statistics": "Sammlungsstatistik",
 "Collection value": "Sammlungswert",
 "Collects the links, prices, errors and recent log of this set, with your remark, for the logbook or a CSV file": "Sammelt Links, Preise, Fehler und das aktuelle Protokoll dieses Sets mit deiner Anmerkung, für das Protokoll oder eine CSV-Datei",

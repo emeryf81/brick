@@ -197,6 +197,7 @@
 "Collection entries without a set": "Entri koleksi tanpa set",
 "Collection growth": "Pertumbuhan koleksi",
 "Collection item {number} without a set.": "Item koleksi {number} tanpa set.",
+"Collection item {number}: invalid copies.": "Item koleksi {number}: eksemplar tidak valid.",
 "Collection statistics": "Statistik koleksi",
 "Collection value": "Nilai koleksi",
 "Collects the links, prices, errors and recent log of this set, with your remark, for the logbook or a CSV file": "Mengumpulkan tautan, harga, kesalahan, dan log terbaru set ini, dengan catatan Anda, untuk log atau file CSV",

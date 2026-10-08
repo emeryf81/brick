@@ -197,6 +197,7 @@
 "Collection entries without a set": "세트가 없는 컬렉션 항목",
 "Collection growth": "컬렉션 성장",
 "Collection item {number} without a set.": "세트가 없는 컬렉션 항목 {number}.",
+"Collection item {number}: invalid copies.": "컬렉션 항목 {number}: 잘못된 사본.",
 "Collection statistics": "컬렉션 통계",
 "Collection value": "컬렉션 가치",
 "Collects the links, prices, errors and recent log of this set, with your remark, for the logbook or a CSV file": "이 세트의 링크, 가격, 오류, 최근 로그를 메모와 함께 로그 또는 CSV 파일로 모읍니다",

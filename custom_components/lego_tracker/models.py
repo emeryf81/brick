@@ -959,6 +959,9 @@ def validate_backup(data: Any) -> dict[str, Any]:
     for num, e in clean["collection"].items():
         if num not in clean["sets"] or not isinstance(e, dict):
             raise LocalizedError("Collection item {number} without a set.", number=num)
+        items = e.get("items")
+        if items is not None and (not isinstance(items, list) or not all(isinstance(c, dict) for c in items)):
+            raise LocalizedError("Collection item {number}: invalid copies.", number=num)
     for rec in clean["sold"]:
         if not isinstance(rec, dict) or not isinstance(rec.get("id"), str) or not re.fullmatch(r"\d{3,7}", str(rec.get("set_number", ""))) \
                 or not all(rec.get(k) is None or isinstance(rec[k], (int, float)) for k in ("price", "paid", "rrp", "value")):

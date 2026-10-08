@@ -208,7 +208,8 @@ def health(coord: Any, repair: bool = False) -> list[dict[str, Any]]:
             if o.get("url"):
                 urls.setdefault(o["url"].split("?")[0].rstrip("/").lower(), []).append(n)
     add("same_link_for_several_sets", [f"{u} ({', '.join(sorted(set(ns)))})" for u, ns in urls.items() if len(set(ns)) > 1], None)
-    qty = [n for n, e in coll.items() if e.get("items") and e.get("qty") != len(e["items"])]
+    qty = [n for n, e in coll.items() if isinstance(e.get("items"), list) and e["items"] and all(isinstance(c, dict) for c in e["items"])
+           and e.get("qty") != len(e["items"])]
     add("quantity_out_of_step", qty, lambda xs: [sync_copies(coll[n]) for n in xs])
     num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)  # noqa: E731 - stored data is not validated
     add("suspicious_piece_counts", [f"{n}: {s.get('pieces')}" for n, s in sets.items() if s.get("pieces") and (

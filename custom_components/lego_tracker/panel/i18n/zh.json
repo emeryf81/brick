@@ -197,6 +197,7 @@
 "Collection entries without a set": "没有套装的收藏条目",
 "Collection growth": "收藏增长",
 "Collection item {number} without a set.": "收藏项 {number} 没有对应的套装。",
+"Collection item {number}: invalid copies.": "收藏条目 {number}：件数据无效。",
 "Collection statistics": "收藏统计",
 "Collection value": "收藏价值",
 "Collects the links, prices, errors and recent log of this set, with your remark, for the logbook or a CSV file": "收集此套装的链接、价格、错误和最近日志以及你的备注，写入日志或 CSV 文件",

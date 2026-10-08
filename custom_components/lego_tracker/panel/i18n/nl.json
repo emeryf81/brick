@@ -197,6 +197,7 @@
 "Collection entries without a set": "Collectie-items zonder set",
 "Collection growth": "Collectiegroei",
 "Collection item {number} without a set.": "Collectie-item {number} zonder set.",
+"Collection item {number}: invalid copies.": "Collectie-item {number}: ongeldige exemplaren.",
 "Collection statistics": "Collectiestatistieken",
 "Collection value": "Collectiewaarde",
 "Collects the links, prices, errors and recent log of this set, with your remark, for the logbook or a CSV file": "Verzamelt de links, prijzen, fouten en het recente logboek van deze set, met je opmerking, voor het logboek of een CSV-bestand",

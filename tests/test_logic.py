@@ -905,3 +905,5 @@ def test_a_sale_without_a_known_cost_is_revenue_not_profit():
     assert s["revenue"] == 110 and s["cost"] == 40 and s["profit"] == 10 and s["by_year"]["2025"]["profit"] == 10
     with pytest.raises(ValueError):
         models.validate_backup({"sets": {}, "sold": [{"set_number": "10281", "price": 1}]})      # a sale needs its id
+    with pytest.raises(ValueError, match="invalid copies"):
+        models.validate_backup({"sets": {"10281": {}}, "collection": {"10281": {"qty": 2, "items": [1]}}})
