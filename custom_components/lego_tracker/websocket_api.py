@@ -72,7 +72,7 @@ def _card(coord, num: str, with_history: bool = False) -> dict[str, Any]:
                   "manual_price": (o.get("manual_price") or {}).get("price"), "manual_url": bool(o.get("manual_url")),
                   "available": o.get("available"), "error": o.get("error"), "checked": o.get("last_checked"),
                   "unavailable": o.get("unavailable") if not o.get("available") else None,
-                  "held": bool(o.get("unavailable") and o.get("available")),       # LEGO.com: price kept while unavailable
+                  "held": bool(o.get("unavailable") and o.get("available")),       # official shop: price kept while unavailable
                   "low": min((p for _, p in o.get("history", [])), default=None),
                   "title": o.get("title"), "link_status": o.get("link_status"), "link_reason": o.get("link_reason"),
                   "via": o.get("last_via") if o.get("available") and not o.get("manual_price") else None, "found_via": o.get("found_via"),
@@ -174,7 +174,7 @@ def ws_overview(hass, connection, msg):
         "relay": {"enabled": coord.relay_enabled, "pending": coord.relay_items(100)["total"] if coord.relay_enabled else 0,
                   "continuous": coord.continuous_items(1)["counts"] if coord.relay_enabled else {},
                   "heartbeat": coord.store.get("relay_heartbeat")},
-        "bol_api": bool(coord.bol_api),
+        "bol_api": bool(coord.partner_api),
         "compare": _compare_status(coord), "deal_rules": coord.deal_rules | {"filter": coord.deal_filter},
         "deal_blocked": {n: why for n in coord.store["sets"]
                          if (why := coord.deal_blocked(n, (coord.data or coord.compute())["statuses"].get(n, {})))},
@@ -503,7 +503,7 @@ async def ws_shop_settings_withdraw(hass, connection, msg):
 
 @websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/settings/test_key",
-                                  vol.Required("source"): vol.In(["brickset", "rebrickable", "bol"]),
+                                  vol.Required("source"): vol.In(["set_data", "parts", "partner"]),
                                   vol.Optional("key"): str, vol.Optional("secret"): str})
 @websocket_api.async_response
 async def ws_test_key(hass, connection, msg):
@@ -512,8 +512,8 @@ async def ws_test_key(hass, connection, msg):
     from .client import test_metadata_source
 
     coord = _coord(hass)
-    if msg["source"] == "bol":
-        ok, text = await coord.test_bol(msg.get("key"), msg.get("secret"))
+    if msg["source"] == "partner":
+        ok, text = await coord.test_partner(msg.get("key"), msg.get("secret"))
         connection.send_result(msg["id"], {"ok": ok, "message": text})
         return
     key = msg.get("key") or (coord.api_key(f"{msg['source']}_api_key") if coord else "")
@@ -665,7 +665,7 @@ async def ws_offer_fetch(hass, connection, msg):
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/set/enrich", vol.Required("set_number"): str})
 @websocket_api.async_response
 async def ws_set_enrich(hass, connection, msg):
-    """Fill in the set data now: LEGO.com first (image, RRP, name), then Brickset / Rebrickable."""
+    """Fill in the set data now: the official shop first (image, RRP, name), then the set data sources."""
     coord = _coord(hass)
     num = normalize_set_number(msg["set_number"])
     if num not in coord.store["sets"]:

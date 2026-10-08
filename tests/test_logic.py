@@ -707,7 +707,7 @@ def test_amazon_without_a_price_is_out_of_stock_on_every_amazon_site():
                                                 "search": "https://www.amazon.fr/s?k={query}"}]})
     try:
         rid = shops.shop_id("Amazon FR")
-        assert parsers.is_amazon(rid) and not parsers.is_amazon("bol")
+        assert parsers.is_marketplace(rid) and not parsers.is_marketplace("bol")
         p = parsers.parse_page(rid, page)
         assert p.unavailable and p.reason == "sold_out"
         assert parsers.normalize_url(rid, "B0BX8YQ8M1") == "https://www.amazon.fr/dp/B0BX8YQ8M1"
@@ -724,19 +724,19 @@ def test_bol_com_site_choice_belgium_or_netherlands():
     """bol.com/nl/nl or bol.com/be/nl: only the chosen site is asked (search, links, the same product key)."""
     from lego_pkg import shops
     try:
-        shops.apply_shop_options({"bol_country": "BE"})
-        assert shops.LOCALE["bol"] == "be" and "bol.com/be/nl/" in parsers.search_url("bol", "10280")
-        assert shops.bol_site_url("https://www.bol.com/nl/nl/p/lego-10280/9300000/") == "https://www.bol.com/be/nl/p/lego-10280/9300000/"
+        shops.apply_shop_options({"partner_country": "BE"})
+        assert shops.LOCALE["partner"] == "be" and "bol.com/be/nl/" in parsers.search_url("bol", "10280")
+        assert shops.partner_site_url("https://www.bol.com/nl/nl/p/lego-10280/9300000/") == "https://www.bol.com/be/nl/p/lego-10280/9300000/"
         page = '<a href="/nl/nl/p/lego-icons-10280-bloemenboeket/9300000123/">x</a>'
         assert parsers.find_search_result("bol", page, "10280") == "https://www.bol.com/be/nl/p/lego-icons-10280-bloemenboeket/9300000123/"
         # the same product on both sites is one product (a link you blocked stays blocked)
         assert parsers.url_key("bol", "https://www.bol.com/be/nl/p/x/93/") == parsers.url_key("bol", "https://www.bol.com/nl/nl/p/x/93")
-        shops.apply_shop_options({"bol_country": "NL"})
-        assert shops.LOCALE["bol"] == "nl" and "bol.com/nl/nl/" in parsers.search_url("bol", "10280")
-        shops.apply_shop_options({"bol_country": "auto", "lego_locale": "nl-be"})   # not chosen yet: bol.com/nl/nl, as before
-        assert shops.LOCALE["bol"] == "nl"
+        shops.apply_shop_options({"partner_country": "NL"})
+        assert shops.LOCALE["partner"] == "nl" and "bol.com/nl/nl/" in parsers.search_url("bol", "10280")
+        shops.apply_shop_options({"partner_country": "auto", "lego_locale": "nl-be"})   # not chosen yet: bol.com/nl/nl, as before
+        assert shops.LOCALE["partner"] == "nl"
         # your own search URL for bol.com is kept as you wrote it
-        shops.apply_shop_options({"bol_country": "BE", "shop_search": {"bol": "https://www.bol.com/nl/nl/s/?searchtext={query}&x=1"}})
+        shops.apply_shop_options({"partner_country": "BE", "shop_search": {"bol": "https://www.bol.com/nl/nl/s/?searchtext={query}&x=1"}})
         assert parsers.search_url("bol", "1").startswith("https://www.bol.com/nl/nl/s/")
     finally:
         shops.apply_shop_options({})
@@ -776,7 +776,7 @@ def test_shop_settings_file_is_checked_and_drives_every_address():
     from lego_pkg import compare, shops
     example = json.loads((Path(__file__).parent.parent / "examples" / "lot-shops.example.json").read_text("utf-8"))
     ok = shops.validate_settings(example)
-    assert [s["reader"] for s in ok["shops"]] == ["lego", "amazon", "amazon", "amazon", "bol", "kruidvat", "generic"]
+    assert [s["reader"] for s in ok["shops"]] == ["lego", "marketplace", "marketplace", "marketplace", "partner", "retail", "generic"]
     for bad, why in ((lambda d: d.update(format="x"), "not a shop settings file"),
                      (lambda d: d.update(version=9), "version 9"),
                      (lambda d: d.update(shops=[]), "no shops"),
@@ -787,8 +787,8 @@ def test_shop_settings_file_is_checked_and_drives_every_address():
                      (lambda d: d["comparison_sites"][0]["start"].update(BE="https://evil.example/?q={query}"), "on one of its hosts"),
                      (lambda d: d["comparison_sites"][3].update(langs="en"), "hosts and start addresses"),
                      (lambda d: d["comparison_sites"][0].update(hosts="www.kieskeurig.be"), "hosts and start addresses"),
-                     (lambda d: d["data_sources"].update(brickset_page="https://brickset.com/sets/"), "must be an https:// address"),
-                     (lambda d: d["data_sources"].update(rebrickable_api="http://rebrickable.com/api"), "must be an https:// address"),
+                     (lambda d: d["data_sources"].update(set_data_page="https://brickset.com/sets/"), "must be an https:// address"),
+                     (lambda d: d["data_sources"].update(parts_api="http://rebrickable.com/api"), "must be an https:// address"),
                      (lambda d: d["data_sources"].update(evil="https://x.example/"), "Unknown data source"),
                      (lambda d: d.update(shops=1), "wrong type"),
                      (lambda d: d.update(comparison_sites={"a": 1}), "wrong type"),
@@ -807,15 +807,15 @@ def test_shop_settings_file_is_checked_and_drives_every_address():
     assert compare.first_url("producthero", "10311", "it-it", "5702017416281") == \
         "https://shopping.producthero.com/en/product/05702017416281?country=it"
     assert compare.first_url("producthero", "10311", "nl-be") is None                 # needs an EAN
-    assert compare.first_url("brickeconomy", "10311") == "https://www.brickeconomy.com/set/10311-1/"
-    assert shops.source_url("brickset_page") == "https://brickset.com/sets/{number}-1" and set(ok["data_sources"]) == set(shops.DATA_SOURCES)
+    assert compare.first_url("market", "10311") == "https://www.brickeconomy.com/set/10311-1/"
+    assert shops.source_url("set_data_page") == "https://brickset.com/sets/{number}-1" and set(ok["data_sources"]) == set(shops.DATA_SOURCES)
     assert compare.is_compare_url("https://www.kieskeurig.nl/x") and compare.shop_retailer("Amazon BE", None, {}) == "amazon_be"
     # without settings: no shops, no comparison sites, no addresses at all
     try:
         shops.raw_apply_shop_options({})
         assert shops.RETAILERS == {} and compare.SOURCES == {} and not shops.ready()
         assert parsers.search_url("amazon_be", "10311") is None and parsers.lego_product_url("10311") is None
-        assert shops.SOURCES == {} and shops.source_url("brickset_api") is None
+        assert shops.SOURCES == {} and shops.source_url("set_data_api") is None
     finally:
         shops.apply_shop_options({})
 
@@ -846,18 +846,18 @@ def test_piece_count_comes_from_the_best_source():
 
     s = {}
     assert set_pieces(s, 1000, "setdb") and s == {"pieces": 1000, "pieces_source": "setdb"}
-    assert set_pieces(s, 1010, "Rebrickable") and s["pieces"] == 1010
-    assert set_pieces(s, 1023, "brickset.com") and s["pieces_source"] == "brickset.com"
-    assert not set_pieces(s, 1000, "Rebrickable") and s["pieces"] == 1023          # a weaker source never wins
-    assert set_pieces(s, 1024, "LEGO.com") and s["pieces"] == 1024
-    assert not set_pieces(s, 0, "LEGO.com") and not set_pieces(s, "x", "LEGO.com") and not set_pieces(s, 50000, "LEGO.com")
+    assert set_pieces(s, 1010, "parts_api") and s["pieces"] == 1010
+    assert set_pieces(s, 1023, "set_data_page") and s["pieces_source"] == "set_data_page"
+    assert not set_pieces(s, 1000, "parts_api") and s["pieces"] == 1023          # a weaker source never wins
+    assert set_pieces(s, 1024, "official") and s["pieces"] == 1024
+    assert not set_pieces(s, 0, "official") and not set_pieces(s, "x", "official") and not set_pieces(s, 50000, "official")
     mine = {"pieces": 999, "pieces_source": "user"}
-    assert not set_pieces(mine, 1024, "LEGO.com", replace_unknown=True) and mine["pieces"] == 999
+    assert not set_pieces(mine, 1024, "official", replace_unknown=True) and mine["pieces"] == 999
     old = {"pieces": 980}                                # from before 1.1: source unknown
-    assert not set_pieces(old, 1024, "Brickset")
-    assert set_pieces(old, 1024, "Brickset", setdb_pieces=980)                      # it was the set database's count
+    assert not set_pieces(old, 1024, "set_data_api")
+    assert set_pieces(old, 1024, "set_data_api", setdb_pieces=980)                      # it was the set database's count
     old2 = {"pieces": 980}
-    assert set_pieces(old2, 1024, "Brickset", replace_unknown=True) and old2["pieces_source"] == "Brickset"
+    assert set_pieces(old2, 1024, "set_data_api", replace_unknown=True) and old2["pieces_source"] == "set_data_api"
 
 
 def test_lego_page_gives_the_official_piece_count():
@@ -882,9 +882,9 @@ async def test_metadata_prefers_the_official_piece_count(monkeypatch):
     async def page(session, num):
         return {"pieces": 878, "rrp": 49.99}
 
-    monkeypatch.setattr(client, "rebrickable_lookup", rb)
-    monkeypatch.setattr(client, "brickset_page_lookup", page)
+    monkeypatch.setattr(client, "parts_lookup", rb)
+    monkeypatch.setattr(client, "set_data_page_lookup", page)
     monkeypatch.setattr(client, "source_url", lambda key: "https://example.test/{number}")
     meta, source = await client.lookup_metadata(None, "", "key", "10281")
-    assert meta["pieces"] == 878 and meta["_from"]["pieces"] == "brickset.com" and meta["name"] == "Bonsai"
-    assert source == "Rebrickable+brickset.com"
+    assert meta["pieces"] == 878 and meta["_from"]["pieces"] == "set_data_page" and meta["name"] == "Bonsai"
+    assert source == "parts_api+set_data_page"

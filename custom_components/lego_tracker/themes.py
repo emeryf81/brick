@@ -29,7 +29,7 @@ THEMES = (
     "Toy Story", "Trains", "Trolls World Tour", "Ultra Agents", "Unikitty!", "Universal Building Set", "Vidiyo",
     "Vikings", "Wednesday", "Western", "Wicked", "World City", "World Racers", "Xtra", "Znap",
 )
-# the same theme under another name at another source (Brickset, LEGO.com)
+# the same theme under another name at another source (set data, the official shop)
 ALIASES = {"collectableminifigures": "minifigureseries", "minifigures": "minifigureseries", "marvel": "marvelsuperheroes",
            "dc": "dccomicssuperheroes", "dcsuperheroes": "dccomicssuperheroes", "legoart": "art", "art": "art",
            "miscellaneous": "exclusive", "spiderman": "spiderman", "pokemon": "pokemon"}

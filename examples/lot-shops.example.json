@@ -24,7 +24,7 @@
       "id": "amazon_nl",
       "name": "Amazon.nl",
       "domain": "amazon.nl",
-      "reader": "amazon",
+      "reader": "marketplace",
       "home": "https://www.amazon.nl/",
       "search": "https://www.amazon.nl/s?k={query}",
       "aliases": [
@@ -37,7 +37,7 @@
       "id": "amazon_de",
       "name": "Amazon.de",
       "domain": "amazon.de",
-      "reader": "amazon",
+      "reader": "marketplace",
       "home": "https://www.amazon.de/",
       "search": "https://www.amazon.de/s?k={query}",
       "aliases": [
@@ -50,7 +50,7 @@
       "id": "amazon_be",
       "name": "Amazon.com.be",
       "domain": "amazon.com.be",
-      "reader": "amazon",
+      "reader": "marketplace",
       "home": "https://www.amazon.com.be/",
       "search": "https://www.amazon.com.be/s?k={query}",
       "aliases": [
@@ -64,7 +64,7 @@
       "id": "bol",
       "name": "bol.com",
       "domain": "bol.com",
-      "reader": "bol",
+      "reader": "partner",
       "home": "https://www.bol.com/nl/nl/",
       "search": "https://www.bol.com/nl/nl/s/?searchtext={query}",
       "aliases": [
@@ -76,7 +76,7 @@
       "id": "kruidvat_be",
       "name": "Kruidvat.be",
       "domain": "kruidvat.be",
-      "reader": "kruidvat",
+      "reader": "retail",
       "home": "https://www.kruidvat.be/nl/",
       "search": "https://www.kruidvat.be/nl/search?text={query}",
       "aliases": [
@@ -100,6 +100,7 @@
     {
       "id": "kieskeurig",
       "name": "Kieskeurig",
+      "reader": "product_list",
       "hosts": [
         "www.kieskeurig.be",
         "www.kieskeurig.nl"
@@ -112,6 +113,7 @@
     {
       "id": "shoparize",
       "name": "Shoparize",
+      "reader": "listing",
       "hosts": [
         "www.shoparize.com"
       ],
@@ -123,6 +125,7 @@
     {
       "id": "channable",
       "name": "Channable Shopping",
+      "reader": "listing",
       "hosts": [
         "shopping.channable.com"
       ],
@@ -133,6 +136,7 @@
     {
       "id": "producthero",
       "name": "Producthero",
+      "reader": "inertia",
       "hosts": [
         "shopping.producthero.com"
       ],
@@ -149,6 +153,7 @@
     {
       "id": "market_value",
       "name": "Market value",
+      "reader": "market",
       "hosts": [
         "www.brickeconomy.com"
       ],
@@ -158,12 +163,12 @@
     }
   ],
   "data_sources": {
-    "brickset_api": "https://brickset.com/api/v3.asmx/getSets",
-    "brickset_page": "https://brickset.com/sets/{number}-1",
-    "rebrickable_api": "https://rebrickable.com/api/v3/lego",
+    "set_data_api": "https://brickset.com/api/v3.asmx/getSets",
+    "set_data_page": "https://brickset.com/sets/{number}-1",
+    "parts_api": "https://rebrickable.com/api/v3/lego",
     "set_database_sets": "https://cdn.rebrickable.com/media/downloads/sets.csv.gz",
     "set_database_themes": "https://cdn.rebrickable.com/media/downloads/themes.csv.gz",
-    "bol_api_token": "https://login.bol.com/token",
-    "bol_api": "https://api.bol.com/marketing/catalog/v1"
+    "partner_api_token": "https://login.bol.com/token",
+    "partner_api": "https://api.bol.com/marketing/catalog/v1"
   }
 }

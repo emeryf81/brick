@@ -10,7 +10,7 @@ from math import isfinite
 from statistics import median
 from typing import Any
 
-from .const import MAX_HISTORY
+from .const import MAX_HISTORY, OFFICIAL
 from .i18n import LocalizedError, T
 
 
@@ -257,7 +257,7 @@ def link_check(offer: dict[str, Any], lego_set: dict[str, Any], set_number: str)
     if offer.get("link_status") == "confirmed":
         return "confirmed", T("confirmed by hand")
     if re.search(rf"lego\.com/[a-z]{{2}}-[a-z]{{2}}/product/[^?#]*?(?<!\d){re.escape(set_number)}/?(?:[?#]|$)", offer.get("url") or ""):
-        return "ok", T("official LEGO.com page of this set")
+        return "ok", T("official shop's page of this set")
     title = offer.get("title")
     status, reason = title_check(title, set_number) if title else (None, "")
     if status is None and offer.get("url"):
@@ -528,10 +528,10 @@ def collection_analytics(store: dict[str, Any], statuses: dict[str, dict[str, An
 
 
 # ----------------------------------------------------------------- piece count
-# Where a piece count comes from, best first. The official count (LEGO.com, and Brickset that copies it)
-# beats a parts count of a parts database, which counts differently (e.g. without the minifigure parts).
-PIECE_RANK = {"user": 100, "LEGO.com": 90, "Brickset": 80, "brickset.com": 80, "import": 70, "market": 60,
-              "Rebrickable": 50, "catalog": 45, "setdb": 40}
+# Where a piece count comes from, best first. The official count (the official shop, and the set data source that
+# copies it) beats a parts count of a parts database, which counts differently (e.g. without the minifigure parts).
+PIECE_RANK = {"user": 100, OFFICIAL: 90, "set_data_api": 80, "set_data_page": 80, "import": 70, "market": 60,
+              "parts_api": 50, "catalog": 45, "setdb": 40}
 
 
 def set_pieces(s: dict[str, Any], pieces: Any, source: str, *, setdb_pieces: int | None = None,

@@ -25,7 +25,7 @@ from .const import (
 from .coordinator import LegoCoordinator
 from .i18n import T
 from .shops import (CONF_KEY_HOSTS, CONF_SETUP_VERSION, CONF_SHOP_PROFILE, apply_shop_options, domain_of, key_hosts,
-                    previous_settings, profile_ids)
+                    previous_settings, profile_ids, upgrade_options)
 from .csv_import import analyze_csv, apply_import, importable_rows
 from .models import normalize_set_number
 from .websocket_api import async_register_websocket
@@ -114,18 +114,21 @@ async def _send_digest(hass: HomeAssistant, coord: LegoCoordinator) -> None:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up the coordinator, platforms, panel, services, and scheduled refreshes."""
+    if (upgraded := upgrade_options(dict(entry.options))) is not None:      # names of options before 1.1
+        hass.config_entries.async_update_entry(entry, options=upgraded)
     if (previous := previous_settings(dict(entry.options))) is not None:     # an installation from before 1.0.0
-        # the shops it already knew stay as you set them (installations that never stored them knew the first six);
+        # the shops it already knew stay as you set them (installations that never stored them knew the first six
+        # shops of that file);
         # shops it didn't know yet are switched on once, as a new shop always was
         hass.config_entries.async_update_entry(entry, options={
             **entry.options, CONF_SHOP_PROFILE: previous, CONF_SETUP_VERSION: 1,
             CONF_KEY_HOSTS: key_hosts(previous, dict(entry.options)),     # the keys you had were used with these
-            CONF_KNOWN_SHOPS: entry.options.get(CONF_KNOWN_SHOPS) or ["lego_com", "amazon_nl", "amazon_de", "amazon_be", "bol", "kruidvat_be"]})
+            CONF_KNOWN_SHOPS: entry.options.get(CONF_KNOWN_SHOPS) or [x["id"] for x in previous["shops"]][:6]})
     apply_shop_options(dict(entry.options))
     # Shops new in the imported shop settings are switched on once; afterwards the user's choice wins.
     builtin = profile_ids()
     known = set(entry.options.get(CONF_KNOWN_SHOPS) or entry.options.get("retailers") or [])
-    # a shop you added yourself on the same site as one in the settings file (e.g. Smyths Toys)
+    # a shop you added yourself on the same site as one in the settings file
     same_site = [(rid, b) for b in builtin for rid, g in GENERIC_SHOPS.items()
                  if rid not in builtin and g.get("domain") == domain_of(b)]
     if new_shops := [r for r in builtin if r not in known]:

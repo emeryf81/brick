@@ -1,4 +1,4 @@
-"""Collection CSV import (collection sites / Brickset / Rebrickable / own spreadsheet) with validation.
+"""Collection CSV import (exports of collection sites / set databases / own spreadsheet) with validation.
 
 Flow: ``analyze_csv`` parses and checks every line without touching the store (used for the
 preview in the panel); ``apply_import`` then merges only the lines without errors.
@@ -199,7 +199,7 @@ def analyze_csv(text: str, store: dict[str, Any] | None = None, *, replace: bool
 
         item.setdefault("qty", 1)
         if not item.get("name") and not store["sets"].get(num, {}).get("name"):
-            issues.append(("info", T("no name; will be filled in from LEGO.com or Brickset")))
+            issues.append(("info", T("no name; will be filled in automatically")))
         if num in seen and not any(lvl == "error" for lvl, _ in issues):
             issues.append(("info", T("same set as line {line}: counts as an extra copy", line=seen[num])))
             result["summary"]["merged"] += 1

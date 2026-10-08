@@ -27,7 +27,7 @@ PER_DAY_DEFAULT = 300
 PER_DAY_CHOICES = (0, 100, 300, 600, 1000)
 MIN_SHARE = 0.25                   # a price below a quarter of the RRP is not the set (a part, a sticker, ...)
 MAX_DEAL = 80                      # nor is a discount above 80 %
-PRICE_SOURCES = ("kieskeurig", "shoparize", "channable")    # comparison sites that list many shops for a set number
+PRICE_READERS = ("product_list", "listing")    # comparison sites that list many shops for a set number
 
 
 def candidates(db: dict[str, list[Any]], scan: dict[str, dict[str, Any]], tracked: set[str] | dict[str, Any],

@@ -23,12 +23,12 @@ from urllib.parse import urljoin, urlparse
 
 from .models import parse_price
 from .parsers import KNOCKOFF_RE, accessory_word
-from .shops import ALIASES, compare_start
+from .shops import ALIASES, COMPARE as COMPARE_SITES, MARKET, compare_start
 
 # The comparison sites come from the shop settings file (shops.apply_shop_options → load_sites):
 # id -> (display name, host); order = order in which the sources are tried
 SOURCES: dict[str, tuple[str, str]] = {}
-FRESH_HOURS = {"brickeconomy": 24}          # market values move slowly: once a day is enough
+FRESH_HOURS = {MARKET: 24}          # market values move slowly: once a day is enough
 HOSTS: set[str] = set()
 MAX_STEPS = 3
 
@@ -195,7 +195,7 @@ def shop_retailer(name: str, href: str | None, domains: dict[str, str]) -> str |
         for rid, dom in domains.items():
             if host == dom or host.endswith("." + dom):
                 return rid
-    n = re.sub(r"\s+logo$", "", (name or "").lower().strip()).strip(" .")     # 'bol. logo' -> 'bol'
+    n = re.sub(r"\s+logo$", "", (name or "").lower().strip()).strip(" .")     # 'shop. logo' -> 'shop'
     for rid, dom in domains.items():               # custom shops: their domain in the shop name
         if dom and dom in n:
             return rid
@@ -226,7 +226,7 @@ def _shop_name(row: _Node, link: _Node) -> str:
 
 def _is_out_link(href: str, host: str, rel: str = "") -> bool:
     """A link to a shop: 'sponsored' links, other domains, and the site's own click-out redirects
-    (e.g. ocean.kieskeurig.be/e/c/..., /go/..., ?url=...)."""
+    (e.g. a click-out host such as out.<site>/e/c/..., /go/..., ?url=...)."""
     if not href or href.startswith(("#", "mailto:", "javascript:", "tel:")):
         return False
     if "sponsored" in rel.lower():
@@ -515,8 +515,8 @@ def _finish(info: dict[str, Any], offers: list[dict[str, Any]], page: str, num: 
                   rrp=rrp, ean=info.get("ean"), shops=sorted(shops.values(), key=lambda s: s["price"]))
 
 
-def _producthero(page: str, num: str, domains: dict[str, str], page_url: str) -> Result | None:
-    """Producthero renders with Inertia: the product and its shops sit in <script data-page="app">.
+def _inertia(page: str, num: str, domains: dict[str, str], page_url: str) -> Result | None:
+    """A site that renders with Inertia: the product and its shops sit in <script data-page="app">.
     Per shop the sale price counts when there is one (0 = none); only euro offers."""
     m = re.search(r'<script[^>]*data-page=["\']app["\'][^>]*>(.*?)</script>', page, re.S | re.I)
     if not m:
@@ -549,11 +549,12 @@ def _producthero(page: str, num: str, domains: dict[str, str], page_url: str) ->
 
 def parse(source: str, page: str, num: str, page_url: str, domains: dict[str, str], step: int = 0) -> Result:
     """What one fetched page of a source gives: offers, a URL to follow, or 'not there'."""
-    if source == "brickeconomy":
-        return parse_brickeconomy(page, num)
+    reader = (COMPARE_SITES.get(source) or {}).get("reader", "listing")
+    if reader == "market":
+        return parse_market(page, num)
     root = _dom(page)
     path = urlparse(page_url).path
-    if source == "kieskeurig":
+    if reader == "product_list":
         if "/product/" not in path:
             links = _links(root, page_url, r"/product/\d+", num)
             if not links:
@@ -569,15 +570,15 @@ def parse(source: str, page: str, num: str, page_url: str, domains: dict[str, st
             return Result("missing", note="only accessories")
         info, offers = _collect(page, page_url, False, root)
         return _finish(info, offers, page, num, domains, False, page_url)
-    if source == "producthero":
-        if (res := _producthero(page, num, domains, page_url)) is not None:
+    if reader == "inertia":
+        if (res := _inertia(page, num, domains, page_url)) is not None:
             return res
         head = _h1(page) + " " + _page_title(page)
         if is_accessory(head):
             return Result("missing", note="only accessories")
         info, offers = _collect(page, page_url, False, root)
         return _finish(info, offers, page, num, domains, False, page_url)
-    # search result pages (Shoparize, Channable): every result is one shop's offer
+    # search result pages ("listing"): every result is one shop's offer
     if not has_number(page, num):
         # a server-rendered result page always repeats the query; without it the results are
         # loaded afterwards by JavaScript and there is nothing in this HTML to read
@@ -618,7 +619,7 @@ def forecast_date(text: str | None) -> str | None:
     return f"{year}-12-31"
 
 
-def parse_brickeconomy(page: str, num: str) -> Result:
+def parse_market(page: str, num: str) -> Result:
     """Set page: market value (new / used), retail price, retirement (forecast), set data."""
     info, _ = _jsonld(page)
     body = re.sub(r"<(script|style|noscript)\b.*?</\1>", " ", page, flags=re.S | re.I)

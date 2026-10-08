@@ -94,7 +94,7 @@ async def fetch(coord: Any, url: str, set_number: str | None = None) -> dict[str
 
 
 def lego_summary(page: str, num: str | None) -> dict[str, Any]:
-    """Where a LEGO.com page keeps its product data, to see quickly why a price is (not) read."""
+    """Where a page of the official shop keeps its product data, to see quickly why a price is (not) read."""
     from .parsers import _jsonld_blocks, _lego_own_page, _meta, _walk
 
     nodes = [n for b in _jsonld_blocks(page) for n in _walk(b)

@@ -1,4 +1,4 @@
-"""Network access: retailer pages and optional Brickset metadata."""
+"""Network access: retailer pages and optional set data."""
 from __future__ import annotations
 
 import asyncio
@@ -14,8 +14,8 @@ import aiohttp
 
 from .models import normalize_set_number
 from .i18n import T
-from .shops import bol_site_url, domain_of, home_of, ready, reader_of, source_url
-from .parsers import Parsed, bot_wall, find_search_result, is_search_url, lego_number, title_check, lego_product_url, parse_brickset_page, parse_page, search_url, url_key
+from .shops import partner_site_url, domain_of, home_of, ready, reader_of, source_url
+from .parsers import Parsed, bot_wall, find_search_result, is_search_url, lego_number, title_check, lego_product_url, parse_set_data_page, parse_page, search_url, url_key
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -67,7 +67,7 @@ def _too_big(size: Any) -> None:
 
 
 def registrable(host: str) -> str:
-    """'www.smythstoys.com' → 'smythstoys.com', 'www.amazon.com.be' → 'amazon.com.be' (an IP stays itself)."""
+    """'www.shop.com' → 'shop.com', 'www.shop.com.be' → 'shop.com.be' (an IP stays itself)."""
     host = host.lower().rstrip(".")
     labels = host.split(".")
     if not labels or host.replace(".", "").isdigit() or ":" in host:
@@ -313,11 +313,11 @@ class Fetcher:
     async def _fetch_offer(self, retailer: str, url: str, force: bool) -> tuple[Parsed | None, int | None, int, str | None]:
         if reader_of(retailer) == "lego" and not lego_number(url):
             # without the set number the page's own product can't be told from recommendations
-            return None, None, 0, T("not a LEGO.com product page with a set number in the address")
+            return None, None, 0, T("not a product page of the official shop with a set number in the address")
         if not force and (left := self.cooldown_left(retailer)) > 0:
             return None, None, 0, T("paused {hours} h after being blocked", hours=f"{left / 3600:.1f}")
-        if reader_of(retailer) == "bol":
-            url = bol_site_url(url)                         # the bol.com site chosen in Settings (NL or BE)
+        if reader_of(retailer) == "partner":
+            url = partner_site_url(url)                         # the partner shop's site chosen in Settings (NL or BE)
         try:
             status, page = await self._get(retailer, url)
         except Aborted:
@@ -435,7 +435,7 @@ class Fetcher:
                 self.discover_error[retailer] = T("no matching product found") if set_number in page else \
                     T("the search page does not contain {number}: this shop probably loads its results with JavaScript. Paste the product page URL instead.", number=set_number)
             return found
-        # LEGO.com search is partly rendered in the browser: try the product URL directly (its own trace entry)
+        # The official shop's search is partly rendered in the browser: try the product URL directly (its own trace entry)
         t0, purl = time.time(), lego_product_url(set_number, retailer)
         if not purl or url_key(retailer, purl) in skip:                # you blocked this page: never visit it again
             self.discover_error[retailer] = T("no matching product found")
@@ -462,9 +462,9 @@ class Fetcher:
         return None
 
 
-async def brickset_lookup(session: aiohttp.ClientSession, api_key: str, set_number: str) -> dict[str, Any] | None:
-    """Metadata from Brickset API v3 (free key). Returns None on any problem."""
-    if not api_key or not (url := source_url("brickset_api")):
+async def set_data_lookup(session: aiohttp.ClientSession, api_key: str, set_number: str) -> dict[str, Any] | None:
+    """Metadata from the set data API (free key). Returns None on any problem."""
+    if not api_key or not (url := source_url("set_data_api")):
         return None
     params = {"apiKey": api_key, "userHash": "", "params": json.dumps({"setNumber": f"{normalize_set_number(set_number)}-1"})}
     try:
@@ -495,9 +495,9 @@ async def brickset_lookup(session: aiohttp.ClientSession, api_key: str, set_numb
 _RB_THEMES: dict[int, dict[str, Any]] = {}
 
 
-async def rebrickable_lookup(session: aiohttp.ClientSession, api_key: str, set_number: str) -> dict[str, Any] | None:
-    """Metadata from the Rebrickable API v3 (free key at rebrickable.com/api). No RRP there."""
-    if not api_key or not (base := source_url("rebrickable_api")):
+async def parts_lookup(session: aiohttp.ClientSession, api_key: str, set_number: str) -> dict[str, Any] | None:
+    """Metadata from the parts database API (free key). No RRP there."""
+    if not api_key or not (base := source_url("parts_api")):
         return None
     base = base.rstrip("/")
     headers = {"Authorization": f"key {api_key}", "Accept": "application/json"}
@@ -529,23 +529,28 @@ async def rebrickable_lookup(session: aiohttp.ClientSession, api_key: str, set_n
         return None
 
 
-async def brickset_page_lookup(session: aiohttp.ClientSession, set_number: str) -> dict[str, Any] | None:
-    """Fallback without any key: the public brickset.com set page."""
-    if not (tpl := source_url("brickset_page")):
+async def set_data_page_lookup(session: aiohttp.ClientSession, set_number: str) -> dict[str, Any] | None:
+    """Fallback without any key: the public set page of the set data source."""
+    if not (tpl := source_url("set_data_page")):
         return None
     url = tpl.replace("{number}", normalize_set_number(set_number))
     try:
         async with session.get(url, headers=BROWSER_HEADERS, timeout=aiohttp.ClientTimeout(total=20)) as resp:
             if resp.status != 200:
                 return None
-            return parse_brickset_page(await resp.text(errors="replace")) or None
+            return parse_set_data_page(await resp.text(errors="replace")) or None
     except (aiohttp.ClientError, asyncio.TimeoutError):
         return None
 
 
-async def lookup_metadata(session: aiohttp.ClientSession, brickset_key: str, rebrickable_key: str,
+# where set data comes from (stored as the source of a field): the set data API, its public set page, the parts database
+SET_DATA_API, SET_DATA_PAGE, PARTS_API = "set_data_api", "set_data_page", "parts_api"
+OFFICIAL_COUNT = (SET_DATA_API, SET_DATA_PAGE)      # these give the official piece count
+
+
+async def lookup_metadata(session: aiohttp.ClientSession, set_data_key: str, parts_key: str,
                           set_number: str) -> tuple[dict[str, Any], str | None]:
-    """Brickset API -> Rebrickable API -> public Brickset page.
+    """Set data API -> parts database API -> public set data page.
 
     A source that fails or lacks fields is complemented by the next one; the name comes from the
     first source that has it. Returns (data, "Source1+Source2")."""
@@ -553,13 +558,13 @@ async def lookup_metadata(session: aiohttp.ClientSession, brickset_key: str, reb
     merged: dict[str, Any] = {"_from": {}}           # _from: which source gave each field
     used: list[str] = []
     sources = []
-    if brickset_key:
-        sources.append(("Brickset", lambda: brickset_lookup(session, brickset_key, set_number)))
-    if rebrickable_key:
-        sources.append(("Rebrickable", lambda: rebrickable_lookup(session, rebrickable_key, set_number)))
-    if source_url("brickset_page"):
-        sources.append(("brickset.com", lambda: brickset_page_lookup(session, set_number)))
-    official = ("Brickset", "brickset.com")
+    if set_data_key:
+        sources.append((SET_DATA_API, lambda: set_data_lookup(session, set_data_key, set_number)))
+    if parts_key:
+        sources.append((PARTS_API, lambda: parts_lookup(session, parts_key, set_number)))
+    if source_url("set_data_page"):
+        sources.append((SET_DATA_PAGE, lambda: set_data_page_lookup(session, set_number)))
+    official = OFFICIAL_COUNT
     for name, fetch in sources:
         if all(merged.get(k) for k in wanted if k not in ("subtheme", "exit_date")) \
                 and merged["_from"].get("pieces") in official:
@@ -573,7 +578,7 @@ async def lookup_metadata(session: aiohttp.ClientSession, brickset_key: str, reb
             continue
         added = False
         for k in wanted:
-            # the official piece count (Brickset) wins over a parts count (Rebrickable counts differently)
+            # the official piece count (set data) wins over a parts count (the parts database counts differently)
             better = k == "pieces" and name in official and merged["_from"].get("pieces") not in official
             if data.get(k) and (not merged.get(k) or better):
                 merged[k] = data[k]
@@ -586,7 +591,7 @@ async def lookup_metadata(session: aiohttp.ClientSession, brickset_key: str, reb
 
 async def test_metadata_source(session: aiohttp.ClientSession, source: str, key: str) -> tuple[bool, str]:
     """Settings panel 'test' button: try a well known set."""
-    fn = {"brickset": brickset_lookup, "rebrickable": rebrickable_lookup}[source]
+    fn = {"set_data": set_data_lookup, "parts": parts_lookup}[source]
     if not key:
         return False, T("no key entered")
     if not source_url(f"{source}_api"):

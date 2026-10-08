@@ -13,11 +13,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .const import OFFICIAL
 from .models import set_pieces
 
 _LOGGER = logging.getLogger(__name__)
 PATH = Path(__file__).parent / "data" / "sets.json"
-SOURCE = "LEGO.com"                    # the catalogue holds data of the official shop: counts as such (no re-fetch)
+SOURCE = OFFICIAL                    # the catalogue holds data of the official shop: counts as such (no re-fetch)
 _SETS: dict[str, dict[str, Any]] | None = None
 
 
@@ -38,7 +39,7 @@ def get(num: str) -> dict[str, Any] | None:
 
 
 def apply(num: str, s: dict[str, Any], offers: dict[str, Any]) -> bool:
-    """Fill empty set fields (and the LEGO.com link) from the catalogue. True if the set is in it."""
+    """Fill empty set fields (and the official shop link) from the catalogue. True if the set is in it."""
     c = get(num)
     if not c:
         return False
@@ -67,5 +68,5 @@ def apply(num: str, s: dict[str, Any], offers: dict[str, Any]) -> bool:
 
 
 def complete(s: dict[str, Any]) -> bool:
-    """Everything a lookup would give is there: no need to ask Brickset/Rebrickable/LEGO.com."""
+    """Everything a lookup would give is there: no need to ask the set data sources or the official shop."""
     return all(s.get(k) for k in ("name", "theme", "year", "image")) and s.get("rrp_source") in (SOURCE, "user")
