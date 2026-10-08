@@ -13,6 +13,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .models import set_pieces
+
 _LOGGER = logging.getLogger(__name__)
 PATH = Path(__file__).parent / "data" / "sets.json"
 SOURCE = "LEGO.com"                    # the catalogue holds LEGO.com data: counts as such (no re-fetch)
@@ -46,7 +48,9 @@ def apply(num: str, s: dict[str, Any], offers: dict[str, Any]) -> bool:
         s["rrp"], s["rrp_source"] = c["rrp"], SOURCE
     if c.get("image") and not s.get("image"):
         s["image"], s["image_source"] = c["image"], SOURCE
-    for key in ("theme", "subtheme", "year", "pieces", "ean"):
+    if c.get("pieces"):
+        set_pieces(s, c["pieces"], SOURCE)
+    for key in ("theme", "subtheme", "year", "ean"):
         if c.get(key) and not s.get(key):
             s[key] = c[key]
     if c.get("exit_date") and not s.get("exit_date"):

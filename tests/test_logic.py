@@ -837,3 +837,54 @@ def test_a_bot_protection_wall_is_a_block_not_a_missing_price():
     ok = ('<html><head><title>LEGO 10311 Orchidee</title><meta property="product:price:amount" content="39.99"></head>'
           '<body><form class="g-recaptcha">captcha</form></body></html>')
     assert not parsers.bot_wall(ok) and parsers.parse_page("dreamland_be", ok).price == 39.99
+
+
+def test_piece_count_comes_from_the_best_source():
+    """The official piece count beats a parts count; a count you typed stays; an unknown count is only
+    replaced by Manage → piece counts again, or when it is the set database's own count."""
+    from custom_components.lego_tracker.models import set_pieces
+
+    s = {}
+    assert set_pieces(s, 1000, "setdb") and s == {"pieces": 1000, "pieces_source": "setdb"}
+    assert set_pieces(s, 1010, "Rebrickable") and s["pieces"] == 1010
+    assert set_pieces(s, 1023, "brickset.com") and s["pieces_source"] == "brickset.com"
+    assert not set_pieces(s, 1000, "Rebrickable") and s["pieces"] == 1023          # a weaker source never wins
+    assert set_pieces(s, 1024, "LEGO.com") and s["pieces"] == 1024
+    assert not set_pieces(s, 0, "LEGO.com") and not set_pieces(s, "x", "LEGO.com") and not set_pieces(s, 50000, "LEGO.com")
+    mine = {"pieces": 999, "pieces_source": "user"}
+    assert not set_pieces(mine, 1024, "LEGO.com", replace_unknown=True) and mine["pieces"] == 999
+    old = {"pieces": 980}                                # from before 1.1: source unknown
+    assert not set_pieces(old, 1024, "Brickset")
+    assert set_pieces(old, 1024, "Brickset", setdb_pieces=980)                      # it was the set database's count
+    old2 = {"pieces": 980}
+    assert set_pieces(old2, 1024, "Brickset", replace_unknown=True) and old2["pieces_source"] == "Brickset"
+
+
+def test_lego_page_gives_the_official_piece_count():
+    from custom_components.lego_tracker.parsers import parse_lego
+
+    page = ('<link rel="canonical" href="https://www.lego.com/nl-be/product/bonsai-tree-10281">'
+            '<script>{"productCode":"10281","pieceCount":878,"price":{"centAmount":4999},"listPrice":{"centAmount":4999}}'
+            '{"productCode":"10311","pieceCount":608,"price":{"centAmount":4999}}</script>')
+    assert parse_lego(page, "10281").pieces == 878
+    html = ('<link rel="canonical" href="https://www.lego.com/nl-be/product/bonsai-tree-10281">'
+            '<div data-test="pieces-value"><span>1.023</span></div>')
+    assert parse_lego(html, "10281").pieces == 1023
+    assert parse_lego('<div data-test="pieces-value">878</div>', "10281").pieces is None   # not the set's own page
+
+
+async def test_metadata_prefers_the_official_piece_count(monkeypatch):
+    from custom_components.lego_tracker import client
+
+    async def rb(session, key, num):
+        return {"name": "Bonsai", "theme": "Icons", "year": 2021, "pieces": 860, "image": "https://x/i.jpg"}
+
+    async def page(session, num):
+        return {"pieces": 878, "rrp": 49.99}
+
+    monkeypatch.setattr(client, "rebrickable_lookup", rb)
+    monkeypatch.setattr(client, "brickset_page_lookup", page)
+    monkeypatch.setattr(client, "source_url", lambda key: "https://example.test/{number}")
+    meta, source = await client.lookup_metadata(None, "", "key", "10281")
+    assert meta["pieces"] == 878 and meta["_from"]["pieces"] == "brickset.com" and meta["name"] == "Bonsai"
+    assert source == "Rebrickable+brickset.com"

@@ -105,6 +105,8 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_collection)
     websocket_api.async_register_command(hass, ws_update_set)
     websocket_api.async_register_command(hass, ws_bulk_update)
+    for cmd in (ws_bulk_change, ws_sold, ws_sold_edit, ws_investments, ws_pieces):
+        websocket_api.async_register_command(hass, cmd)
     websocket_api.async_register_command(hass, ws_import_preview)
     websocket_api.async_register_command(hass, ws_job)
     websocket_api.async_register_command(hass, ws_settings_get)
@@ -267,6 +269,76 @@ async def ws_bulk_update(hass, connection, msg):
             errors[num] = str(err)
     coord.push_update()
     connection.send_result(msg["id"], {"saved": done, "added": added, "errors": errors})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({
+    vol.Required("type"): f"{DOMAIN}/bulk_change",
+    vol.Required("sets"): vol.All([str], vol.Length(min=1, max=2000)),
+    vol.Required("field"): vol.In(["location", "notes", "added", "condition", "sold"]),
+    vol.Optional("value", default=""): str, vol.Optional("append", default=False): bool,
+    vol.Optional("price"): vol.Any(None, str, int, float), vol.Optional("date", default=""): str,
+    vol.Optional("which", default="all"): vol.In(["all", "one"]),
+})
+@callback
+def ws_bulk_change(hass, connection, msg):
+    """Manage → Edit all → Bulk change: one field for the chosen sets of your collection, or sell them."""
+    coord = _coord(hass)
+    try:
+        res = coord.bulk_change(msg["sets"], msg["field"], msg["value"], append=msg["append"], price=msg.get("price"),
+                                sold_on=msg["date"], which=msg["which"])
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
+    connection.send_result(msg["id"], res)
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/pieces"})
+@callback
+def ws_pieces(hass, connection, msg):
+    """Manage → Shops & jobs → piece counts again (a background job)."""
+    try:
+        connection.send_result(msg["id"], _coord(hass).start_pieces())
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/sold", vol.Optional("basis", default="paid"): vol.In(["paid", "rrp"])})
+@callback
+def ws_sold(hass, connection, msg):
+    """Collection → Sold: the ledger of sold copies and its statistics."""
+    connection.send_result(msg["id"], _coord(hass).sold_info(msg["basis"]))
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({
+    vol.Required("type"): f"{DOMAIN}/sold/edit", vol.Required("sale"): str,
+    vol.Required("action"): vol.In(["update", "delete", "restore"]),
+    vol.Optional("price"): vol.Any(None, str, int, float), vol.Optional("date"): str,
+})
+@websocket_api.async_response
+async def ws_sold_edit(hass, connection, msg):
+    """Change, delete or undo one sale."""
+    coord = _coord(hass)
+    try:
+        if msg["action"] == "update":
+            coord.sold_update(msg["sale"], msg.get("price"), msg.get("date"))
+        elif msg["action"] == "delete":
+            coord.sold_delete(msg["sale"])
+        else:
+            await coord.sold_restore(msg["sale"])
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
+    connection.send_result(msg["id"], {"ok": True})
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/investments", vol.Optional("basis", default="paid"): vol.In(["paid", "rrp"])})
+@callback
+def ws_investments(hass, connection, msg):
+    """Collection → Investment return."""
+    connection.send_result(msg["id"], _coord(hass).investments(msg["basis"]))
 
 
 @websocket_api.require_admin

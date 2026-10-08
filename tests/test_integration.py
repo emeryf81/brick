@@ -3000,6 +3000,85 @@ async def test_edit_all_saves_many_sets_and_copies_at_once(hass: HomeAssistant, 
     assert (await ws.receive_json())["result"]["added"] == 1 and not c.is_watched("60380")
 
 
+async def test_bulk_change_and_sold_ledger(hass: HomeAssistant, entry, hass_ws_client, no_network):
+    """Edit all → Bulk change: one field for every copy of the chosen sets; selling moves copies to the sold
+    ledger, removes a set without copies left (unless watched on purpose) and can be undone."""
+    c = await _setup(hass, entry)
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lego_tracker/bulk_update", "sets": [
+        {"set_number": "10281", "new": True, "owned": True, "fields": {"rrp": 49.99, "copies": [
+            {"paid": 40, "added": "2023-05-01", "location": "zolder", "notes": "gift"}, {"paid": 30, "added": "2024-01-01"}]}},
+        {"set_number": "10311", "new": True, "owned": True, "fields": {"rrp": 49.99, "copies": [{"paid": 45, "added": "2024-02-01"}]}},
+        {"set_number": "60380", "new": True, "owned": False, "fields": {"watch": True}}]})
+    assert (await ws.receive_json())["result"]["added"] == 3
+    await ws.send_json({"id": 2, "type": "lego_tracker/bulk_change", "sets": ["10281", "10311", "60380"], "field": "location", "value": "kast 3"})
+    r = (await ws.receive_json())["result"]
+    assert r["saved"] == 2 and set(r["errors"]) == {"60380"}
+    assert {x["location"] for x in c.store["collection"]["10281"]["items"]} == {"kast 3"}
+    await ws.send_json({"id": 3, "type": "lego_tracker/bulk_change", "sets": ["10281"], "field": "notes", "value": "box ok", "append": True})
+    await ws.receive_json()
+    assert [x.get("notes") for x in c.store["collection"]["10281"]["items"]] == ["gift box ok", "box ok"]
+    await ws.send_json({"id": 4, "type": "lego_tracker/bulk_change", "sets": ["10311"], "field": "condition", "value": "Shiny"})
+    assert "10311" in (await ws.receive_json())["result"]["errors"]
+    await ws.send_json({"id": 5, "type": "lego_tracker/bulk_change", "sets": ["10311"], "field": "added", "value": "2999-01-01"})
+    assert "10311" in (await ws.receive_json())["result"]["errors"]
+    # sell one copy of 10281 and every copy of 10311
+    await ws.send_json({"id": 6, "type": "lego_tracker/bulk_change", "sets": ["10281"], "field": "sold", "price": "70,50",
+                        "date": "2025-03-01", "which": "one"})
+    assert (await ws.receive_json())["result"]["saved"] == 1
+    assert c.store["collection"]["10281"]["qty"] == 1
+    await ws.send_json({"id": 7, "type": "lego_tracker/bulk_change", "sets": ["10311"], "field": "sold", "price": 60})
+    assert (await ws.receive_json())["result"]["removed"] == ["10311"]
+    assert "10311" not in c.store["sets"] and "10311" not in c.store["collection"]
+    await ws.send_json({"id": 8, "type": "lego_tracker/bulk_change", "sets": ["10281"], "field": "sold", "date": "2999-01-01"})
+    assert not (await ws.receive_json())["success"]
+    await ws.send_json({"id": 9, "type": "lego_tracker/sold"})
+    led = (await ws.receive_json())["result"]
+    assert led["count"] == 2 and led["revenue"] == 130.5 and led["cost"] == 85 and led["profit"] == 45.5
+    first = next(x for x in led["rows"] if x["set_number"] == "10281")
+    assert first["paid"] == 40 and first["location"] == "kast 3" and first["profit"] == 30.5 and first["date"] == "2025-03-01"
+    await ws.send_json({"id": 10, "type": "lego_tracker/sold", "basis": "rrp"})
+    assert (await ws.receive_json())["result"]["cost"] == 99.98
+    # change, undo and delete a sale
+    sale = next(x for x in led["rows"] if x["set_number"] == "10311")
+    await ws.send_json({"id": 11, "type": "lego_tracker/sold/edit", "sale": sale["id"], "action": "update", "price": "65"})
+    assert (await ws.receive_json())["success"] and c.store["sold"][-1]["price"] == 65
+    await ws.send_json({"id": 12, "type": "lego_tracker/sold/edit", "sale": sale["id"], "action": "restore"})
+    assert (await ws.receive_json())["success"]
+    assert c.store["collection"]["10311"]["items"] == [{"paid": 45, "added": "2024-02-01", "location": "kast 3"}]
+    await ws.send_json({"id": 13, "type": "lego_tracker/sold/edit", "sale": first["id"], "action": "delete"})
+    assert (await ws.receive_json())["success"] and c.store["sold"] == []
+    await ws.send_json({"id": 14, "type": "lego_tracker/sold/edit", "sale": first["id"], "action": "delete"})
+    assert not (await ws.receive_json())["success"]
+
+
+def test_investment_report_paid_and_rrp_basis():
+    """Investment return: gain against the price paid or the RRP, realised profit of sold sets, per year,
+    best/worst sets and themes and a projection from the average yearly growth."""
+    from custom_components.lego_tracker.models import investment_report, new_store
+    import datetime as dt
+
+    now = dt.datetime(2026, 6, 1, tzinfo=dt.timezone.utc).timestamp()
+    st = new_store()
+    st["sets"] = {"10281": {"name": "Bonsai", "theme": "Icons", "rrp": 50, "year": 2021},
+                  "42143": {"name": "Ferrari", "theme": "Technic", "rrp": 400, "year": 2022}}
+    st["collection"] = {"10281": {"current_value": 100, "items": [{"paid": 40, "added": "2022-06-01"}]},
+                        "42143": {"current_value": 300, "items": [{"paid": 350, "added": "2023-06-01"}]}}
+    st["sold"] = [{"id": "a", "set_number": "75192", "theme": "Star Wars", "paid": 700, "rrp": 800, "price": 900, "date": "2025-01-01", "added": "2020-01-01"}]
+    r = investment_report(st, {}, "paid", now=now)
+    assert r["value"] == 400 and r["cost"] == 390 and r["gain"] == 10 and r["realised"] == 200 and r["total"] == 210
+    assert r["best_sets"][0]["set_number"] == "10281" and r["worst_sets"][0]["set_number"] == "42143"
+    assert r["top_earners"][0]["set_number"] == "75192"
+    assert {t["theme"] for t in r["themes"]} == {"Icons", "Technic", "Star Wars"}
+    years = {y["year"]: y for y in r["years"]}
+    assert years[2020]["bought"] == 1 and years[2025]["sold"] == 1 and years[2025]["sold_profit"] == 200
+    assert years[2023]["bought_amount"] == 350
+    assert r["projection"][0]["value"] == 400 and len(r["projection"]) == 6 and r["yearly_pct"] is not None
+    rr = investment_report(st, {}, "rrp", now=now)
+    assert rr["cost"] == 450 and rr["gain"] == -50 and rr["realised"] == 100
+    assert rr["series"] and all("cost" in p for p in rr["series"])
+
+
 async def test_deal_of_the_day_notification_once_a_day_from_its_time(hass: HomeAssistant, entry, no_network):
     """A rule with "Deal of the day" sends the best deal of the rule's sets once a day, from the chosen time."""
     from datetime import datetime

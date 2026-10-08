@@ -26,7 +26,7 @@ def normalize_set_number(value: str | int) -> str:
 
 
 def new_store() -> dict[str, Any]:
-    return {"sets": {}, "offers": {}, "collection": {}, "snapshots": [], "events": [], "rejected": {}, "cooldowns": {}}
+    return {"sets": {}, "offers": {}, "collection": {}, "snapshots": [], "events": [], "rejected": {}, "cooldowns": {}, "sold": []}
 
 
 def parse_price(text: str | float | int | None) -> float | None:
@@ -405,6 +405,34 @@ def _added_ts(entry: dict[str, Any]) -> float | None:
         return None
 
 
+def _value_at(store: dict[str, Any], hists: dict[str, list], t: float, held_at: float | None = None) -> tuple[float, float, float]:
+    """Value, price paid and RRP of the copies you had at held_at (default: t), valued at time t."""
+    held_at = t if held_at is None else held_at
+    pref = _prefer_import(store)
+    value = cost = rrp_cost = 0.0
+    for num, entry in store["collection"].items():
+        shop = price_at(hists[num], t)
+        imported = price_at(entry.get("value_history", []), t) or (
+            entry.get("current_value") if not entry.get("value_history") else None)
+        unit = (imported or shop) if pref else (shop or imported)
+        if unit is None:
+            unit = entry.get("current_value") or store["sets"].get(num, {}).get("rrp") or 0
+        used = (store["sets"].get(num, {}).get("market") or {}).get("market_used")
+        own_import = pref and entry.get("current_value") and entry.get("value_source") not in (None, MARKET_LABEL)
+        for c in copies(entry):               # every copy from its own purchase date (same rule as copy_value)
+            added = _added_ts(c)
+            if added and added > held_at:
+                continue
+            value += float(used if used and c.get("condition") in OPENED and not own_import else unit)
+            cost += float(c.get("paid") or 0)
+            rrp_cost += float(store["sets"].get(num, {}).get("rrp") or c.get("paid") or 0)
+    return value, cost, rrp_cost
+
+
+def _histories(store: dict[str, Any]) -> dict[str, list]:
+    return {n: combined_history(store["offers"].get(n, {})) for n in store["collection"]}
+
+
 def collection_series(store: dict[str, Any], now: float | None = None, points: int = 120) -> list[dict[str, float]]:
     """Value/cost over time, rebuilt from price history (no external service needed).
 
@@ -415,10 +443,9 @@ def collection_series(store: dict[str, Any], now: float | None = None, points: i
     coll = store["collection"]
     if not coll:
         return []
-    hists = {n: combined_history(store["offers"].get(n, {})) for n in coll}
-    pref = _prefer_import(store)
+    hists = _histories(store)
     starts = [h[0][0] for h in hists.values() if h]
-    starts += [t for e in coll.values() if (t := _added_ts(e))]
+    starts += [t for e in coll.values() for c in [e, *copies(e)] if (t := _added_ts(c))]
     if not starts:
         return []
     start = min(starts)
@@ -427,27 +454,8 @@ def collection_series(store: dict[str, Any], now: float | None = None, points: i
     ts = start
     while ts <= now + step:
         t = min(ts, now)
-        value = cost = 0.0
-        for num, entry in coll.items():
-            hist = hists[num]
-            shop = price_at(hist, t)
-            imported = price_at(entry.get("value_history", []), t) or (
-                entry.get("current_value") if not entry.get("value_history") else None)
-            if pref:
-                unit = imported or shop
-            else:
-                unit = shop or imported
-            if unit is None:
-                unit = entry.get("current_value") or store["sets"].get(num, {}).get("rrp") or 0
-            used = (store["sets"].get(num, {}).get("market") or {}).get("market_used")
-            own_import = pref and entry.get("current_value") and entry.get("value_source") not in (None, MARKET_LABEL)
-            for c in copies(entry):               # every copy from its own purchase date (same rule as copy_value)
-                added = _added_ts(c)
-                if added and added > t:
-                    continue
-                value += float(used if used and c.get("condition") in OPENED and not own_import else unit)
-                cost += float(c.get("paid") or 0)
-        out.append({"ts": t, "value": round(value, 2), "cost": round(cost, 2)})
+        value, cost, rrp_cost = _value_at(store, hists, t)
+        out.append({"ts": t, "value": round(value, 2), "cost": round(cost, 2), "rrp": round(rrp_cost, 2)})
         if t >= now:
             break
         ts += step
@@ -516,6 +524,236 @@ def collection_analytics(store: dict[str, Any], statuses: dict[str, dict[str, An
         "top_gainers": [m for m in movers if m["pct"] >= 0][:5],
         "top_losers": [m for m in reversed(movers) if m["pct"] < 0][:5],
         "avg_paid_per_piece": round(paid_total / paid_pieces, 4) if paid_pieces else None,
+    }
+
+
+# ----------------------------------------------------------------- piece count
+# Where a piece count comes from, best first. The official count (LEGO.com, and Brickset that copies it)
+# beats a parts count of a parts database, which counts differently (e.g. without the minifigure parts).
+PIECE_RANK = {"user": 100, "LEGO.com": 90, "Brickset": 80, "brickset.com": 80, "import": 70, "market": 60,
+              "Rebrickable": 50, "setdb": 40}
+
+
+def set_pieces(s: dict[str, Any], pieces: Any, source: str, *, setdb_pieces: int | None = None,
+               replace_unknown: bool = False) -> bool:
+    """Store a piece count when its source is better than the one the set has (a count you typed always
+    stays). A count without a known source counts as your own, unless it equals the set database's count
+    (then it came from there) or replace_unknown is set (Manage → piece counts again). True if it changed."""
+    try:
+        pieces = int(pieces)
+    except (TypeError, ValueError):
+        return False
+    if not 0 < pieces <= 12000:
+        return False
+    if s.get("pieces"):
+        have = s.get("pieces_source")
+        if have is None and setdb_pieces and s["pieces"] == setdb_pieces:
+            have = "setdb"
+        rank = PIECE_RANK.get(have, 30 if replace_unknown else 101) if have else (30 if replace_unknown else 101)
+        if have == "user" or (have != source and PIECE_RANK.get(source, 0) <= rank):
+            return False
+    changed = s.get("pieces") != pieces
+    s["pieces"], s["pieces_source"] = pieces, source
+    return changed
+
+
+# ----------------------------------------------------------------- sold sets and investment return
+SOLD_MAX = 5000
+YEAR_S = 365.25 * DAY
+
+
+def _year_of(raw: Any) -> int | None:
+    try:
+        return int(str(raw)[:4]) if raw else None
+    except ValueError:
+        return None
+
+
+def sold_record(num: str, copy: dict[str, Any], lego_set: dict[str, Any], value: float, price: float | None,
+                sold_on: str, now: float | None = None, seq: int = 0) -> dict[str, Any]:
+    """One sold copy for the ledger: what it was (kept even when the set is no longer tracked), what you paid,
+    what it was worth and what it brought in."""
+    now = now or time.time()
+    rec = {"id": f"{int(now * 1000):x}{seq % 1000:03d}", "set_number": num, "name": lego_set.get("name"),
+           "theme": lego_set.get("theme"), "year": lego_set.get("year"), "pieces": lego_set.get("pieces"),
+           "rrp": lego_set.get("rrp"), "value": round(value, 2) if value else None,
+           "price": price, "date": sold_on, **{k: copy[k] for k in COPY_FIELDS if copy.get(k) not in (None, "")}}
+    return {k: v for k, v in rec.items() if v not in (None, "")}
+
+
+def _basis(item: dict[str, Any], basis: str) -> tuple[float, bool]:
+    """Cost of one copy for the return: the price paid or the RRP. When that one is unknown the other is used
+    (second value True = estimated)."""
+    paid, rrp = item.get("paid"), item.get("rrp")
+    first, second = (paid, rrp) if basis == "paid" else (rrp, paid)
+    if first:
+        return float(first), False
+    return (float(second), True) if second else (0.0, True)
+
+
+def sold_summary(store: dict[str, Any], basis: str = "paid") -> dict[str, Any]:
+    """Statistics of everything you sold: revenue, profit (against the price paid or the RRP), per year and
+    per theme, the best and the worst sales and how long you kept a set."""
+    sold = store.get("sold") or []
+    revenue = cost = 0.0
+    by_year: dict[str, dict[str, float]] = {}
+    by_theme: dict[str, dict[str, float]] = {}
+    rows, held = [], []
+    for r in sold:
+        price = float(r.get("price") or 0)
+        base, est = _basis(r, basis)
+        profit = price - base if r.get("price") is not None and base else None
+        revenue += price
+        cost += base if r.get("price") is not None else 0
+        y = by_year.setdefault(str(_year_of(r.get("date")) or "?"), {"count": 0, "revenue": 0.0, "profit": 0.0})
+        th = by_theme.setdefault(r.get("theme") or "Unknown", {"count": 0, "revenue": 0.0, "profit": 0.0})
+        for d in (y, th):
+            d["count"] += 1
+            d["revenue"] += price
+            d["profit"] += profit or 0
+        if r.get("added") and r.get("date"):
+            try:
+                held.append((date.fromisoformat(r["date"]) - date.fromisoformat(r["added"])).days)
+            except ValueError:
+                pass
+        rows.append({**r, "basis": round(base, 2) if base else None, "estimated": est,
+                     "profit": round(profit, 2) if profit is not None else None,
+                     "pct": round(profit / base * 100, 1) if profit is not None and base else None})
+    ranked = sorted((x for x in rows if x["profit"] is not None), key=lambda x: -x["profit"])
+    rnd = lambda d: {k: {kk: round(vv, 2) for kk, vv in v.items()} for k, v in d.items()}  # noqa: E731
+    return {
+        "count": len(sold), "revenue": round(revenue, 2), "cost": round(cost, 2), "profit": round(revenue - cost, 2),
+        "profit_pct": round((revenue - cost) / cost * 100, 1) if cost else None,
+        "avg_days_held": round(sum(held) / len(held)) if held else None,
+        "by_year": rnd(dict(sorted(by_year.items()))),
+        "by_theme": rnd(dict(sorted(by_theme.items(), key=lambda x: -x[1]["profit"]))),
+        "best": ranked[:5], "worst": [x for x in reversed(ranked) if x["profit"] < 0][:5],
+        "rows": sorted(rows, key=lambda x: (x.get("date") or "", x["id"]), reverse=True),
+    }
+
+
+def investment_report(store: dict[str, Any], statuses: dict[str, dict[str, Any]], basis: str = "paid",
+                      now: float | None = None) -> dict[str, Any]:
+    """Collection → Investment return: what the collection is worth against what it cost (the price paid or
+    the RRP), per year (purchases, sales, value at the end of the year), per set and per theme (sold sets
+    included as realised return), and an estimate of the coming years from the average yearly growth so far."""
+    now = now or time.time()
+    this_year = date.fromtimestamp(now).year
+    basis = "rrp" if basis == "rrp" else "paid"
+    sets: dict[str, dict[str, Any]] = {}
+    themes: dict[str, dict[str, float]] = {}
+    years: dict[int, dict[str, float]] = {}
+    value = cost = 0.0
+    estimated = 0
+    w_years = w_cost = 0.0
+
+    def year_row(y: int) -> dict[str, float]:
+        return years.setdefault(y, {"bought": 0, "bought_amount": 0.0, "sold": 0, "sold_revenue": 0.0, "sold_profit": 0.0})
+
+    def theme_row(name: str) -> dict[str, float]:
+        return themes.setdefault(name or "Unknown", {"copies": 0, "value": 0.0, "cost": 0.0, "realised": 0.0})
+
+    for num, entry in store["collection"].items():
+        s = store["sets"].get(num, {})
+        row = sets.setdefault(num, {"set_number": num, "name": s.get("name"), "theme": s.get("theme") or "Unknown",
+                                    "copies": 0, "value": 0.0, "cost": 0.0, "realised": 0.0, "years": 0.0})
+        for c in copies(entry):
+            unit, _ = copy_value(c, entry, statuses.get(num, {}), s, _prefer_import(store))
+            base, est = _basis({"paid": c.get("paid"), "rrp": s.get("rrp")}, basis)
+            estimated += est
+            start = _added_ts(c) if basis == "paid" else None
+            if basis == "rrp" and s.get("year"):
+                start = datetime(int(s["year"]), 7, 1, tzinfo=timezone.utc).timestamp()
+            start = start or _added_ts(c)
+            held = max(0.5, (now - start) / YEAR_S) if start and start < now else None
+            row["copies"] += 1
+            row["value"] += unit
+            row["cost"] += base
+            th = theme_row(row["theme"])
+            th["copies"] += 1
+            th["value"] += unit
+            th["cost"] += base
+            value += unit
+            cost += base
+            if held and base and unit:
+                w_years += held * base
+                w_cost += base
+                row["years"] = max(row["years"], held)
+            if (y := _year_of(c.get("added"))):
+                yr = year_row(y)
+                yr["bought"] += 1
+                yr["bought_amount"] += base
+    realised = 0.0
+    for r in store.get("sold") or []:
+        if r.get("price") is None:
+            continue
+        base, _ = _basis(r, basis)
+        profit = float(r["price"]) - base if base else 0.0
+        realised += profit
+        num = r["set_number"]
+        row = sets.setdefault(num, {"set_number": num, "name": r.get("name"), "theme": r.get("theme") or "Unknown",
+                                    "copies": 0, "value": 0.0, "cost": 0.0, "realised": 0.0, "years": 0.0})
+        row["realised"] += profit
+        theme_row(row["theme"])["realised"] += profit
+        if (y := _year_of(r.get("added"))):
+            yr = year_row(y)
+            yr["bought"] += 1
+            yr["bought_amount"] += base
+        if (y := _year_of(r.get("date"))):
+            yr = year_row(y)
+            yr["sold"] += 1
+            yr["sold_revenue"] += float(r["price"])
+            yr["sold_profit"] += profit
+
+    def finish(d: dict[str, Any]) -> dict[str, Any]:
+        gain = d["value"] - d["cost"]
+        out = {k: (round(v, 2) if isinstance(v, float) else v) for k, v in d.items() if k != "years"}
+        out["gain"] = round(gain, 2)
+        out["total"] = round(gain + d["realised"], 2)
+        out["pct"] = round(gain / d["cost"] * 100, 1) if d["cost"] and d["copies"] else None
+        yrs = d.get("years")
+        out["yearly_pct"] = round(((d["value"] / d["cost"]) ** (1 / yrs) - 1) * 100, 1) if yrs and d["cost"] and d["value"] else None
+        return out
+
+    set_rows = [finish(r) for r in sets.values()]
+    theme_rows = [{"theme": k, **finish(v)} for k, v in themes.items()]
+    owned = [r for r in set_rows if r["pct"] is not None]
+
+    # value at the end of every year, from the value history of the collection (as it is now)
+    series = collection_series(store, now)
+    ends: dict[int, float] = {}
+    for p in series:
+        ends[date.fromtimestamp(p["ts"]).year] = p["value"]
+    first = min([*years, *ends] or [this_year])
+    hists = _histories(store)
+    year_rows = []
+    for y in range(first, this_year + 1):
+        yr = years.get(y, {"bought": 0, "bought_amount": 0.0, "sold": 0, "sold_revenue": 0.0, "sold_profit": 0.0})
+        # growth of what you already had on 1 January: its value at the end of the year (or today) against then
+        y0 = datetime(y, 1, 1, tzinfo=timezone.utc).timestamp()
+        y1 = min(now, datetime(y + 1, 1, 1, tzinfo=timezone.utc).timestamp() - 1)
+        v0 = _value_at(store, hists, y0)[0] if y0 < now else 0
+        growth = round((_value_at(store, hists, y1, y0)[0] - v0) / v0 * 100, 1) if v0 else None
+        year_rows.append({"year": y, **{k: round(v, 2) if isinstance(v, float) else v for k, v in yr.items()},
+                          "value_end": ends.get(y), "growth_pct": growth})
+
+    rate = None
+    if w_cost and cost and value:
+        held = w_years / w_cost
+        rate = max(-0.5, min(0.5, (value / cost) ** (1 / held) - 1))
+    projection = [{"year": this_year + i, "value": round(value * (1 + rate) ** i, 2)} for i in range(0, 6)] if rate is not None else []
+    return {
+        "basis": basis, "value": round(value, 2), "cost": round(cost, 2), "gain": round(value - cost, 2),
+        "gain_pct": round((value - cost) / cost * 100, 1) if cost else None, "realised": round(realised, 2),
+        "total": round(value - cost + realised, 2), "estimated": estimated,
+        "yearly_pct": round(rate * 100, 1) if rate is not None else None, "projection": projection,
+        "years": year_rows,
+        "best_sets": sorted(owned, key=lambda r: -r["pct"])[:5],
+        "worst_sets": sorted(owned, key=lambda r: r["pct"])[:5],
+        "top_earners": sorted(set_rows, key=lambda r: -r["total"])[:5],
+        "sets": sorted(set_rows, key=lambda r: -r["total"]),
+        "themes": sorted(theme_rows, key=lambda r: -r["total"]),
+        "series": [{"ts": p["ts"], "value": p["value"], "cost": p["cost"] if basis == "paid" else p["rrp"]} for p in series],
     }
 
 
@@ -719,4 +957,8 @@ def validate_backup(data: Any) -> dict[str, Any]:
     for num, e in clean["collection"].items():
         if num not in clean["sets"] or not isinstance(e, dict):
             raise LocalizedError("Collection item {number} without a set.", number=num)
+    for rec in clean["sold"]:
+        if not isinstance(rec, dict) or not re.fullmatch(r"\d{3,7}", str(rec.get("set_number", ""))) \
+                or not all(rec.get(k) is None or isinstance(rec[k], (int, float)) for k in ("price", "paid", "rrp", "value")):
+            raise LocalizedError("Invalid sold set in the backup.")
     return clean

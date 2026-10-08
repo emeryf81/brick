@@ -28,6 +28,7 @@ class Parsed:
     list_price: float | None = None      # LEGO.com: regular price = RRP (price may be a sale price)
     retiring: bool = False
     reason: str | None = None            # why there is no price: "sold_out" or "discontinued" (no error, a warning)
+    pieces: int | None = None            # LEGO.com: the official piece count of the set
 
 
 # Why a shop page has no price. The structured availability (JSON-LD / schema.org) counts first; the words
@@ -423,11 +424,33 @@ def parse_lego(page: str, num: str | None = None) -> Parsed:
         if own_page and not list_price:                     # the regular price, also when it can't be bought now
             list_price = parse_price(_meta(page, "product:price:amount", "og:price:amount"))
         return Parsed(None, title, image, unavailable=True, list_price=list_price, retiring=bool(LEGO_RETIRING_RE.search(head)),
-                      reason="discontinued" if gone else "sold_out")
+                      reason="discontinued" if gone else "sold_out", pieces=_lego_pieces(state, page, num, own_page))
     if own_page and price is None:                          # the set's own page: its price in the page's meta data
         price = parse_price(_meta(page, "product:price:amount", "og:price:amount"))
         list_price = list_price or price
-    return Parsed(price, title, image, list_price=list_price, retiring=bool(LEGO_RETIRING_RE.search(head)))
+    return Parsed(price, title, image, list_price=list_price, retiring=bool(LEGO_RETIRING_RE.search(head)),
+                  pieces=_lego_pieces(state, page, num, own_page))
+
+
+LEGO_PIECES_JSON_RE = re.compile(r'"pieceCount"\s*:\s*"?(\d{1,5})\b')
+LEGO_PIECES_HTML_RE = re.compile(r'data-test="[^"]*piece[^"]*"[^>]*>(?:\s*<[^>]+>)*\s*(\d{1,2}[.,\u202f\u00a0]?\d{3}|\d{1,4})\s*<', re.I)
+
+
+def _lego_pieces(state: str, page: str, num: str | None, own_page: bool) -> int | None:
+    """The official piece count on a LEGO.com product page: from the product's own data (near its code),
+    else, on the set's own page, the piece count shown in the product details."""
+    if num and (m := re.search(rf'"(?:productCode|sku)"\s*:\s*"{re.escape(num)}"', state)):
+        codes = [c.start() for c in re.finditer(r'"productCode"\s*:\s*"', state)]
+        start = max([c + 15 for c in codes if c < m.start()] + [m.start() - 4000, 0])
+        end = min([c for c in codes if c > m.start()] + [m.end() + 4000])
+        if (p := LEGO_PIECES_JSON_RE.search(state, start, end)):
+            return int(p.group(1)) or None
+    if own_page:
+        if len(found := set(LEGO_PIECES_JSON_RE.findall(state))) == 1:
+            return int(found.pop()) or None
+        if (p := LEGO_PIECES_HTML_RE.search(page)):
+            return int(re.sub(r"\D", "", p.group(1))) or None
+    return None
 
 
 def lego_number(url: str | None) -> str | None:

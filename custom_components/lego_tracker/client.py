@@ -550,7 +550,7 @@ async def lookup_metadata(session: aiohttp.ClientSession, brickset_key: str, reb
     A source that fails or lacks fields is complemented by the next one; the name comes from the
     first source that has it. Returns (data, "Source1+Source2")."""
     wanted = ("name", "theme", "subtheme", "year", "pieces", "image", "rrp", "exit_date")
-    merged: dict[str, Any] = {}
+    merged: dict[str, Any] = {"_from": {}}           # _from: which source gave each field
     used: list[str] = []
     sources = []
     if brickset_key:
@@ -559,8 +559,10 @@ async def lookup_metadata(session: aiohttp.ClientSession, brickset_key: str, reb
         sources.append(("Rebrickable", lambda: rebrickable_lookup(session, rebrickable_key, set_number)))
     if source_url("brickset_page"):
         sources.append(("brickset.com", lambda: brickset_page_lookup(session, set_number)))
+    official = ("Brickset", "brickset.com")
     for name, fetch in sources:
-        if all(merged.get(k) for k in wanted if k not in ("subtheme", "exit_date")):
+        if all(merged.get(k) for k in wanted if k not in ("subtheme", "exit_date")) \
+                and merged["_from"].get("pieces") in official:
             break
         try:
             data = await fetch()
@@ -571,12 +573,15 @@ async def lookup_metadata(session: aiohttp.ClientSession, brickset_key: str, reb
             continue
         added = False
         for k in wanted:
-            if data.get(k) and not merged.get(k):
+            # the official piece count (Brickset) wins over a parts count (Rebrickable counts differently)
+            better = k == "pieces" and name in official and merged["_from"].get("pieces") not in official
+            if data.get(k) and (not merged.get(k) or better):
                 merged[k] = data[k]
+                merged["_from"][k] = name
                 added = True
         if added:
             used.append(name)
-    return merged, ("+".join(used) or None)
+    return (merged if used else {}), ("+".join(used) or None)
 
 
 async def test_metadata_source(session: aiohttp.ClientSession, source: str, key: str) -> tuple[bool, str]:

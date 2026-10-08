@@ -34,6 +34,7 @@ from .const import (
 from .models import (
     add_activity, add_event, clean_history, collection_analytics, link_check, collection_rows, collection_series, is_suspicious_price, collection_summary, COLLECTION_COLUMNS, rows_to_csv, validate_backup, wishlist_summary, is_watched, compute_set_status, new_store, normalize_set_number,
     offer_price, query_activity, record_price, today_iso, COPY_FIELDS, OPENED, copies, copy_value, sync_copies,
+    investment_report, sold_record, sold_summary, SOLD_MAX, set_pieces,
 )
 from .i18n import DEFAULT_LANGUAGE, LANGUAGES, LocalizedError, T, resolve, set_language
 from .notifications import Notifier, default_rules
@@ -1172,9 +1173,11 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _apply_market(self, num: str, s: dict[str, Any], d: dict[str, Any], name: str, now: float) -> None:
         """Market value: set data where empty, the retirement (forecast) date unless you set one yourself,
         and the market value of owned sets (new, or used for opened / built sets) as their value."""
-        for key in ("theme", "subtheme", "year", "pieces"):
+        for key in ("theme", "subtheme", "year"):
             if d.get(key) and not s.get(key):
                 s[key] = d[key]
+        if d.get("pieces"):
+            set_pieces(s, d["pieces"], "market", setdb_pieces=self._setdb_pieces(num))
         s["market"] = {k: d.get(k) for k in ("market_new", "market_used", "availability", "retired", "retirement",
                                                "forecast_1y", "forecast_5y")} | {"ts": now, "source": name}
         when = compare.forecast_date(d.get("retired") or d.get("retirement"))
@@ -1906,7 +1909,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _apply_lego(self, num: str, parsed: Any) -> bool:
         """LEGO.com is the first source for RRP, image and name. Values the user typed win."""
         s = self.store["sets"][num]
-        before = (s.get("rrp"), s.get("image"), s.get("name"), s.get("retiring"))
+        before = (s.get("rrp"), s.get("image"), s.get("name"), s.get("retiring"), s.get("pieces"))
         # the RRP is the regular price LEGO.com shows the first time and stays that: a later promotion (or a
         # price that changes) never moves it. A value you typed yourself always wins.
         if parsed.list_price and s.get("rrp_source") not in ("LEGO.com", "user"):
@@ -1930,8 +1933,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         elif s.get("retiring_source") == "LEGO.com":
             s.pop("retiring", None)
             s.pop("retiring_source", None)
+        if getattr(parsed, "pieces", None):              # the official piece count
+            set_pieces(s, parsed.pieces, "LEGO.com", setdb_pieces=self._setdb_pieces(num))
         s["lego_checked"] = time.time()
-        return before != (s.get("rrp"), s.get("image"), s.get("name"), s.get("retiring"))
+        return before != (s.get("rrp"), s.get("image"), s.get("name"), s.get("retiring"), s.get("pieces"))
 
     async def lego_lookup(self, num: str, force: bool = False, wake: bool = False) -> bool:
         """Find + read the set's LEGO.com page (also kept as a 'LEGO.com' shop link)."""
@@ -1994,16 +1999,48 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if meta.get("name") and self._name_replaceable(s) and s.get("name") != meta["name"]:
             s["name"], s["name_source"] = meta["name"], source
             changed = True
-        for key in ("theme", "subtheme", "year", "pieces", "image", "rrp", "exit_date"):
+        for key in ("theme", "subtheme", "year", "image", "rrp", "exit_date"):
             if meta.get(key) and not s.get(key):
                 s[key] = meta[key]
                 if key in self.SOURCE_KEYS:
                     s[self.SOURCE_KEYS[key]] = source or "meta"
                 changed = True
+        if meta.get("pieces"):
+            changed |= set_pieces(s, meta["pieces"], (meta.get("_from") or {}).get("pieces") or source or "meta",
+                                  setdb_pieces=self._setdb_pieces(num))
         if changed:
             self.log("ok", "meta", T("set data filled in from {source}", source=source or "LEGO.com"), set_number=num,
                      source=(source or "LEGO.com"))
         return {"updated": 1} if changed else {}
+
+    def start_pieces(self) -> dict[str, Any]:
+        """Manage → piece counts again: look up the piece count of every set in the best source there is
+        (the official count first) and replace counts from a weaker source. A count you typed stays."""
+        if not (self.api_key(CONF_BRICKSET_KEY) or self.api_key(CONF_REBRICKABLE_KEY) or source_url("brickset_page") or self.setdb):
+            raise LocalizedError("There is no source for piece counts: add a key under Settings, or a set data source to your shop settings.")
+        session = async_get_clientsession(self.hass)
+
+        async def work(num: str) -> dict[str, int]:
+            s = self.store["sets"].get(num)
+            if s is None or s.get("pieces_source") == "user":
+                return {"skipped": 1}
+            meta, source = await lookup_metadata(session, self.api_key(CONF_BRICKSET_KEY), self.api_key(CONF_REBRICKABLE_KEY), num)
+            await asyncio.sleep(1.0)        # be gentle with the metadata sources
+            found = meta.get("pieces")
+            src = (meta.get("_from") or {}).get("pieces") or source
+            if not found and (row := self.setdb.get(num)) and row[setdb.PIECES]:
+                found, src = row[setdb.PIECES], "setdb"
+            if not found:
+                return {"errors": 1}
+            old = s.get("pieces")
+            if set_pieces(s, found, src, setdb_pieces=self._setdb_pieces(num), replace_unknown=True):
+                self.log("ok", "meta", T("piece count {old} → {new} ({source})", old=old or "–", new=s["pieces"], source=src),
+                         set_number=num, source=src)
+                return {"updated": 1}
+            return {}
+
+        nums = sorted(self.store["sets"], key=lambda n: (n not in self.store["collection"], n))
+        return self.start_job("pieces", T("Piece counts"), nums, work)
 
     # ------------------------------------------------------------ update (CSV)
     def start_update(self, nums: list[str], force: bool = False) -> dict[str, Any]:
@@ -2553,9 +2590,14 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                          "target_price": target_price}.items():
             if val:
                 s[key] = val
-        for key in ("name", "theme", "subtheme", "year", "pieces", "image", "rrp", "exit_date"):
+        if pieces:
+            s["pieces_source"] = "user"
+        for key in ("name", "theme", "subtheme", "year", "image", "rrp", "exit_date"):
             if meta.get(key) and not s.get(key):
                 s[key] = meta[key]
+        if meta.get("pieces"):
+            set_pieces(s, meta["pieces"], (meta.get("_from") or {}).get("pieces") or source or "meta",
+                       setdb_pieces=self._setdb_pieces(num))
         self.store["offers"].setdefault(num, {})
         if owned is not None:
             self.store["collection"][num] = owned
@@ -2606,13 +2648,20 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if known["name"] and not s.get("name"):
             s["name"], s["name_source"] = known["name"], setdb.SOURCE
             changed = True
-        for key in ("theme", "subtheme", "year", "pieces", "image"):
+        for key in ("theme", "subtheme", "year", "image"):
             if known[key] and not s.get(key):
                 s[key] = known[key]
                 if key in self.SOURCE_KEYS:
                     s[self.SOURCE_KEYS[key]] = setdb.SOURCE
                 changed = True
+        if known["pieces"] and not s.get("pieces"):
+            s["pieces"], s["pieces_source"] = known["pieces"], "setdb"
+            changed = True
         return changed
+
+    def _setdb_pieces(self, num: str) -> int | None:
+        row = self.setdb.get(num)
+        return row[setdb.PIECES] if row else None
 
     # ------------------------------------------------------------ the LEGO set database + new sets
     @callback
@@ -2935,7 +2984,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     CLEARABLE = {"target_price", "notes", "priority", "retiring", "exit_date", "subtheme", "watch",
                  "name", "theme", "rrp", "pieces", "year", "image"}      # cleared = automatic again
     SOURCE_KEYS = {"name": "name_source", "rrp": "rrp_source", "image": "image_source", "retiring": "retiring_source",
-                   "exit_date": "exit_date_source"}
+                   "exit_date": "exit_date_source", "pieces": "pieces_source"}
 
     @staticmethod
     def _coerce(key: str, typ: type, value: Any) -> Any:
@@ -3061,6 +3110,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             s["image_source"] = "user"
         if "theme" in clean_set:
             s["theme_source"] = "user"
+        if "pieces" in clean_set:
+            s["pieces_source"] = "user"
         if refill and not self.job_running:     # cleared by the user: let LEGO.com/Brickset fill it again
             s.pop("lego_checked", None)
             self.entry.async_create_background_task(self.hass, self._refill(num), f"{DOMAIN}_refill_{num}")
@@ -3083,6 +3134,114 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else:
                 entry.update(clean_coll)
         self.push_update()
+
+    BULK_FIELDS = ("location", "notes", "added", "condition", "sold")
+
+    def bulk_change(self, set_numbers: list[str], field: str, value: Any = "", *, append: bool = False,
+                    price: Any = None, sold_on: str = "", which: str = "all") -> dict[str, Any]:
+        """Edit all → Bulk change: one field for every copy of the chosen sets of your collection (location, notes,
+        purchase date or condition), or sell them. A sold copy leaves the collection and is kept in the sold
+        ledger; a set without copies left is no longer tracked unless it is on your watchlist on purpose.
+        Every set is checked on its own: a set with a wrong value is reported and left as it was."""
+        if field not in self.BULK_FIELDS:
+            raise LocalizedError("Unknown field {field}.", field=field)
+        sale_price = None
+        if field == "sold":
+            if price not in (None, ""):
+                raw = str(price).strip().replace("€", "").replace(",", ".")
+                sale_price = round(self._coerce("paid", float, raw), 2)
+            sold_on = (sold_on or today_iso()).strip()
+            self._coerce("added", str, sold_on)            # a valid date, not in the future
+        done, errors, removed = 0, {}, []
+        statuses = (self.data or self.compute())["statuses"]
+        for raw_num in set_numbers:
+            num = normalize_set_number(raw_num)
+            entry = self.store["collection"].get(num)
+            if entry is None:
+                errors[num] = T("Set {number} is not in your collection.", number=num)
+                continue
+            try:
+                items = [dict(c) for c in copies(entry)]
+                if field == "sold":
+                    s = self.store["sets"].get(num, {})
+                    sell = items if which == "all" else items[:1]
+                    ledger = self.store.setdefault("sold", [])
+                    for i, c in enumerate(sell):
+                        unit, _ = copy_value(c, entry, statuses.get(num, {}), s, self.store.get("value_source") == "import_first")
+                        ledger.append(sold_record(num, c, s, unit, sale_price, sold_on, seq=len(ledger) + i))
+                    del ledger[: max(0, len(ledger) - SOLD_MAX)]
+                    rest = items[len(sell):]
+                    self.log("info", "user", T("sold: {n} copies", n=len(sell)), set_number=num, source="panel")
+                    if rest:
+                        entry["items"] = rest
+                        sync_copies(entry)
+                    else:
+                        self.store["collection"].pop(num, None)
+                        if s.get("watch") is not True:          # sold and not watched on purpose: no longer tracked
+                            for key in ("sets", "offers"):
+                                self.store[key].pop(num, None)
+                            removed.append(num)
+                else:
+                    for c in items:
+                        v = str(value or "").strip()
+                        if field == "notes" and append and v:
+                            v = f"{c['notes']} {v}".strip() if c.get("notes") else v
+                        c[field] = v
+                    entry["items"] = self._clean_copies(items)
+                    sync_copies(entry)
+                    self.log("info", "user", T("details edited: {fields}", fields=field), set_number=num, source="panel")
+                done += 1
+            except ValueError as err:
+                errors[num] = str(err)
+        self.push_update()
+        return {"saved": done, "errors": errors, "removed": removed}
+
+    def _sold(self, rec_id: str) -> dict[str, Any]:
+        for rec in self.store.get("sold") or []:
+            if rec.get("id") == rec_id:
+                return rec
+        raise LocalizedError("This sale is not in the list (any more).")
+
+    def sold_update(self, rec_id: str, price: Any = None, sold_on: str | None = None) -> None:
+        """Change the price or the date of a sale."""
+        rec = self._sold(rec_id)
+        if price is not None:
+            raw = str(price).strip().replace("€", "").replace(",", ".")
+            if raw:
+                rec["price"] = round(self._coerce("paid", float, raw), 2)
+            else:
+                rec.pop("price", None)
+        if sold_on:
+            rec["date"] = self._coerce("added", str, sold_on)
+        self.push_update()
+
+    def sold_delete(self, rec_id: str) -> None:
+        self.store["sold"].remove(self._sold(rec_id))
+        self.push_update()
+
+    async def sold_restore(self, rec_id: str) -> str:
+        """Undo a sale: the copy goes back into your collection (the set is tracked again when it was removed)."""
+        rec = self._sold(rec_id)
+        num = rec["set_number"]
+        if num not in self.store["sets"]:
+            await self.add_set(num, name=rec.get("name"), theme=rec.get("theme"), owned={"qty": 1}, discover=False, watch=False)
+            self.store["collection"].pop(num, None)           # filled with the restored copy below
+        entry = self.store["collection"].get(num)
+        items = [dict(c) for c in copies(entry)] if entry else []
+        items.append({k: rec[k] for k in COPY_FIELDS if rec.get(k) not in (None, "")})
+        new_entry = self.store["collection"].setdefault(num, {"qty": 1})
+        new_entry["items"] = items
+        sync_copies(new_entry)
+        self.store["sold"].remove(rec)
+        self.log("info", "user", T("sale undone"), set_number=num, source="panel")
+        self.push_update()
+        return num
+
+    def sold_info(self, basis: str = "paid") -> dict[str, Any]:
+        return sold_summary(self.store, basis)
+
+    def investments(self, basis: str = "paid") -> dict[str, Any]:
+        return investment_report(self.store, (self.data or self.compute())["statuses"], basis)
 
     async def _refill(self, num: str) -> None:
         try:
@@ -3230,6 +3389,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     {r: o for r, o in offers.items() if r not in self.store["offers"].get(num, {})})
             for num, e in clean["collection"].items():
                 self.store["collection"].setdefault(num, e)
+            known = {r.get("id") for r in self.store.setdefault("sold", [])}
+            self.store["sold"].extend(r for r in clean["sold"] if r.get("id") not in known)
         else:
             self.store = clean
         self._rename_market_source()          # a backup from before 0.9.19 still has the old label

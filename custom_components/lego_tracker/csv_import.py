@@ -268,8 +268,8 @@ def apply_import(store: dict[str, Any], rows: list[dict[str, Any]], replace: boo
         for f in ("name", "theme", "subtheme", "year", "pieces", "rrp"):
             if r.get(f) and not s.get(f):
                 s[f] = r[f]
-                if f == "name":
-                    s["name_source"] = "import"
+                if f in ("name", "pieces"):
+                    s[f"{f}_source"] = "import"
         entry = store["collection"].get(num)
         new = {k: r[k] for k in COLLECTION_FIELDS if k in r}
         if "current_value" in new:   # keep a value history so the growth chart follows your re-imports

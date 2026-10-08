@@ -315,6 +315,9 @@ code{word-break:break-all}
 .labgrid{display:flex;gap:14px;align-items:flex-start;justify-content:space-between}.labgrid>div{flex:1;min-width:0}.labgrid .kv b{word-break:break-word}
 .labfind{list-style:none;padding:0;margin:0;display:grid;gap:6px}.labfind li{display:flex;gap:8px;font-size:14px;line-height:1.4}.labfind li.lv-bad{color:var(--lt-red)}.labfind li.lv-warn{color:var(--lt-yellow)}
 .labhead{white-space:pre-wrap;word-break:break-all;font-size:11px;max-height:220px;overflow:auto;background:var(--lt-card);padding:8px;border-radius:8px}
+.bc-pick{display:flex;gap:6px;flex-wrap:wrap;align-items:center;border:1px solid var(--lt-line);border-radius:10px;padding:6px;background:var(--lt-card)}.bc-chip{display:inline-flex;gap:6px;align-items:center;cursor:default}.bc-chip.bad{border-color:var(--lt-red);color:var(--lt-red)}
+.bc-x{border:0;background:none;color:inherit;cursor:pointer;font-size:16px;line-height:1;padding:0 2px}.bc-in{position:relative;flex:1;min-width:200px}.bc-in input{width:100%;border:0;background:transparent;box-sizing:border-box}
+.bc-sug{position:absolute;z-index:5;left:0;right:0;top:100%;background:var(--lt-card);border:1px solid var(--lt-line);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.15);max-height:260px;overflow:auto}.bc-opt{padding:7px 10px;cursor:pointer;font-size:13px}.bc-opt.on,.bc-opt:hover{background:var(--lt-soft,rgba(0,0,0,.06))}
 .chip:hover{border-color:var(--lt-accent)}.chip.on{background:var(--lt-accent);color:var(--lt-on-accent);border-color:transparent}.chip.sm{font-size:12px;padding:3px 10px}
 .toggle{display:inline-flex;border:1px solid var(--lt-line);border-radius:10px;overflow:hidden}.toggle button{border:0;background:var(--lt-card);padding:8px 11px;cursor:pointer}.toggle button.on{background:var(--lt-soft);color:var(--lt-accent)}
 /* layout */
@@ -453,7 +456,7 @@ details[open] .dfhint{display:none}.wsg{display:grid;grid-template-columns:max-c
 // labels are English source strings, translated with t() when rendered
 const SECTIONS = {
   deals: { label: "🏷️ Deals & watchlist", hint: "sets you keep an eye on", subs: [["today", "Today"], ["watch", "Watchlist"], ["all", "All prices"], ["new", "New sets"], ["lego", "All LEGO sets"], ["dset", "Settings"]] },
-  collection: { label: "📦 My collection", hint: "what you own", subs: [["overview", "Overview"], ["sets", "Sets"]] },
+  collection: { label: "📦 My collection", hint: "what you own", subs: [["overview", "Overview"], ["sets", "Sets"], ["returns", "Investment return"], ["sold", "Sold"]] },
   log: { label: "📜 Logbook", hint: "checks, prices, errors", subs: [["all", "Everything"], ["checks", "Shop checks"], ["errors", "Open errors"]] },
   manage: { label: "⚙️ Manage", hint: "add, import, shops, settings", subs: [["add", "Add"], ["import", "Import"], ["edit", "Edit all"], ["links", "Link check"], ["notify", "Notifications"], ["shops", "Shops & jobs"], ["lab", "Parser lab"], ["settings", "Settings"], ["userscript", "Userscript"], ["backup", "Backup"], ["legal", "Legal"]] },
 };
@@ -982,7 +985,7 @@ class LegoTrackerPanel extends HTMLElement {
     const s = this.state, el = this.shadowRoot.getElementById("content"); if (!el) return;
     if (s.err) { el.innerHTML = `<div class="empty"><span class="big">⚠️</span>${t("Could not load data: {error}", { error: esc(s.err) })}<br><br><button class="btn" id="retry">${t("Try again")}</button></div>`; el.querySelector("#retry").onclick = () => this.load(true); return; }
     if (!s.data) { el.innerHTML = `<div class="kpis">${"<div class='skel' style='height:86px'></div>".repeat(4)}</div><div class="grid">${"<div class='skel' style='height:260px'></div>".repeat(8)}</div>`; return; }
-    const view = { deals: { today: this.vToday, watch: this.vWatch, all: this.vAll, new: this.vNewSets, lego: this.vCatalog, dset: this.vDealSettings }, collection: { overview: this.vCollOverview, sets: this.vCollSets }, log: { all: this.vLog, checks: this.vLog, errors: this.vErrors }, manage: { notify: this.vNotify, add: this.vAdd, import: this.vImport, links: this.vLinks, shops: this.vShops, lab: this.vLab, edit: this.vBulk, settings: this.vSettings, userscript: this.vUserscript, backup: this.vBackup, legal: this.vLegal, secret: this.vSecret } }[s.section][s.sub[s.section]];
+    const view = { deals: { today: this.vToday, watch: this.vWatch, all: this.vAll, new: this.vNewSets, lego: this.vCatalog, dset: this.vDealSettings }, collection: { overview: this.vCollOverview, sets: this.vCollSets, returns: this.vReturns, sold: this.vSold }, log: { all: this.vLog, checks: this.vLog, errors: this.vErrors }, manage: { notify: this.vNotify, add: this.vAdd, import: this.vImport, links: this.vLinks, shops: this.vShops, lab: this.vLab, edit: this.vBulk, settings: this.vSettings, userscript: this.vUserscript, backup: this.vBackup, legal: this.vLegal, secret: this.vSecret } }[s.section][s.sub[s.section]];
     el.className = animate && !REDUCED ? "enter" : "";
     el.innerHTML = view.call(this);
     this.bindContent(el);
@@ -2166,7 +2169,7 @@ class LegoTrackerPanel extends HTMLElement {
     const actions = `<div class="panel"><h3>⚡ ${t("Actions")}</h3><div class="actions">
       <div class="action"><b>🔎 ${t("Find missing shop links")}</b><p>${t("Searches every shop for a product page of each set without a link. Every title found is checked for the set number, accessories and knock-off brands.")}</p><button class="btn" data-act="discover">${t("Find links")}</button></div>
       <div class="action"><b>↻ ${t("Refresh shop prices")}</b><p>${t("Fetches the price for every linked page. Shops are queried in parallel, each shop calmly one after another.")}</p><button class="btn" data-act="refresh" ${this.fullRefreshAttr("")}>${t("Refresh prices")}</button></div>
-      <div class="action"><b>ℹ️ ${t("Fill in set data")}</b><p>${t("First gets the RRP, image and name from LEGO.com, then fills in theme, year and pieces via Brickset/Rebrickable (keys under Settings) or the public Brickset page. Replaces names that came from a wrong product; values you entered yourself are kept.")}</p><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:auto"><button class="btn" data-act="enrich">${t("Fill in")}</button><button class="btn ghost" data-act="enrich" data-all="1" title="${t("Also sets that already look complete")}">${t("Everything again")}</button></div></div>
+      <div class="action"><b>ℹ️ ${t("Fill in set data")}</b><p>${t("First gets the RRP, image and name from LEGO.com, then fills in theme, year and pieces via Brickset/Rebrickable (keys under Settings) or the public Brickset page. Replaces names that came from a wrong product; values you entered yourself are kept.")}</p><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:auto"><button class="btn" data-act="enrich">${t("Fill in")}</button><button class="btn ghost" data-act="enrich" data-all="1" title="${t("Also sets that already look complete")}">${t("Everything again")}</button><button class="btn ghost" id="pieces_go" type="button" title="${esc(t("Looks up the piece count of every set again in the best source (the official count first) and replaces counts from a weaker source. A count you typed yourself stays."))}">🧱 ${t("Piece counts again")}</button></div></div>
       <div class="action"><b>🔗 ${t("Check links")}</b><p>${t("Judges all links again and shows suspicious or unchecked links, so you can approve or replace them.")}</p><button class="btn" data-goto="manage/links">${t("Go to link check")}</button></div></div></div>
       <div class="panel"><h3>⏰ ${t("Automatic checks")}</h3><p>${this.scheduleLine()} <a data-goto="manage/settings" style="cursor:pointer">${t("Change under Settings")} →</a></p>
       <p><b>${t("Last job:")}</b> ${lastTxt}</p>${pausedTxt ? `<p><b>${t("Paused after a block:")}</b> ${pausedTxt}. ${t("With the buttons you can choose to try anyway.")} <button class="btn ghost sm" data-resume="">▶ ${t("Lift all pauses")}</button></p>` : ""}</div>`;
@@ -2353,7 +2356,15 @@ class LegoTrackerPanel extends HTMLElement {
     if ($("contbox")) this.bindCont($("contbox"));
     if ($("d_res")) this.bindSecret(root, $);
     if ($("lb_go")) this.bindLab(root, $);
+    const pg = $("pieces_go"); if (pg) pg.onclick = () => this.busy(pg, t("Starting…"), async () => {
+      const r = await this._hass.callWS({ type: "lego_tracker/pieces" });
+      this.toast(t("{job} started for {n} sets", { job: tx(r.label), n: r.total }), "ok"); this.state.job = r; this.pollJob(); this.renderJob();
+    });
     if ($("bk_tbl")) this.bindBulk(root, $);
+    if ($("bk_modes")) this.bindBulkModes(root);
+    if ($("bc_box")) this.bindBulkChange(root, $);
+    if ($("sv_box")) this.bindSold(root, $);
+    if ($("iv_box")) this.bindReturns(root);
     if ($("x_cmp")) this.bindCompare(root, $);
     if ($("o_save")) this.bindSettings(root, $);
     if ($("df_save")) this.bindDealSettings(root, $);
@@ -2574,8 +2585,15 @@ class LegoTrackerPanel extends HTMLElement {
     }
     return B;
   }
+  bulkModes(B) {
+    return `<div class="chips" id="bk_modes">${[["table", "▦ " + t("Table")], ["change", "☰ " + t("Bulk change")]].map(([k, l]) => `<button class="chip${(B.mode || "table") === k ? " on" : ""}" data-bkmode="${k}" type="button">${l}</button>`).join("")}</div>`;
+  }
+  bindBulkModes(root) {
+    root.querySelectorAll("[data-bkmode]").forEach((b) => b.onclick = () => { this.bulkDraft().mode = b.dataset.bkmode; this.renderContent(); });
+  }
   vBulk() {
     const B = this.bulkDraft(), q = B.q.trim().toLowerCase();
+    if (B.mode === "change") return this.vBulkChange();
     const list = this.sets.slice().sort((a, b) => a.set_number.localeCompare(b.set_number, undefined, { numeric: true }))
       .filter((x) => { const d = B.draft[x.set_number]; if (!d) return false;
         if (B.scope === "owned" && !d.owned) return false; if (B.scope === "watch" && !d.watch) return false;
@@ -2609,7 +2627,7 @@ class LegoTrackerPanel extends HTMLElement {
       <td><input data-new="${i}" data-f="location" value="${esc(r.location)}"></td><td><input data-new="${i}" data-f="notes" value="${esc(r.notes)}"></td>
       <td class="oact"><button class="btn ghost sm" data-bknewdel="${i}" type="button">✕</button></td></tr>`).join("");
     const changes = B.dirty.size + B.fresh.filter((r) => r.set_number.trim()).length;
-    return `<div class="panel"><h3>✏️ ${t("Edit all")}</h3>
+    return `${this.bulkModes(B)}<div class="panel"><h3>✏️ ${t("Edit all")}</h3>
       <p>${t("Every set in one table: change names, RRP, your own value, and for every copy you own the price paid, purchase date, condition, location and notes. Add new sets at the bottom. Nothing is saved until you press Save; a set with a wrong value is shown in red and the others are saved.")}</p>
       <div class="bk-bar"><input id="bk_q" type="search" value="${esc(B.q)}" placeholder="🔎 ${esc(t("Search by number, name, theme or location"))}" style="flex:1;min-width:180px">
         <div class="chips" style="margin:0">${[["all", t("All")], ["owned", t("My collection")], ["watch", t("Watchlist")]].map(([k, l]) => `<button class="chip${B.scope === k ? " on" : ""}" data-bkscope="${k}" type="button">${l}</button>`).join("")}</div>
@@ -2682,6 +2700,203 @@ class LegoTrackerPanel extends HTMLElement {
       this.toast(nErr ? t("{n} saved, {e} with an error (in red)", { n: res.saved, e: nErr }) : t("{n} saved", { n: res.saved }), nErr ? "err" : "ok");
       this.renderContent();
     });
+  }
+  // ---------------------------------------------------------------- bulk change (Manage → Edit all → Bulk change)
+  /** Pick many sets of your collection (type a number or a name, Enter adds it) and change one field for every copy,
+   * or sell them. */
+  vBulkChange() {
+    const B = this.bulkDraft(), C = (B.change = B.change || { picked: [], field: "location", value: "", append: false, price: "", date: "", which: "all", errors: {} });
+    const owned = this.sets.filter((x) => x.collection), by = Object.fromEntries(owned.map((x) => [x.set_number, x]));
+    C.picked = C.picked.filter((n) => by[n]);
+    const nCopies = C.picked.reduce((a, n) => a + ((by[n].collection.copies || []).length || by[n].collection.qty || 1), 0);
+    const today = new Date().toISOString().slice(0, 10);
+    const locs = [...new Set(owned.flatMap((x) => (x.collection.copies && x.collection.copies.length ? x.collection.copies : [x.collection]).map((c) => c.location).filter(Boolean)))].sort();
+    const fields = [["location", t("Location")], ["notes", t("Notes")], ["added", t("Purchase date")], ["condition", t("Condition")], ["sold", "💶 " + t("Sold")]];
+    const chips = C.picked.map((n) => `<span class="chip bc-chip${C.errors[n] ? " bad" : ""}" title="${esc(C.errors[n] ? tx(C.errors[n]) : by[n].name || "")}"><b>${esc(n)}</b> ${esc((by[n].name || "").slice(0, 32))}<button type="button" class="bc-x" data-bcx="${esc(n)}" aria-label="${esc(t("Remove"))}">×</button></span>`).join("");
+    let input;
+    if (C.field === "location") input = `<label>${t("New location")}<input id="bc_val" list="bc_locs" value="${esc(C.value)}" placeholder="${esc(t("empty = no location"))}"><datalist id="bc_locs">${locs.map((l) => `<option value="${esc(l)}">`).join("")}</datalist></label>`;
+    else if (C.field === "notes") input = `<label>${t("Notes")}<input id="bc_val" value="${esc(C.value)}" maxlength="200"></label><label class="chk"><input type="checkbox" id="bc_append" ${C.append ? "checked" : ""}> ${t("Add to the existing notes instead of replacing them")}</label>`;
+    else if (C.field === "added") input = `<label>${t("Purchase date")}<input id="bc_val" type="date" max="${today}" value="${esc(C.value)}"></label>`;
+    else if (C.field === "condition") input = `<label>${t("Condition")}<select id="bc_val"><option value="">–</option>${CONDITIONS.map((c) => `<option value="${c}" ${C.value === c ? "selected" : ""}>${t(c)}</option>`).join("")}</select></label>`;
+    else input = `<label>${t("Sale price per copy (€)")}<input id="bc_price" type="text" inputmode="decimal" autocomplete="off" data-money value="${esc(C.price)}" placeholder="${esc(t("optional"))}"></label>
+      <label>${t("Sale date")}<input id="bc_date" type="date" max="${today}" value="${esc(C.date || today)}"></label>
+      <label>${t("Which copies")}<select id="bc_which"><option value="all" ${C.which === "all" ? "selected" : ""}>${t("All copies of the set")}</option><option value="one" ${C.which === "one" ? "selected" : ""}>${t("One copy per set")}</option></select></label>`;
+    return `${this.bulkModes(B)}<div class="panel" id="bc_box"><h3>☰ ${t("Bulk change")}</h3>
+      <p>${t("Pick the sets of your collection you want to change: type a set number or part of the name and press Enter. Then choose what to change; it applies to every copy of the chosen sets.")}</p>
+      <div class="bc-pick"><div class="chips" id="bc_chips" style="margin:0">${chips}</div>
+        <div class="bc-in"><input id="bc_q" autocomplete="off" placeholder="🔎 ${esc(t("Set number or name, then Enter"))}" aria-label="${esc(t("Add a set"))}"><div id="bc_sug" class="bc-sug" hidden></div></div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 14px"><button class="btn ghost sm" id="bc_all" type="button">＋ ${t("All sets in my collection ({n})", { n: owned.length })}</button>
+        <button class="btn ghost sm" id="bc_clear" type="button" ${C.picked.length ? "" : "disabled"}>✕ ${t("Clear the selection")}</button>
+        <span class="muted" style="font-size:13px;align-self:center">${t("{n} sets, {c} copies chosen", { n: C.picked.length, c: nCopies })}</span></div>
+      <div class="form" style="align-items:end"><label>${t("What do you want to change?")}<select id="bc_field">${fields.map(([k, l]) => `<option value="${k}" ${C.field === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>${input}</div>
+      ${C.field === "sold" ? `<div class="res warn" style="margin-top:10px;padding:8px 10px;display:block">⚠️ ${t("Sold copies leave your collection. A set without copies left is no longer tracked, unless it is on your watchlist. Every sale is kept under My collection → Sold, with its own statistics.")}</div>` : ""}
+      <div style="margin-top:12px"><button class="btn${C.field === "sold" ? " danger" : ""}" id="bc_go" type="button" ${C.picked.length ? "" : "disabled"}>${C.field === "sold" ? "💶 " + t("Mark as sold") : "💾 " + t("Apply to {n} sets", { n: C.picked.length })}</button></div></div>`;
+  }
+  bindBulkChange(root, $) {
+    const C = this.bulkDraft().change, owned = this.sets.filter((x) => x.collection);
+    const rerender = (focus) => { this.renderContent(); if (focus) { const q = this.shadowRoot.getElementById("bc_q"); if (q) q.focus(); } };
+    const q = $("bc_q"), sug = $("bc_sug");
+    const matches = (text) => {
+      const v = text.trim().toLowerCase(); if (!v) return [];
+      return owned.filter((x) => !C.picked.includes(x.set_number) && (x.set_number.startsWith(v) || (x.name || "").toLowerCase().includes(v)))
+        .sort((a, b) => (b.set_number === v) - (a.set_number === v) || a.set_number.localeCompare(b.set_number, undefined, { numeric: true })).slice(0, 8);
+    };
+    let pos = 0;
+    const show = () => {
+      const m = matches(q.value); pos = Math.min(pos, Math.max(0, m.length - 1));
+      sug.hidden = !q.value.trim();
+      sug.innerHTML = m.length ? m.map((x, i) => `<div class="bc-opt${i === pos ? " on" : ""}" data-bcadd="${esc(x.set_number)}"><b>${esc(x.set_number)}</b> ${esc(x.name || "")}</div>`).join("")
+        : `<div class="bc-opt muted">${t("No set of your collection matches.")}</div>`;
+      sug.querySelectorAll("[data-bcadd]").forEach((o) => o.onmousedown = (e) => { e.preventDefault(); C.picked.push(o.dataset.bcadd); rerender(true); });
+    };
+    const add = () => {
+      const parts = q.value.split(/[,;\s]+/).filter(Boolean), nums = parts.length > 1 && parts.every((p) => /^\d{3,7}(-1)?$/.test(p));
+      if (nums) {               // a list of numbers at once: 10281, 10311 …
+        const miss = [];
+        for (const p of parts) { const n = p.replace(/-1$/, ""); if (owned.some((x) => x.set_number === n)) { if (!C.picked.includes(n)) C.picked.push(n); } else miss.push(n); }
+        if (miss.length) this.toast(t("Not in your collection: {sets}", { sets: miss.join(", ") }), "err");
+        return rerender(true);
+      }
+      const m = matches(q.value);
+      if (m.length) { C.picked.push(m[pos].set_number); rerender(true); }
+    };
+    q.oninput = () => { pos = 0; show(); };
+    q.onkeydown = (e) => {
+      if (e.key === "Enter") { e.preventDefault(); add(); }
+      else if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); pos = Math.max(0, pos + (e.key === "ArrowDown" ? 1 : -1)); show(); }
+      else if (e.key === "Escape") { sug.hidden = true; }
+      else if (e.key === "Backspace" && !q.value && C.picked.length) { C.picked.pop(); rerender(true); }
+    };
+    q.onblur = () => setTimeout(() => { sug.hidden = true; }, 150);
+    root.querySelectorAll("[data-bcx]").forEach((b) => b.onclick = () => { C.picked = C.picked.filter((n) => n !== b.dataset.bcx); delete C.errors[b.dataset.bcx]; rerender(); });
+    $("bc_all").onclick = () => { for (const x of owned) if (!C.picked.includes(x.set_number)) C.picked.push(x.set_number); rerender(); };
+    $("bc_clear").onclick = () => { C.picked = []; C.errors = {}; rerender(); };
+    $("bc_field").onchange = () => { C.field = $("bc_field").value; C.value = ""; rerender(); };
+    const keep = () => { const v = $("bc_val"); if (v) C.value = v.value; const a = $("bc_append"); if (a) C.append = a.checked;
+      if ($("bc_price")) { C.price = $("bc_price").value; C.date = $("bc_date").value; C.which = $("bc_which").value; } };
+    root.querySelectorAll("#bc_val,#bc_append,#bc_price,#bc_date,#bc_which").forEach((el) => el.addEventListener("change", keep));
+    $("bc_go").onclick = () => this.busy($("bc_go"), "…", async () => {
+      keep();
+      const sold = C.field === "sold";
+      if (sold && !confirm(t("Mark {n} sets as sold? The sold copies leave your collection; sets without copies left and not on your watchlist are no longer tracked. You can undo a sale under My collection → Sold.", { n: C.picked.length }))) return;
+      const msg = { type: "lego_tracker/bulk_change", sets: C.picked, field: C.field };
+      if (sold) Object.assign(msg, { price: C.price.trim() || null, date: C.date || "", which: C.which });
+      else Object.assign(msg, { value: C.value, append: C.field === "notes" && C.append });
+      const res = await this._hass.callWS(msg);
+      C.errors = res.errors || {};
+      C.picked = C.picked.filter((n) => C.errors[n]);
+      this.state.soldv = null; this.state.inv = null;
+      await this.load();
+      const nErr = Object.keys(C.errors).length;
+      this.toast(nErr ? t("{n} saved, {e} with an error (in red)", { n: res.saved, e: nErr }) : (sold ? t("{n} sets marked as sold", { n: res.saved }) : t("{n} saved", { n: res.saved })), nErr ? "err" : "ok");
+      this.bulkDraft().draft = null;
+      this.renderContent();
+    });
+  }
+
+  // ---------------------------------------------------------------- sold sets (My collection → Sold)
+  basisChips(cur, attr) {
+    return `<div class="chips" style="margin:0">${[["paid", t("against the price paid")], ["rrp", t("against the RRP")]].map(([k, l]) => `<button class="chip sm${cur === k ? " on" : ""}" ${attr}="${k}" type="button">${l}</button>`).join("")}</div>`;
+  }
+  async loadSold() {
+    const S = this.state.soldv;
+    try { S.data = await this._hass.callWS({ type: "lego_tracker/sold", basis: S.basis }); S.err = null; } catch (e) { S.err = e.message; }
+    if (this.state.section === "collection" && this.state.sub.collection === "sold") this.renderContent();
+  }
+  vSold() {
+    const S = (this.state.soldv = this.state.soldv || { basis: "paid", data: null, err: null, loading: false });
+    if (S.err) return `<div class="empty"><span class="big">⚠️</span>${esc(tx(S.err))}</div>`;
+    if (!S.data) { if (!S.loading) { S.loading = true; this.loadSold().finally(() => { S.loading = false; }); } return `<div class="kpis">${"<div class='skel' style='height:86px'></div>".repeat(4)}</div>`; }
+    const d = S.data;
+    if (!d.count) return this.emptyState("💶", t("You haven't sold any sets yet. Mark sets as sold under Manage → Edit all → Bulk change; they are kept here with their own statistics."), `<button class="btn" data-goto="manage/edit">☰ ${t("Bulk change")}</button>`);
+    const tracked = new Set(this.sets.map((x) => x.set_number));
+    const kpis = `<div class="kpis">${this.kpi(t("Sold"), d.count, { icon: "💶", sub: t("copies") })}${this.kpi(t("Revenue"), d.revenue, { fmt: "eur", icon: "💰", color: "var(--lt-accent)" })}
+      ${this.kpi(t("Profit"), d.profit, { fmt: "eur", icon: "📈", color: d.profit >= 0 ? "var(--lt-green)" : "var(--lt-red)", sub: d.profit_pct != null ? signPct(d.profit_pct) : "" })}
+      ${this.kpi(t("Kept on average"), d.avg_days_held, { icon: "⏳", sub: t("days between purchase and sale") })}</div>`;
+    const yrs = Object.entries(d.by_year);
+    const pr = (v) => `<span class="${v >= 0 ? "up" : "down"}">${v >= 0 ? "+" : ""}${EUR(v)}</span>`;
+    const list = (rows) => rows.length ? `<table class="tbl">${rows.map((r) => `<tr${tracked.has(r.set_number) ? ` class="click" data-set="${esc(r.set_number)}"` : ""}><td>${esc(r.name || r.set_number)}<div class="muted" style="font-size:12px">${esc(r.set_number)} · ${EUR(r.basis)} → ${EUR(r.price)}</div></td><td class="num">${pr(r.profit)}<div class="muted" style="font-size:12px">${signPct(r.pct)}</div></td></tr>`).join("")}</table>` : `<p class="muted">${t("No data.")}</p>`;
+    const rows = d.rows.map((r) => `<tr><td>${esc(r.date || "")}</td><td${tracked.has(r.set_number) ? ` class="click" data-set="${esc(r.set_number)}"` : ""}><b>${esc(r.set_number)}</b> ${esc(r.name || "")}<div class="muted" style="font-size:12px">${esc(r.theme || "")}${r.condition ? " · " + esc(t(r.condition)) : ""}${r.location ? " · " + esc(r.location) : ""}</div></td>
+      <td class="num">${EUR(r.basis)}${r.estimated && r.basis != null ? ` <span class="muted" title="${esc(t("estimated: the other price is unknown"))}">≈</span>` : ""}</td><td class="num">${EUR(r.value)}</td><td class="num"><b>${EUR(r.price)}</b></td><td class="num">${r.profit != null ? pr(r.profit) : "–"}<div class="muted" style="font-size:12px">${signPct(r.pct)}</div></td>
+      <td class="oact"><button class="btn ghost sm" data-sved="${esc(r.id)}" type="button" title="${esc(t("Change price or date"))}">✎</button><button class="btn ghost sm" data-svundo="${esc(r.id)}" type="button" title="${esc(t("Undo the sale: back into your collection"))}">↶</button><button class="btn ghost sm" data-svdel="${esc(r.id)}" type="button" title="${esc(t("Remove from this list"))}">🗑</button></td></tr>`).join("");
+    return `<div id="sv_box">${kpis}<div class="panel"><h3>💶 ${t("Sold sets")}<span class="hsp"></span>${this.basisChips(S.basis, "data-svbasis")}</h3>
+      <div class="two"><div><h4>${t("Revenue per year")}</h4>${yrs.length ? bars(yrs.map(([k, v]) => ({ label: k, value: v.revenue })), { fmt: EUR0 }) : ""}</div>
+        <div><h4>${t("Profit per year")}</h4>${yrs.length ? bars(yrs.map(([k, v]) => ({ label: k, value: Math.max(0, v.profit) })), { fmt: EUR0 }) : ""}</div></div></div>
+      <div class="two"><div class="panel"><h3>🏆 ${t("Best sales")}</h3>${list(d.best)}</div><div class="panel"><h3>📉 ${t("Sold at a loss")}</h3>${list(d.worst)}</div></div>
+      <div class="panel"><h3>🎨 ${t("Per theme")}</h3><table class="tbl"><tr><th>${t("Theme")}</th><th class="num">${t("Sold")}</th><th class="num">${t("Revenue")}</th><th class="num">${t("Profit")}</th></tr>${Object.entries(d.by_theme).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="num">${v.count}</td><td class="num">${EUR(v.revenue)}</td><td class="num">${pr(v.profit)}</td></tr>`).join("")}</table></div>
+      <div class="panel"><h3>📋 ${t("Every sale")}<span class="hsp"></span><button class="btn ghost sm" id="sv_csv" type="button">⬇ ${t("Export (CSV)")}</button></h3>
+        <div class="tscroll"><table class="tbl"><thead><tr><th>${t("Date")}</th><th>Set</th><th class="num">${S.basis === "rrp" ? t("RRP") : t("Paid")}</th><th class="num">${t("Value")}</th><th class="num">${t("Sale price")}</th><th class="num">${t("Profit")}</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div></div>`;
+  }
+  bindSold(root, $) {
+    const S = this.state.soldv, again = () => { S.data = null; this.state.inv = null; this.renderContent(); };
+    root.querySelectorAll("[data-svbasis]").forEach((b) => b.onclick = () => { S.basis = b.dataset.svbasis; again(); });
+    const act = (b, action, extra = {}) => this.busy(b, "…", async () => { await this._hass.callWS({ type: "lego_tracker/sold/edit", sale: b.dataset[Object.keys(b.dataset)[0]], action, ...extra }); if (action === "restore") await this.load(); again(); });
+    root.querySelectorAll("[data-sved]").forEach((b) => b.onclick = () => {
+      const r = S.data.rows.find((x) => x.id === b.dataset.sved); if (!r) return;
+      const price = prompt(t("Sale price per copy (€)"), r.price ?? ""); if (price === null) return;
+      const day = prompt(t("Sale date") + " (YYYY-MM-DD)", r.date || ""); if (day === null) return;
+      act(b, "update", { price, date: day });
+    });
+    root.querySelectorAll("[data-svundo]").forEach((b) => b.onclick = () => { if (confirm(t("Undo this sale? The copy goes back into your collection."))) act(b, "restore"); });
+    root.querySelectorAll("[data-svdel]").forEach((b) => b.onclick = () => { if (confirm(t("Remove this sale from the list? It no longer counts in the statistics."))) act(b, "delete"); });
+    const csv = $("sv_csv");
+    if (csv) csv.onclick = () => {
+      const cols = ["date", "set_number", "name", "theme", "paid", "rrp", "value", "price", "profit", "added", "condition", "location", "notes"];
+      const q = (v) => (v == null ? "" : /[",;\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+      const text = [cols.join(","), ...S.data.rows.map((r) => cols.map((c) => q(r[c])).join(","))].join("\n");
+      const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: "text/csv" })); a.download = "lot-sold.csv"; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    };
+  }
+
+  // ---------------------------------------------------------------- investment return (My collection → Investment return)
+  async loadReturns() {
+    const I = this.state.inv;
+    try { I.data = await this._hass.callWS({ type: "lego_tracker/investments", basis: I.basis }); I.err = null; } catch (e) { I.err = e.message; }
+    if (this.state.section === "collection" && this.state.sub.collection === "returns") this.renderContent();
+  }
+  vReturns() {
+    const I = (this.state.inv = this.state.inv || { basis: "paid", data: null, err: null, loading: false, sort: "total" });
+    if (I.err) return `<div class="empty"><span class="big">⚠️</span>${esc(tx(I.err))}</div>`;
+    if (!I.data) { if (!I.loading) { I.loading = true; this.loadReturns().finally(() => { I.loading = false; }); } return `<div class="kpis">${"<div class='skel' style='height:86px'></div>".repeat(4)}</div>`; }
+    const d = I.data, rrp = d.basis === "rrp";
+    if (!d.value && !d.realised) return this.emptyState("📈", t("Your collection is still empty. Import a CSV (Brickset, Rebrickable or your own sheet) or mark sets as ‘owned’."), `<button class="btn" data-goto="manage/import">⇪ ${t("Import collection")}</button>`);
+    const tracked = new Set(this.sets.map((x) => x.set_number));
+    const pr = (v) => (v == null ? "–" : `<span class="${v >= 0 ? "up" : "down"}">${v >= 0 ? "+" : ""}${EUR(v)}</span>`);
+    const pc = (v) => (v == null ? "–" : `<span class="${v >= 0 ? "up" : "down"}">${signPct(v)}</span>`);
+    const kpis = `<div class="kpis">${this.kpi(t("Collection value"), d.value, { fmt: "eur", icon: "💎", color: "var(--lt-accent)" })}
+      ${this.kpi(rrp ? t("RRP of your sets") : t("Purchase cost"), d.cost, { fmt: "eur", icon: "🧾", sub: d.estimated ? t("{n} copies estimated", { n: d.estimated }) : "" })}
+      ${this.kpi(t("Value growth"), d.gain_pct, { fmt: "pct", icon: "📈", color: d.gain >= 0 ? "var(--lt-green)" : "var(--lt-red)", sub: pr(d.gain) })}
+      ${this.kpi(t("Realised with sales"), d.realised, { fmt: "eur", icon: "💶", sub: `<a data-goto="collection/sold" style="cursor:pointer">${t("Sold")} →</a>` })}
+      ${this.kpi(t("Total return"), d.total, { fmt: "eur", icon: "🏁", color: d.total >= 0 ? "var(--lt-green)" : "var(--lt-red)" })}
+      ${this.kpi(t("Per year"), d.yearly_pct, { fmt: "pct", icon: "📅", sub: t("average growth so far") })}</div>`;
+    const ser = d.series || [];
+    const chart = lineChart([{ name: t("Value"), color: COLORS[1], points: ser.map((p) => [p.ts, p.value]) }, { name: rrp ? t("RRP") : t("Purchase cost"), color: COLORS[0], points: ser.map((p) => [p.ts, p.cost]), dashed: true }]);
+    const now = Date.now() / 1000;
+    const proj = d.projection.length ? lineChart([{ name: t("Estimated value"), color: COLORS[2], points: d.projection.map((p, i) => [now + i * 365.25 * 86400, p.value]) }], { height: 180 }) : `<p class="muted">${t("Not enough data for an estimate (purchase dates or release years needed).")}</p>`;
+    const years = d.years;
+    const yRows = years.slice().reverse().map((y) => `<tr><td><b>${y.year}</b></td><td class="num">${y.bought || ""}</td><td class="num">${y.bought ? EUR0(y.bought_amount) : ""}</td><td class="num">${y.sold || ""}</td><td class="num">${y.sold ? EUR0(y.sold_revenue) : ""}</td><td class="num">${y.sold ? pr(y.sold_profit) : ""}</td><td class="num">${EUR0(y.value_end)}</td><td class="num">${pc(y.growth_pct)}</td></tr>`).join("");
+    const vEnd = years.filter((y) => y.value_end != null);
+    const setList = (rows, key) => rows.length ? `<table class="tbl">${rows.map((r) => `<tr${tracked.has(r.set_number) ? ` class="click" data-set="${esc(r.set_number)}"` : ""}><td>${esc(r.name || r.set_number)}<div class="muted" style="font-size:12px">${esc(r.set_number)} · ${EUR(r.cost)} → ${EUR(r.value)}${r.realised ? " · " + t("sold") + " " + pr(r.realised) : ""}</div></td><td class="num">${key === "total" ? pr(r.total) : pc(r.pct)}${key !== "total" && r.yearly_pct != null ? `<div class="muted" style="font-size:12px">${t("{pct} per year", { pct: signPct(r.yearly_pct) })}</div>` : ""}</td></tr>`).join("")}</table>` : `<p class="muted">${t("No data.")}</p>`;
+    const themes = d.themes, posT = themes.filter((x) => x.total > 0);
+    const sorters = { total: (a, b) => b.total - a.total, pct: (a, b) => (b.pct ?? -1e9) - (a.pct ?? -1e9), value: (a, b) => b.value - a.value };
+    const tRows = themes.slice().sort(sorters[I.sort] || sorters.total).map((x) => `<tr class="click" data-cf="theme:${esc(x.theme)}"><td>${esc(x.theme)}</td><td class="num">${x.copies}</td><td class="num">${EUR0(x.cost)}</td><td class="num">${EUR0(x.value)}</td><td class="num">${pc(x.pct)}</td><td class="num">${x.realised ? pr(x.realised) : ""}</td><td class="num"><b>${pr(x.total)}</b></td></tr>`).join("");
+    const th = (k, l) => `<th class="num click" data-ivsort="${k}">${l}${I.sort === k ? " ▾" : ""}</th>`;
+    return `<div id="iv_box"><div class="panel" style="padding:10px 14px"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><b>${t("Growth calculated")}</b>${this.basisChips(d.basis, "data-ivbasis")}
+        <span class="muted" style="font-size:12px">${rrp ? t("How much more your sets are worth than their recommended retail price.") : t("How much more your sets are worth than what you paid for them.")}</span></div></div>
+      ${kpis}
+      <div class="panel"><h3>📈 ${t("Value of the collection")}</h3>${chart}</div>
+      <div class="two"><div class="panel"><h3>📊 ${t("Value at the end of each year")}</h3>${vEnd.length > 1 ? bars(vEnd.map((y) => ({ label: String(y.year), value: y.value_end })), { fmt: EUR0 }) : `<p class="muted">${t("Not enough data yet.")}</p>`}</div>
+        <div class="panel"><h3>🔮 ${t("Estimate for the coming years")}</h3>${proj}<p class="muted" style="font-size:12px">${d.yearly_pct != null ? t("If the value keeps growing by {pct} a year, as on average so far. An estimate, not a promise: prices of sets can also drop.", { pct: signPct(d.yearly_pct) }) : ""}</p></div></div>
+      <div class="panel"><h3>📅 ${t("Per year")}</h3><div class="tscroll"><table class="tbl"><thead><tr><th>${t("Year")}</th><th class="num">${t("Bought")}</th><th class="num">${rrp ? t("RRP") : t("Spent")}</th><th class="num">${t("Sold")}</th><th class="num">${t("Revenue")}</th><th class="num">${t("Profit")}</th><th class="num">${t("Value at year end")}</th><th class="num" title="${esc(t("Change in value without what was bought or sold that year"))}">${t("Growth")}</th></tr></thead><tbody>${yRows}</tbody></table></div></div>
+      <div class="two"><div class="panel"><h3>🚀 ${t("Grew the most")}</h3>${setList(d.best_sets, "pct")}</div><div class="panel"><h3>📉 ${t("Grew the least")}</h3>${setList(d.worst_sets, "pct")}</div></div>
+      <div class="two"><div class="panel"><h3>💰 ${t("Earns the most")}</h3>${setList(d.top_earners, "total")}</div>
+        <div class="panel"><h3>🎨 ${t("Return per theme")}</h3>${posT.length ? donut(posT.slice(0, 7).map((x) => ({ label: x.theme, value: x.total })), { label: t("return") }) : `<p class="muted">${t("No theme with a positive return yet.")}</p>`}</div></div>
+      <div class="panel"><h3>🎨 ${t("Every theme")}</h3><div class="tscroll"><table class="tbl"><thead><tr><th>${t("Theme")}</th><th class="num">${t("Copies")}</th><th class="num">${rrp ? t("RRP") : t("Paid")}</th>${th("value", t("Value"))}${th("pct", t("Growth"))}<th class="num">${t("Sold")}</th>${th("total", t("Total return"))}</tr></thead><tbody>${tRows}</tbody></table></div></div></div>`;
+  }
+  bindReturns(root) {
+    const I = this.state.inv;
+    root.querySelectorAll("[data-ivbasis]").forEach((b) => b.onclick = () => { I.basis = b.dataset.ivbasis; I.data = null; this.renderContent(); });
+    root.querySelectorAll("[data-ivsort]").forEach((b) => b.onclick = () => { I.sort = b.dataset.ivsort; this.renderContent(); });
   }
   // ---------------------------------------------------------------- parser lab (Manage → Parser lab)
   labRuns() {
