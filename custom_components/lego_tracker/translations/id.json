@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "LEGO Organizing Tool",
+        "title": "B.R.I.C.K.",
         "description": "Sebagian besar pengaturan juga ada di panel: Kelola → Pengaturan.",
         "data": {
           "discount_threshold": "Ambang diskon",
@@ -46,7 +46,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "LEGO Organizing Tool",
+        "title": "B.R.I.C.K.",
         "description": "Sebagian besar pengaturan juga ada di panel: Kelola → Pengaturan.",
         "data": {
           "discount_threshold": "Ambang diskon",

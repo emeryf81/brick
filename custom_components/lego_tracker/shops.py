@@ -14,7 +14,8 @@ from typing import Any
 from .i18n import LocalizedError
 from .const import DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, GENERIC_SHOPS, RETAILERS
 
-SETTINGS_FORMAT = "lot-shop-settings"
+SETTINGS_FORMAT = "brick-shop-settings"
+OLD_FORMATS = ("lot-shop-settings",)            # files written before the name B.R.I.C.K. are read as well
 SETTINGS_VERSION = 1
 LEGAL_VERSION = 1                 # raise when the terms change: everyone accepts them again at the next import
 CONF_SHOP_PROFILE = "shop_profile"
@@ -114,7 +115,7 @@ def _https_on(url: Any, domain: str) -> bool:
 
 def validate_settings(data: Any) -> dict[str, Any]:
     """A shop settings file, checked and cleaned. Raises LocalizedError with what is wrong."""
-    if not isinstance(data, dict) or data.get("format") != SETTINGS_FORMAT:
+    if not isinstance(data, dict) or data.get("format") not in (SETTINGS_FORMAT, *OLD_FORMATS):
         raise LocalizedError("This is not a shop settings file for this integration.")
     if data.get("version") != SETTINGS_VERSION:
         raise LocalizedError("Shop settings file version {version} is not supported.", version=data.get("version"))

@@ -29,7 +29,7 @@ refresh:
 import_collection:
   fields:
     csv_text: {selector: {text: {multiline: true}}}
-    file_path: {example: "/config/lego_collection.csv", selector: {text: {}}}
+    file_path: {example: "/config/brick_collection.csv", selector: {text: {}}}
     replace: {default: false, selector: {boolean: {}}}
     track_prices: {default: true, selector: {boolean: {}}}
 report_price:
@@ -70,7 +70,7 @@ export_data: {}
 import_data:
   fields:
     data: {selector: {object: {}}}
-    file_path: {example: "/config/lego_backup.json", selector: {text: {}}}
+    file_path: {example: "/config/brick_backup.json", selector: {text: {}}}
     merge: {default: false, selector: {boolean: {}}}
 fix_offer:
   fields:

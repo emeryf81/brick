@@ -1,4 +1,4 @@
-/* LEGO Price Tracker panel – vanilla web component, no build step.
+/* B.R.I.C.K. panel – vanilla web component, no build step.
  * Sections: "Deals & watchlist" (sets you keep an eye on), "My collection" (what you own),
  * "Logbook" (everything the integration does) and "Manage" (adding, import, shops, settings).
  * English is the source language; translations live in i18n/<lang>.json ({"English": "translation"}). */
@@ -123,7 +123,7 @@ const COLORS = ["#d01012", "#0057a6", "#00852b", "#f5a800", "#7a3c9e", "#00a3da"
 const CONDITIONS = ["Sealed", "Opened", "Built", "Incomplete"];
 /** Colour themes for the whole panel: [key, name, swatches]. "ha" = the colours of your Home Assistant theme. */
 const COLOR_THEMES = [["ha", "Home Assistant", ["var(--primary-color,#03a9f4)", "var(--card-background-color,#fff)", "var(--primary-background-color,#f3f4f7)"]],
-  ["lego", "LEGO", ["#d01012", "#f5c400", "#fff"]], ["ocean", "Ocean", ["#0067b8", "#e7f1fb", "#fff"]], ["forest", "Forest", ["#1b7f3b", "#e8f4ec", "#fff"]],
+  ["lego", "Classic", ["#d01012", "#f5c400", "#fff"]], ["ocean", "Ocean", ["#0067b8", "#e7f1fb", "#fff"]], ["forest", "Forest", ["#1b7f3b", "#e8f4ec", "#fff"]],
   ["violet", "Violet", ["#7a3c9e", "#f1e9f6", "#fff"]], ["sunset", "Sunset", ["#e3611a", "#fdeee4", "#fff"]], ["light", "Light", ["#0057a6", "#fff", "#f3f4f7"]],
   ["dark", "Dark", ["#5b9bff", "#1c1f26", "#111318"]]];   // stored in English, shown with t()
 const REDUCED = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -321,6 +321,9 @@ code{word-break:break-all}
 .labfind{list-style:none;padding:0;margin:0;display:grid;gap:6px}.labfind li{display:flex;gap:8px;font-size:14px;line-height:1.4}.labfind li.lv-bad{color:var(--lt-red)}.labfind li.lv-warn{color:var(--lt-yellow)}
 .labhead{white-space:pre-wrap;word-break:break-all;font-size:11px;max-height:220px;overflow:auto;background:var(--lt-card);padding:8px;border-radius:8px}
 .bc-warn{margin-top:10px;padding:8px 10px;border-radius:8px;font-size:13px;white-space:normal;background:color-mix(in srgb,var(--lt-yellow) 18%,transparent);color:color-mix(in srgb,var(--lt-yellow) 60%,var(--lt-text))}
+.about-head{display:flex;gap:18px;align-items:center;flex-wrap:wrap}.about-logo{width:112px;height:112px;border-radius:24px}.about-letters{display:grid;gap:10px}.about-letter{display:flex;gap:12px;align-items:flex-start}
+.about-l{flex:0 0 40px;height:40px;border-radius:8px;background:#E4572E;color:#FFF6EA;display:flex;align-items:center;justify-content:center;font-size:22px}
+.coffee{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:10px;background:#FFDD00;color:#111A2E;font-weight:700;text-decoration:none;font-size:14px}.coffee:hover{filter:brightness(.95)}
 .bc-pick{display:flex;gap:6px;flex-wrap:wrap;align-items:center;border:1px solid var(--lt-line);border-radius:10px;padding:6px;background:var(--lt-card)}.bc-chip{display:inline-flex;gap:6px;align-items:center;cursor:default}.bc-chip.bad{border-color:var(--lt-red);color:var(--lt-red)}
 .bc-x{border:0;background:none;color:inherit;cursor:pointer;font-size:16px;line-height:1;padding:0 2px}.bc-in{position:relative;flex:1;min-width:200px}.bc-in input{width:100%;border:0;background:transparent;box-sizing:border-box}
 .bc-sug{position:absolute;z-index:5;left:0;right:0;top:100%;background:var(--lt-card);border:1px solid var(--lt-line);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.15);max-height:260px;overflow:auto}.bc-opt{padding:7px 10px;cursor:pointer;font-size:13px}.bc-opt.on,.bc-opt:hover{background:var(--lt-soft,rgba(0,0,0,.06))}
@@ -464,7 +467,7 @@ const SECTIONS = {
   deals: { label: "🏷️ Deals & watchlist", hint: "sets you keep an eye on", subs: [["today", "Today"], ["watch", "Watchlist"], ["all", "All prices"], ["new", "New sets"], ["lego", "All LEGO sets"], ["dset", "Settings"]] },
   collection: { label: "📦 My collection", hint: "what you own", subs: [["overview", "Overview"], ["sets", "Sets"], ["returns", "Investment return"], ["sold", "Sold"]] },
   log: { label: "📜 Logbook", hint: "checks, prices, errors", subs: [["all", "Everything"], ["checks", "Shop checks"], ["errors", "Open errors"]] },
-  manage: { label: "⚙️ Manage", hint: "add, import, shops, settings", subs: [["add", "Add"], ["import", "Import"], ["edit", "Edit all"], ["links", "Link check"], ["notify", "Notifications"], ["shops", "Shops & jobs"], ["lab", "Parser lab"], ["settings", "Settings"], ["userscript", "Userscript"], ["backup", "Backup"], ["legal", "Legal"]] },
+  manage: { label: "⚙️ Manage", hint: "add, import, shops, settings", subs: [["add", "Add"], ["import", "Import"], ["edit", "Edit all"], ["links", "Link check"], ["notify", "Notifications"], ["shops", "Shops & jobs"], ["lab", "Parser lab"], ["settings", "Settings"], ["userscript", "Userscript"], ["backup", "Backup"], ["legal", "Legal"], ["about", "About B.R.I.C.K."]] },
 };
 
 class LegoTrackerPanel extends HTMLElement {
@@ -545,7 +548,7 @@ class LegoTrackerPanel extends HTMLElement {
           shop: str(m.shop), set_number: str(m.set_number), error: str(m.error) };
         m.ok = num(m.ok); m.fail = num(m.fail);
         if (m.finished) { this.toast(t("Browser relay done: {ok} prices, {fail} failed", { ok: m.ok, fail: m.fail }), m.ok ? "ok" : "err"); this.load(); }
-        if (m.error === "no-token") this.toast(t("The userscript has no token yet: Tampermonkey menu → LEGO Price Tracker settings"), "err");
+        if (m.error === "no-token") this.toast(t("The userscript has no token yet: Tampermonkey menu → B.R.I.C.K. settings"), "err");
       }
       const box = this.shadowRoot && this.shadowRoot.getElementById("relaybox"); if (box) { box.innerHTML = this.relayBoxInner(); this.bindRelay(box); }
       const cbox = this.shadowRoot && this.shadowRoot.getElementById("contbox"); if (cbox) { cbox.innerHTML = this.contBoxInner(); this.bindCont(cbox); }
@@ -600,7 +603,7 @@ class LegoTrackerPanel extends HTMLElement {
     try { if (this._hass) this._hass.callWS({ type: "lego_tracker/client_error", message: msg.slice(0, 500), stack, ua: navigator.userAgent.slice(0, 300), view: `${this.state.section}/${this.state.sub[this.state.section]}` }); } catch (x) { /* ignore */ }
     if (!this.shadowRoot) return;
     this.shadowRoot.innerHTML = `<div style="padding:24px;font-family:system-ui,sans-serif;color:var(--primary-text-color,#111);background:var(--primary-background-color,#fff);min-height:100vh;box-sizing:border-box">
-      <h2 style="margin:0 0 8px">🧱 LEGO Organizing Tool</h2><p>Something went wrong while showing this page. The error was sent to the Home Assistant log (custom_components.lego_tracker).</p>
+      <h2 style="margin:0 0 8px">🧱 B.R.I.C.K.</h2><p>Something went wrong while showing this page. The error was sent to the Home Assistant log (custom_components.lego_tracker).</p>
       <pre style="white-space:pre-wrap;font-size:12px;opacity:.8">${esc(msg)}</pre><button id="crash_reload" style="padding:10px 16px;border-radius:10px;border:0;background:#0057a6;color:#fff;font-size:15px">↻ Reload</button></div>`;
     const b = this.shadowRoot.getElementById("crash_reload");
     if (b) b.onclick = () => { this.state.section = "deals"; try { localStorage.removeItem("lego_tracker_ui"); } catch (x) { /* ignore */ } this._rendered = false; this.shadowRoot.innerHTML = ""; try { this.render(true); } catch (x) { this.crash(x); return; } this.load().catch((x) => this.crash(x)); };
@@ -864,7 +867,7 @@ class LegoTrackerPanel extends HTMLElement {
     const status = d ? this.healthDot() : "";
     const keepToasts = root.querySelector(".toasts"), keepDlg = root.getElementById("dlg"), dlgScroll = keepDlg ? keepDlg.scrollTop : 0;
     root.innerHTML = `<style>${STYLE}</style><div class="wrap">
-      <header>${this._narrow ? `<ha-menu-button></ha-menu-button>` : ""}<img class="logo" src="/lego_tracker_static/icon.png${d ? `?v=${encodeURIComponent(d.version)}` : ""}" alt="" onerror="this.outerHTML=this.dataset.fb" data-fb="${esc(BRICK)}"><div><h1>LEGO Organizing Tool</h1><div class="meta">${d ? `v${esc(d.version)} · ${t("{n} sets tracked", { n: d.sets.length })}` : t("loading…")}</div></div>
+      <header>${this._narrow ? `<ha-menu-button></ha-menu-button>` : ""}<img class="logo" src="/lego_tracker_static/icon.png${d ? `?v=${encodeURIComponent(d.version)}` : ""}" alt="" onerror="this.outerHTML=this.dataset.fb" data-fb="${esc(BRICK)}"><div><h1>B.R.I.C.K.</h1><div class="meta">${d ? `v${esc(d.version)} · ${t("{n} sets tracked", { n: d.sets.length })}` : t("loading…")}</div></div>
         <div class="hsp"></div>${status}<button class="btn ghost sm" data-act="discover" title="${t("Search shop links for sets that have none yet: a job you can follow and stop, spread out so every shop is searched at most once every 2 minutes")}">🔎 <span class="lbl">${t("Find links")}</span></button><button class="btn sm" data-act="refresh" ${this.fullRefreshAttr(t("Fetch all shop prices now"))}>↻ <span class="lbl">${t("Refresh prices")}</span></button></header>
       ${d && d.api !== API_LEVEL ? `<div class="banner" style="border-color:var(--lt-bad,#c62828)">🔄 <span><b>${t("Restart Home Assistant to finish the update.")}</b> ${t("The new panel is loaded, but Home Assistant still runs the previous version of the integration, so some buttons and settings don't work yet. Settings → System → Restart.")}</span></div>` : ""}
       ${d && d.shop_settings && !d.shop_settings.ready ? `<div class="banner" style="border-color:var(--lt-bad,#c62828)">⚖️ <span><b>${t(d.shop_settings.imported ? "Accept the terms once to keep fetching prices." : "First step: import your shop settings.")}</b> ${t("Until then no shop or comparison site is contacted. Your sets and prices stay.")} <a id="gate_open">${t(d.shop_settings.imported ? "Read and accept" : "Import shop settings")} →</a></span></div>` : ""}
@@ -993,7 +996,7 @@ class LegoTrackerPanel extends HTMLElement {
     const s = this.state, el = this.shadowRoot.getElementById("content"); if (!el) return;
     if (s.err) { el.innerHTML = `<div class="empty"><span class="big">⚠️</span>${t("Could not load data: {error}", { error: esc(s.err) })}<br><br><button class="btn" id="retry">${t("Try again")}</button></div>`; el.querySelector("#retry").onclick = () => this.load(true); return; }
     if (!s.data) { el.innerHTML = `<div class="kpis">${"<div class='skel' style='height:86px'></div>".repeat(4)}</div><div class="grid">${"<div class='skel' style='height:260px'></div>".repeat(8)}</div>`; return; }
-    const view = { deals: { today: this.vToday, watch: this.vWatch, all: this.vAll, new: this.vNewSets, lego: this.vCatalog, dset: this.vDealSettings }, collection: { overview: this.vCollOverview, sets: this.vCollSets, returns: this.vReturns, sold: this.vSold }, log: { all: this.vLog, checks: this.vLog, errors: this.vErrors }, manage: { notify: this.vNotify, add: this.vAdd, import: this.vImport, links: this.vLinks, shops: this.vShops, lab: this.vLab, edit: this.vBulk, settings: this.vSettings, userscript: this.vUserscript, backup: this.vBackup, legal: this.vLegal, secret: this.vSecret } }[s.section][s.sub[s.section]];
+    const view = { deals: { today: this.vToday, watch: this.vWatch, all: this.vAll, new: this.vNewSets, lego: this.vCatalog, dset: this.vDealSettings }, collection: { overview: this.vCollOverview, sets: this.vCollSets, returns: this.vReturns, sold: this.vSold }, log: { all: this.vLog, checks: this.vLog, errors: this.vErrors }, manage: { notify: this.vNotify, add: this.vAdd, import: this.vImport, links: this.vLinks, shops: this.vShops, lab: this.vLab, edit: this.vBulk, settings: this.vSettings, userscript: this.vUserscript, backup: this.vBackup, legal: this.vLegal, about: this.vAbout, secret: this.vSecret } }[s.section][s.sub[s.section]];
     el.className = animate && !REDUCED ? "enter" : "";
     el.innerHTML = view.call(this);
     this.bindContent(el);
@@ -1764,7 +1767,7 @@ class LegoTrackerPanel extends HTMLElement {
       const r = await this._hass.callWS({ type: "lego_tracker/logs/export", parts: p, start: ts("xp_from"), end: ts("xp_to", true), filters: f });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(new Blob(["\ufeff" + r.csv], { type: "text/csv;charset=utf-8" }));
-      a.download = `lego-logbook-${new Date().toISOString().slice(0, 10)}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      a.download = `brick-logbook-${new Date().toISOString().slice(0, 10)}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
       $("xp_res").textContent = Object.entries(r.counts).map(([k, n]) => `${t({ checks: "Shop checks", history: "Price history per set", total: "Price history in total", reports: "Problem reports" }[k])}: ${n}`).join(" · ");
     });
   }
@@ -2144,8 +2147,8 @@ class LegoTrackerPanel extends HTMLElement {
       <div class="actions">
       ${step(1, t("Install Tampermonkey"), `<p>${t("Free browser extension. For your browser ({browser}):", { browser: stores[browser][0] })}</p><a class="btn" href="${stores[browser][1]}" target="_blank" rel="noopener noreferrer">${t("Tampermonkey for {browser}", { browser: stores[browser][0] })} ↗</a><p style="font-size:12px">${t("Other browsers:")} ${Object.entries(stores).filter(([k]) => k !== browser).map(([, [n, u]]) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${n}</a>`).join(" · ")}. ${t("In Chrome/Edge also switch on “Allow user scripts” for the extension, or developer mode.")}</p>`)}
       ${step(2, t("Install the userscript"), `<p>${t("Tampermonkey opens an install screen: click Install there. The script is made for your Home Assistant ({origin}) and your shops.", { origin: esc(origin) })}</p><a class="btn" href="${esc(url)}" target="_blank" rel="noopener">⬇ ${t("Install userscript")}</a><p style="font-size:12px">${t("Adding shops or changing the language later? Install it again (Tampermonkey also updates it by itself).")}</p>`)}
-      ${step(3, t("Create a token"), `<p>${t("In Home Assistant: your profile → Security → Long-lived access tokens → Create token (name e.g. “LEGO userscript”). Copy the token, you only see it once.")}</p><a class="btn ghost" href="/profile/security" target="_blank" rel="noopener">${t("Go to profile → Security")} ↗</a>`)}
-      ${step(4, t("Set the token"), `<p>${t("In your browser click the Tampermonkey icon → LEGO Price Tracker settings. The address is already filled in ({origin}); then paste the token.", { origin: esc(origin) })}</p>`)}
+      ${step(3, t("Create a token"), `<p>${t("In Home Assistant: your profile → Security → Long-lived access tokens → Create token (name e.g. “B.R.I.C.K. userscript”). Copy the token, you only see it once.")}</p><a class="btn ghost" href="/profile/security" target="_blank" rel="noopener">${t("Go to profile → Security")} ↗</a>`)}
+      ${step(4, t("Set the token"), `<p>${t("In your browser click the Tampermonkey icon → B.R.I.C.K. settings. The address is already filled in ({origin}); then paste the token.", { origin: esc(origin) })}</p>`)}
       ${step(5, t("Test"), `<p>${t("Open a product page of a set you track (click a set → “open ↗”). After a few seconds a green message appears at the bottom right, and “✅ Works” appears above.")}</p>`)}
       ${step(6, t("Switch on the continuous check"), `<p>${t("Come back to this page (reload it once after installing) and press “Switch on in this browser” above, or use the Tampermonkey menu → “Continuous check: switch on / off”. The setting is kept in Tampermonkey: it starts again by itself every time you open Home Assistant in this browser.")}</p>`)}
       ${step(7, t("Keep it running"), `<p>${t("The check only runs while a Home Assistant tab is open (any page of Home Assistant). Tips:")}</p><ul style="margin:0;padding-left:18px;font-size:13px">
@@ -2157,7 +2160,7 @@ class LegoTrackerPanel extends HTMLElement {
       </div>
       <div class="panel" style="margin-top:16px"><h3>🛠 ${t("If it doesn't work")}</h3><ul style="margin:0;padding-left:18px">
         <li><b>${t("“userscript not detected in this browser”")}</b>: ${t("reload this page; in Chrome/Edge switch on “Allow user scripts” for Tampermonkey (Extensions → Tampermonkey → Details); check that the script is enabled in the Tampermonkey dashboard.")}</li>
-        <li><b>${t("“no token yet” or HTTP 401")}</b>: ${t("set the token again via the Tampermonkey menu → LEGO Price Tracker settings; a revoked token stops everything.")}</li>
+        <li><b>${t("“no token yet” or HTTP 401")}</b>: ${t("set the token again via the Tampermonkey menu → B.R.I.C.K. settings; a revoked token stops everything.")}</li>
         <li><b>${t("A shop keeps failing")}</b>: ${t("some shops block your browser too, or load their search results with JavaScript (then nothing can be found by searching). Open the shop under Shops & jobs to see why, and paste the product link in the set yourself.")}</li>
         <li><b>${t("Nothing happens")}</b>: ${t("the browser relay may be off under Settings; or there is simply nothing to do (it looks again every 10 minutes).")}</li></ul></div>
       <div class="panel" style="margin-top:16px"><h3>🔒 ${t("Security")}</h3><p>${t("The script contains no token: that is only stored in Tampermonkey on your device. It only runs on the shop domains in your list and on your Home Assistant pages (for the browser relay), and only sends the set number, URL, title and price to your own Home Assistant. You can revoke the token in your profile at any time.")}</p></div>`;
@@ -2191,7 +2194,7 @@ class LegoTrackerPanel extends HTMLElement {
   /** The legal terms, in full (Manage → Legal, the import wizard and the one-time acceptance). */
   legalHtml() {
     const sec = [
-      ["About this software", "LEGO Organizing Tool (LOT) is free software that runs entirely on your own Home Assistant. It contains no list of shops or websites and contacts no website by itself: which websites are contacted is decided only by the shop settings you import or enter yourself."],
+      ["About this software", "B.R.I.C.K. (Brick Registration & Inventory Cataloging Kit) is free software that runs entirely on your own Home Assistant. It contains no list of shops or websites and contacts no website by itself: which websites are contacted is decided only by the shop settings you import or enter yourself."],
       ["Example settings", "The example shop settings file only shows how settings can be written. It is not a recommendation, not an instruction and not a statement that any website allows its pages to be read automatically. Whether and how you use it is your own decision."],
       ["Your responsibility", "Everything that happens between your Home Assistant and the websites in your settings (page requests, searches, APIs, the browser relay and the userscript) happens on your initiative, from your own network and under your own responsibility. You are responsible for respecting the terms of use of those websites, their robots.txt and the law that applies to you, including copyright, database rights, rules on unauthorised access to computer systems and consumer law. Use the software only for personal, non-commercial purposes and keep the number of requests moderate."],
       ["No warranty", "The software is provided \"as is\", without any warranty, express or implied, including fitness for a particular purpose and non-infringement. Prices, availability, deals, retirement dates and values can be wrong, incomplete or out of date: always check them at the shop before you buy."],
@@ -2212,6 +2215,27 @@ class LegoTrackerPanel extends HTMLElement {
     return `<div class="panel"><h3>🗂️ ${t("Shop settings")}</h3><p>${state}</p><p class="muted">${t("Which shops and comparison sites your Home Assistant contacts, with their addresses, comes from a shop settings file you import. Export it to keep a copy or to move it to another installation.")}</p>
       <button class="btn" id="ss_import">⬆ ${t("Import shop settings")}</button> ${ss.imported && !ss.ready ? `<button class="btn" id="ss_accept">⚖️ ${t("Read and accept")}</button> ` : ""}${ss.imported ? `<button class="btn ghost" id="ss_export">⬇ ${t("Export shop settings")}</button> <button class="btn ghost" id="ss_withdraw">✋ ${t("Withdraw and stop fetching")}</button>` : ""}</div>`;
   }
+  /** Manage → About B.R.I.C.K.: what the name stands for, the version, the trademark notice and links. */
+  vAbout() {
+    const d = this.state.data || {}, v = d.version || "";
+    const letters = [["B", "Brick", "The universal word for a building brick. Every builder knows straight away what it is about, without using anyone's trademark."],
+      ["R", "Registration", "What you do: register your sets and add them to your digital collection."],
+      ["I", "Inventory", "The heart of the app: the overview of everything you own, with its value and where it is."],
+      ["C", "Cataloging", "Not one big heap: sorted and organised by theme, set number, location and condition."],
+      ["K", "Kit", "The toolkit that helps you keep track: prices, deals, return, sales and more."]];
+    return `<div class="panel about"><div class="about-head"><img src="/lego_tracker_static/logo.png${v ? `?v=${encodeURIComponent(v)}` : ""}" alt="B.R.I.C.K." class="about-logo">
+        <div><h2 style="margin:0">B.R.I.C.K.</h2><div class="muted">Brick Registration &amp; Inventory Cataloging Kit</div>
+        <div style="margin-top:6px">${t("The inventory app for your LEGO® sets in Home Assistant.")}</div>${v ? `<div class="muted" style="font-size:13px;margin-top:4px">${t("Version {version}", { version: esc(v) })}</div>` : ""}</div></div></div>
+      <div class="panel"><h3>🧱 ${t("What the name stands for")}</h3><div class="about-letters">${letters.map(([l, w, d]) => `<div class="about-letter"><b class="about-l">${l}</b><div><b>${l}${esc(w.slice(1))}</b> <span class="muted">· ${t(w)}</span><div style="font-size:13px">${t(d)}</div></div></div>`).join("")}</div></div>
+      <div class="panel"><h3>👤 ${t("Who makes B.R.I.C.K.?")}</h3>
+        <p>${t("B.R.I.C.K. is made by {name} from Belgium, a LEGO collector and Home Assistant user. I wanted to keep better track of my own collection: what I have, where it is, what it is worth and when a set on my wishlist is on sale. That is how this app started. I work on it in my spare time, together with a group of beta testers whose reports make it better every week.", { name: "<b>Emery Frijters</b>" })}</p>
+        <p class="muted" style="font-size:13px">${t("Found a bug or have an idea? Preferably report it on GitHub, so others can follow along.")}</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><a class="btn ghost sm" href="https://github.com/emeryf81" target="_blank" rel="noopener noreferrer">GitHub ↗</a>
+          <a class="coffee" href="https://www.buymeacoffee.com/emeryf" target="_blank" rel="noopener noreferrer">☕ ${t("Buy me a coffee")}</a></div></div>
+      <div class="panel"><h3>ℹ️ ${t("About this software")}</h3><p>${t("Free software that runs entirely on your own Home Assistant: your collection, prices and keys stay with you. It contains no list of shops; you choose which websites it contacts in your shop settings.")}</p>
+        <p class="muted" style="font-size:13px">${t("B.R.I.C.K. is independent software. LEGO® is a trademark of the LEGO Group, which does not sponsor, authorize or endorse this application. The names of shops and websites belong to their owners.")}</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn ghost sm" href="https://github.com/emeryf81/brick" target="_blank" rel="noopener noreferrer">GitHub ↗</a><a class="btn ghost sm" href="https://github.com/emeryf81/brick/issues" target="_blank" rel="noopener noreferrer">${t("Report a problem or an idea")} ↗</a><button class="btn ghost sm" data-goto="manage/legal" type="button">⚖️ ${t("Legal")}</button></div></div>`;
+  }
   vLegal() {
     return `${this.shopSettingsPanel()}<div class="panel"><h3>⚖️ ${t("Legal information")}</h3>${this.legalHtml()}<p class="muted" style="margin-top:12px">${t("Terms version {v}.", { v: (this.state.data.shop_settings || {}).legal_version || 1 })}</p></div>`;
   }
@@ -2221,15 +2245,15 @@ class LegoTrackerPanel extends HTMLElement {
     const dlg = this.shadowRoot.getElementById("dlg");
     this._dlgGen = (this._dlgGen || 0) + 1; clearInterval(this._shopTimer);
     let payload = null;
-    const intro = accept ? t("LOT is now version 1.0. Your shop settings were carried over from the previous version, but before anything is fetched again you have to read and accept the terms below once.")
-      : t("LOT contains no shops of its own: you choose which websites your Home Assistant contacts by importing a shop settings file. An example file shows how such a file is written.");
+    const intro = accept ? t("B.R.I.C.K. is now version 1.0. Your shop settings were carried over from the previous version, but before anything is fetched again you have to read and accept the terms below once.")
+      : t("B.R.I.C.K. contains no shops of its own: you choose which websites your Home Assistant contacts by importing a shop settings file. An example file shows how such a file is written.");
     dlg.innerHTML = `<div class="dhead" style="grid-template-columns:1fr auto"><div><h2>⚖️ ${t(accept ? "Accept the terms" : "Import shop settings")}</h2><div class="muted">${t("Nothing is fetched until you agree.")}</div></div><div><button class="x" id="x" aria-label="${t("Not now")}" title="${t("Not now")}">✕</button></div></div>
       <div class="dbody"><p>${intro}</p>
       ${accept ? `<p><b>${t("Shops in your settings:")}</b> ${Object.values(this.state.data.retailers || {}).map(esc).join(", ")}</p>`
         : `<label class="drop" id="ss_drop" style="padding:18px;display:block"><span class="big" style="font-size:26px">🗂️</span><span id="ss_name">${t("Choose or drop a shop settings file (.json)")}</span><input type="file" id="ss_file" accept=".json,application/json" hidden></label>
-      <p class="muted"><a href="https://github.com/emeryf81/mot/blob/main/examples/lot-shops.example.json" target="_blank" rel="noopener noreferrer">${t("Example of a shop settings file")} ↗</a></p><div id="ss_info"></div>`}
+      <p class="muted"><a href="https://github.com/emeryf81/brick/blob/main/examples/brick-shops.example.json" target="_blank" rel="noopener noreferrer">${t("Example of a shop settings file")} ↗</a></p><div id="ss_info"></div>`}
       <div style="max-height:260px;overflow:auto;border:1px solid var(--lt-line);border-radius:10px;padding:4px 12px 12px;margin:10px 0;font-size:13px">${this.legalHtml()}</div>
-      <label class="chk" style="display:flex;gap:8px;align-items:flex-start;margin:10px 0"><input type="checkbox" id="ss_ok" style="margin-top:3px"> <span>${t("I have read and accept these terms. I alone am responsible for what my Home Assistant does with these shop settings and I bear all legal consequences; the author of LOT cannot be held liable.")}</span></label>
+      <label class="chk" style="display:flex;gap:8px;align-items:flex-start;margin:10px 0"><input type="checkbox" id="ss_ok" style="margin-top:3px"> <span>${t("I have read and accept these terms. I alone am responsible for what my Home Assistant does with these shop settings and I bear all legal consequences; the author of B.R.I.C.K. cannot be held liable.")}</span></label>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="ss_go" disabled>${t(accept ? "Accept" : "Import")}</button><button class="btn ghost" id="ss_later">${t("Not now")}</button>${accept ? `<button class="btn ghost" id="ss_other">⬆ ${t("Import other shop settings")}</button>` : ""}</div></div>`;
     if (!dlg.open) dlg.showModal();
     const q = (id) => dlg.querySelector("#" + id), ok = q("ss_ok"), go = q("ss_go");
@@ -2243,7 +2267,7 @@ class LegoTrackerPanel extends HTMLElement {
         if (!f) return;
         try {
           const j = JSON.parse(await f.text());
-          if (!j || j.format !== "lot-shop-settings" || !Array.isArray(j.shops)) throw new Error("format");
+          if (!j || !["brick-shop-settings", "lot-shop-settings"].includes(j.format) || !Array.isArray(j.shops)) throw new Error("format");
           payload = j; q("ss_name").textContent = f.name;
           q("ss_info").innerHTML = `<p><b>${t("{n} shops", { n: j.shops.length })}:</b> ${j.shops.map((x) => esc(x.name || x.id)).join(", ")}${(j.comparison_sites || []).length ? `<br><b>${t("{n} comparison sites", { n: j.comparison_sites.length })}:</b> ${j.comparison_sites.map((x) => esc(x.name || x.id)).join(", ")}` : ""}${Object.keys(j.data_sources || {}).length ? `<br><b>${t("Other sources (set data, set database, API)")}:</b> ${Object.values(j.data_sources).map((u) => { try { return esc(new URL(u).hostname); } catch (e) { return "?"; } }).filter((v, i, a) => a.indexOf(v) === i).join(", ")}` : ""}</p>`;
         } catch (e) { payload = null; q("ss_info").innerHTML = ""; this.toast(t("This is not a shop settings file for this integration."), "err"); }
@@ -2424,12 +2448,12 @@ class LegoTrackerPanel extends HTMLElement {
     // shop settings (Shops & jobs, Legal)
     const ssi = $("ss_import"); if (ssi) ssi.onclick = () => this.openShopSettings(true);
     const ssa = $("ss_accept"); if (ssa) ssa.onclick = () => this.openShopSettings();
-    const sse = $("ss_export"); if (sse) sse.onclick = () => this.busy(sse, "…", async () => { const x = await this._hass.callWS({ type: "lego_tracker/shop_settings/export" }); const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(x, null, 2)], { type: "application/json" })); a.download = "lot-shop-settings.json"; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 3000); });
+    const sse = $("ss_export"); if (sse) sse.onclick = () => this.busy(sse, "…", async () => { const x = await this._hass.callWS({ type: "lego_tracker/shop_settings/export" }); const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(x, null, 2)], { type: "application/json" })); a.download = "brick-shop-settings.json"; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 3000); });
     const ssw = $("ss_withdraw"); if (ssw) ssw.onclick = () => { if (!confirm(t("Remove the shop settings and withdraw your acceptance? From then on no shop is contacted; your sets and prices stay."))) return; this.busy(ssw, "…", async () => { await this._hass.callWS({ type: "lego_tracker/shop_settings/withdraw" }); await new Promise((res) => setTimeout(res, 1500)); await this.load(); }); };
     // backup
     const dl = (name, text, mime) => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: mime })); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 3000); };
-    const ec = $("expcsv"); if (ec) ec.addEventListener("click", () => this.busy(ec, "…", async () => { const x = await this.svc("export_collection", {}, true); dl("lego_collection.csv", x.response.csv, "text/csv;charset=utf-8"); }));
-    const ej = $("expjson"); if (ej) ej.addEventListener("click", () => this.busy(ej, "…", async () => { const x = await this.svc("export_data", {}, true); dl(`lego_backup_${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(x.response, null, 1), "application/json"); this.toast(t("Backup downloaded"), "ok"); }));
+    const ec = $("expcsv"); if (ec) ec.addEventListener("click", () => this.busy(ec, "…", async () => { const x = await this.svc("export_collection", {}, true); dl("brick_collection.csv", x.response.csv, "text/csv;charset=utf-8"); }));
+    const ej = $("expjson"); if (ej) ej.addEventListener("click", () => this.busy(ej, "…", async () => { const x = await this.svc("export_data", {}, true); dl(`brick_backup_${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(x.response, null, 1), "application/json"); this.toast(t("Backup downloaded"), "ok"); }));
     const jd = $("jdrop"); if (jd) {
       let payload = null;
       const pick = async (f) => { if (!f) return; try { payload = JSON.parse(await f.text()); $("jname").textContent = `${f.name} · ${Object.keys(payload.sets || {}).length} sets`; $("impjson").disabled = false; } catch (e) { payload = null; $("impjson").disabled = true; this.toast(t("Not a valid JSON file"), "err"); } };
@@ -2854,7 +2878,7 @@ class LegoTrackerPanel extends HTMLElement {
       const cols = ["date", "set_number", "name", "theme", "paid", "rrp", "value", "price", "profit", "added", "condition", "location", "notes"];
       const q = (v) => (v == null ? "" : /[",;\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
       const text = [cols.join(","), ...S.data.rows.map((r) => cols.map((c) => q(r[c])).join(","))].join("\n");
-      const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: "text/csv" })); a.download = "lot-sold.csv"; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: "text/csv" })); a.download = "brick-sold.csv"; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     };
   }
 
@@ -2967,7 +2991,7 @@ class LegoTrackerPanel extends HTMLElement {
       (r.amounts || []).map((a) => `${a.price}×${a.count}`).join(" ")].map(cell).join(";"));
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob(["﻿" + [head.join(";"), ...rows].join("\n")], { type: "text/csv;charset=utf-8" }));
-    a.download = `lego-parser-lab-${new Date().toISOString().slice(0, 10)}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    a.download = `brick-parser-lab-${new Date().toISOString().slice(0, 10)}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   }
   bindLab(root, $) {
     const L = this.state.lab, ws = (args) => this._hass.callWS({ type: "lego_tracker/lab", ...args });
@@ -3111,7 +3135,7 @@ class LegoTrackerPanel extends HTMLElement {
     on("d_dump", async () => {
       const r = await dev({ action: "dump" }), a = document.createElement("a");
       a.href = URL.createObjectURL(new Blob([JSON.stringify(r, null, 1)], { type: "application/json" }));
-      a.download = `lego-tracker-debug-${new Date().toISOString().slice(0, 10)}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      a.download = `brick-debug-${new Date().toISOString().slice(0, 10)}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
     });
     const dbg = $("d_debug"); if (dbg) dbg.onchange = () => this.busy(null, "", async () => { await dev({ action: "debug", on: dbg.checked }); this.toast(dbg.checked ? t("Debug logging on") : t("Debug logging off"), "ok"); });
     root.querySelectorAll(".d_reset").forEach((b) => b.onclick = () => this.busy(b, "…", async () => {
@@ -3331,7 +3355,7 @@ class LegoTrackerPanel extends HTMLElement {
       if (!save) {
         const a = document.createElement("a");
         a.href = URL.createObjectURL(new Blob(["\ufeff" + r.csv], { type: "text/csv;charset=utf-8" }));
-        a.download = `lego-problem-${s.set_number}-${new Date().toISOString().slice(0, 10)}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+        a.download = `brick-problem-${s.set_number}-${new Date().toISOString().slice(0, 10)}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
       }
       this.toast(save ? t("Problem written to the logbook") : t("CSV downloaded"), "ok");
       box.hidden = true;

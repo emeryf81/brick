@@ -929,7 +929,7 @@ def rows_to_csv(rows: list[dict[str, Any]], columns: list[str]) -> str:
 def validate_backup(data: Any) -> dict[str, Any]:
     """Sanity-check an imported backup and return a clean store (never trusts the file blindly)."""
     if not isinstance(data, dict) or not isinstance(data.get("sets"), dict):
-        raise LocalizedError("Not a LEGO Price Tracker backup (field 'sets' is missing).")
+        raise LocalizedError("Not a B.R.I.C.K. backup (field 'sets' is missing).")
     clean = new_store()
     for key in clean:
         if key in data:

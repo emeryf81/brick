@@ -29,6 +29,9 @@ for m in re.finditer(r'(?:srcLabel|SOURCE_WORDS|KINDS) = \{(.*?)\};', js, re.S):
     for x in re.finditer(r': ' + STR, m.group(1)): add(x.group(1))
 for m in re.finditer(r'const ic = \{(.*?)\};', js):
     for x in re.finditer(r'\["[^"]*", ' + STR + r'\]', m.group(1)): add(x.group(1))
+abt = js[js.index('const letters = [["B"'):js.index("return `<div class=\"panel about\">")]   # About: the words of the name
+for m in re.finditer(STR, abt):
+    if len(m.group(1)) > 1: add(json.loads('"' + m.group(1) + '"'))
 leg = js[js.index("  legalHtml() {"):js.index("return sec.map")]      # the legal terms: headings and paragraphs
 for m in re.finditer(STR, leg): add(json.loads('"' + m.group(1) + '"'))
 for c in ["Sealed", "Opened", "Built", "Incomplete", "Unknown", "Job"]: add(c)
