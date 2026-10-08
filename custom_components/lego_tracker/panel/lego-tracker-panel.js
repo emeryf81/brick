@@ -493,7 +493,6 @@ class LegoTrackerPanel extends HTMLElement {
       for (const [k, v] of Object.entries(saved.sub || {})) if (SECTIONS[k] && SECTIONS[k].subs.some(([x]) => x === v)) this.state.sub[k] = v;
     } catch (e) { /* storage unavailable */ }
     this.resetFilters();
-    this.applyColors(this.colorTheme());
     // approving a suspicious price works the same everywhere (set dialog, shops & jobs, logbook)
     this.shadowRoot.addEventListener("click", (e) => {
       const b = e.target.closest && e.target.closest(".apprb"); if (!b) return;
@@ -611,6 +610,9 @@ class LegoTrackerPanel extends HTMLElement {
   set narrow(v) { this._narrow = v; }
   set panel(_) {}
   colorTheme() { try { const c = localStorage.getItem("lego_tracker_colors"); return COLOR_THEMES.some(([k]) => k === c) ? c : "ha"; } catch (e) { return "ha"; } }
+  // the host may get attributes only once it is in the page: an attribute set in the constructor makes Firefox
+  // refuse to create the panel (NotSupportedError)
+  connectedCallback() { if (!this._colored) { this._colored = true; this.applyColors(this.colorTheme()); } }
   applyColors(key) { if (key && key !== "ha") this.dataset.colors = key; else delete this.dataset.colors; }
   persist() { try { localStorage.setItem("lego_tracker_ui", JSON.stringify({ section: this.state.section, sub: this.state.sub, cview: this.state.cview, range: this.state.range })); } catch (e) { /* ignore */ } }
 
