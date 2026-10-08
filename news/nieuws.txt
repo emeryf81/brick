@@ -14,7 +14,7 @@ lang: nl
 title: UPDATE 4 oktober! Versie 0.9.21 staat klaar in HACS
 link: /hacs/dashboard
 
-Er staat een grote nieuwe versie van LEGO Organizing Tool klaar.
+Er staat een grote nieuwe versie van B.R.I.C.K. klaar.
 
 Wat is er nieuw?
 • Deals op álle LEGO-sets: de tool kijkt elke dag rustig een deel van alle recente sets na, ook sets die je niet volgt. Je vindt ze bij Deals → Alle LEGO-sets. Sets die uit handel zijn, worden overgeslagen (dat wordt elke maand opnieuw nagekeken).
@@ -25,7 +25,7 @@ Wat is er nieuw?
 • De ticker toont enkel echte deals op basis van de dealscore, ook voor je watchlist. Nieuws, deals en watchlist staan standaard door elkaar (uit te zetten bij Beheer → Instellingen → Ticker).
 • Openstaande fouten: klik erop voor een overzicht van hoeveel fouten er opgelost zijn en hoeveel er bijkwamen, met grafieken per dag, week en maand.
 
-Bijwerken: klik op de knop hieronder (HACS), zoek "LEGO Organizing Tool", kies "Bijwerken" en herstart Home Assistant.
+Bijwerken: klik op de knop hieronder (HACS), zoek "B.R.I.C.K.", kies "Bijwerken" en herstart Home Assistant.
 
 ---
 id: 2026-10-04-update-en
@@ -34,7 +34,7 @@ lang: en
 title: UPDATE October 4! Version 0.9.21 is ready in HACS
 link: /hacs/dashboard
 
-A big new version of LEGO Organizing Tool is ready.
+A big new version of B.R.I.C.K. is ready.
 
 What's new?
 • Deals on every LEGO set: every day the tool calmly checks part of all recent sets, also sets you don't follow. Find them under Deals → All LEGO sets. Retired sets are skipped (checked again every month).
@@ -45,7 +45,7 @@ What's new?
 • The ticker only shows real deals based on the deal score, also for your watchlist. News, deals and watchlist are mixed by default (switch it off under Manage → Settings → Ticker).
 • Open errors: click them for an overview of how many errors were solved and how many came in, with charts per day, week and month.
 
-To update: click the button below (HACS), find "LEGO Organizing Tool", choose "Update" and restart Home Assistant.
+To update: click the button below (HACS), find "B.R.I.C.K.", choose "Update" and restart Home Assistant.
 
 ---
 id: 2026-10-03-userscript
@@ -64,14 +64,14 @@ Wat doet het?
 
 Installeren in 5 minuten:
 1. Installeer Tampermonkey in je browser (Chrome, Edge, Firefox of Safari).
-2. Ga in LEGO Organizing Tool naar Beheer → Userscript en klik op "Userscript installeren". Tampermonkey vraagt of je het wilt installeren: klik op "Installeren".
+2. Ga in B.R.I.C.K. naar Beheer → Userscript en klik op "Userscript installeren". Tampermonkey vraagt of je het wilt installeren: klik op "Installeren".
 3. Maak een token: klik linksonder in Home Assistant op je naam → Beveiliging → "Langdurige toegangstokens" → "Token aanmaken". Kopieer het (je ziet het maar één keer).
-4. Klik op het Tampermonkey-icoon → "LEGO Price Tracker-instellingen" en plak het token.
+4. Klik op het Tampermonkey-icoon → "B.R.I.C.K.-instellingen" en plak het token.
 5. Ga terug naar Beheer → Userscript en klik op "Aanzetten in deze browser". Klaar!
 
 Prijzen die je browser ophaalde, krijgen het teken ⓤ. Op dezelfde pagina (Beheer → Userscript) staat de volledige handleiding met afbeeldingen van elke stap, en wat je doet als iets niet lukt.
 
-Klik op de knop hieronder om naar LEGO Organizing Tool te gaan.
+Klik op de knop hieronder om naar B.R.I.C.K. te gaan.
 
 ---
 id: 2026-10-03-userscript-en
@@ -90,14 +90,14 @@ What does it do?
 
 Install in 5 minutes:
 1. Install Tampermonkey in your browser (Chrome, Edge, Firefox or Safari).
-2. In LEGO Organizing Tool go to Manage → Userscript and click "Install userscript". Tampermonkey asks whether to install it: click "Install".
+2. In B.R.I.C.K. go to Manage → Userscript and click "Install userscript". Tampermonkey asks whether to install it: click "Install".
 3. Create a token: click your name at the bottom left in Home Assistant → Security → "Long-lived access tokens" → "Create token". Copy it (you only see it once).
-4. Click the Tampermonkey icon → "LEGO Price Tracker settings" and paste the token.
+4. Click the Tampermonkey icon → "B.R.I.C.K. settings" and paste the token.
 5. Go back to Manage → Userscript and click "Switch on in this browser". Done!
 
 Prices fetched by your browser get the mark ⓤ. The same page (Manage → Userscript) has the full guide, step by step, and what to do when something doesn't work.
 
-Click the button below to go to LEGO Organizing Tool.
+Click the button below to go to B.R.I.C.K..
 
 ---
 id: 2026-10-03-beta
@@ -105,7 +105,7 @@ date: 2026-10-02
 lang: nl
 title: Bedankt, BETA-testers! Help ons met zoveel mogelijk info
 
-Een dikke merci aan iedereen die LEGO Organizing Tool test! Dankzij jullie meldingen wordt de tool elke week beter.
+Een dikke merci aan iedereen die B.R.I.C.K. test! Dankzij jullie meldingen wordt de tool elke week beter.
 
 Zie je iets wat niet klopt (een verkeerde prijs, een foute link, een winkel die nooit werkt)? Geef het door, met zoveel mogelijk info. Zo doe je dat:
 
@@ -122,7 +122,7 @@ date: 2026-10-02
 lang: en
 title: Thank you, BETA testers! Help us with as much info as possible
 
-A big thank you to everyone testing LEGO Organizing Tool! Thanks to your reports the tool gets better every week.
+A big thank you to everyone testing B.R.I.C.K.! Thanks to your reports the tool gets better every week.
 
 See something that's wrong (a wrong price, a wrong link, a shop that never works)? Let us know, with as much info as possible. This is how:
 
