@@ -78,7 +78,7 @@ const signPct = (v) => (v == null ? "–" : `${v > 0 ? "+" : ""}${v.toLocaleStri
 const DATE = (ts, o = { day: "2-digit", month: "short" }) => new Date(ts * 1000).toLocaleDateString(LOC, o);
 const TIME = (ts) => new Date(ts * 1000).toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" });
 /** What this panel needs from the server (API_LEVEL in const.py). Different = Home Assistant still runs older code. */
-const API_LEVEL = 9;
+const API_LEVEL = 10;
 /** The comparison sites of the imported shop settings: id → name (filled from the server, see load()). */
 const SRC = {};
 /** How a price was read, as one letter: ⓤ your own browser (userscript), ⓒ a comparison site, ⓜ the market value, ⌂ the shop's own site. */
@@ -320,6 +320,7 @@ code{word-break:break-all}
 .labgrid{display:flex;gap:14px;align-items:flex-start;justify-content:space-between}.labgrid>div{flex:1;min-width:0}.labgrid .kv b{word-break:break-word}
 .labfind{list-style:none;padding:0;margin:0;display:grid;gap:6px}.labfind li{display:flex;gap:8px;font-size:14px;line-height:1.4}.labfind li.lv-bad{color:var(--lt-red)}.labfind li.lv-warn{color:var(--lt-yellow)}
 .labhead{white-space:pre-wrap;word-break:break-all;font-size:11px;max-height:220px;overflow:auto;background:var(--lt-card);padding:8px;border-radius:8px}
+.bc-warn{margin-top:10px;padding:8px 10px;border-radius:8px;font-size:13px;white-space:normal;background:color-mix(in srgb,var(--lt-yellow) 18%,transparent);color:color-mix(in srgb,var(--lt-yellow) 60%,var(--lt-text))}
 .bc-pick{display:flex;gap:6px;flex-wrap:wrap;align-items:center;border:1px solid var(--lt-line);border-radius:10px;padding:6px;background:var(--lt-card)}.bc-chip{display:inline-flex;gap:6px;align-items:center;cursor:default}.bc-chip.bad{border-color:var(--lt-red);color:var(--lt-red)}
 .bc-x{border:0;background:none;color:inherit;cursor:pointer;font-size:16px;line-height:1;padding:0 2px}.bc-in{position:relative;flex:1;min-width:200px}.bc-in input{width:100%;border:0;background:transparent;box-sizing:border-box}
 .bc-sug{position:absolute;z-index:5;left:0;right:0;top:100%;background:var(--lt-card);border:1px solid var(--lt-line);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.15);max-height:260px;overflow:auto}.bc-opt{padding:7px 10px;cursor:pointer;font-size:13px}.bc-opt.on,.bc-opt:hover{background:var(--lt-soft,rgba(0,0,0,.06))}
@@ -2738,7 +2739,7 @@ class LegoTrackerPanel extends HTMLElement {
         <button class="btn ghost sm" id="bc_clear" type="button" ${C.picked.length ? "" : "disabled"}>✕ ${t("Clear the selection")}</button>
         <span class="muted" style="font-size:13px;align-self:center">${t("{n} sets, {c} copies chosen", { n: C.picked.length, c: nCopies })}</span></div>
       <div class="form" style="align-items:end"><label>${t("What do you want to change?")}<select id="bc_field">${fields.map(([k, l]) => `<option value="${k}" ${C.field === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>${input}</div>
-      ${C.field === "sold" ? `<div class="res warn" style="margin-top:10px;padding:8px 10px;display:block">⚠️ ${t("Sold copies leave your collection. A set without copies left is no longer tracked, unless it is on your watchlist. Every sale is kept under My collection → Sold, with its own statistics.")}</div>` : ""}
+      ${C.field === "sold" ? `<div class="bc-warn">⚠️ ${t("Sold copies leave your collection. A set without copies left is no longer tracked, unless it is on your watchlist. Every sale is kept under My collection → Sold, with its own statistics.")}</div>` : ""}
       <div style="margin-top:12px"><button class="btn${C.field === "sold" ? " danger" : ""}" id="bc_go" type="button" ${C.picked.length ? "" : "disabled"}>${C.field === "sold" ? "💶 " + t("Mark as sold") : "💾 " + t("Apply to {n} sets", { n: C.picked.length })}</button></div></div>`;
   }
   bindBulkChange(root, $) {
