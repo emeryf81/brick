@@ -907,3 +907,13 @@ def test_a_sale_without_a_known_cost_is_revenue_not_profit():
         models.validate_backup({"sets": {}, "sold": [{"set_number": "10281", "price": 1}]})      # a sale needs its id
     with pytest.raises(ValueError, match="invalid copies"):
         models.validate_backup({"sets": {"10281": {}}, "collection": {"10281": {"qty": 2, "items": [1]}}})
+
+
+def test_shop_settings_written_before_the_new_name_are_accepted():
+    """A settings file in the format of before B.R.I.C.K. (lot-shop-settings) is read as before."""
+    import json
+    from pathlib import Path
+    from lego_pkg import shops
+    example = json.loads((Path(__file__).parent.parent / "examples" / "brick-shops.example.json").read_text("utf-8"))
+    old = shops.validate_settings({**example, "format": "lot-shop-settings"})
+    assert old["format"] == "brick-shop-settings" and old["shops"] == shops.validate_settings(example)["shops"]
