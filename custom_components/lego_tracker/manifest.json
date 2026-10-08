@@ -4,10 +4,10 @@
   "codeowners": ["@emeryf81"],
   "config_flow": true,
   "dependencies": ["http", "panel_custom", "websocket_api"],
-  "documentation": "https://github.com/emeryf81/lot",
+  "documentation": "https://github.com/emeryf81/brick",
   "integration_type": "service",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/emeryf81/lot/issues",
+  "issue_tracker": "https://github.com/emeryf81/brick/issues",
   "requirements": [],
   "version": "1.2.0"
 }

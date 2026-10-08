@@ -1,4 +1,4 @@
-<p align="center"><img src="https://raw.githubusercontent.com/emeryf81/lot/main/images/banner.png" alt="B.R.I.C.K. – Brick Registration &amp; Inventory Cataloging Kit: collection manager &amp; price tracker for Home Assistant" width="100%"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/emeryf81/brick/main/images/banner.png" alt="B.R.I.C.K. – Brick Registration &amp; Inventory Cataloging Kit: collection manager &amp; price tracker for Home Assistant" width="100%"></p>
 
 **B.R.I.C.K. – Brick Registration & Inventory Cataloging Kit: the inventory app for your LEGO® sets in Home Assistant (collection manager & price tracker)**
 <center><a href="https://www.buymeacoffee.com/emeryf" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;" ></a></center>
@@ -307,7 +307,7 @@ The integration shows as **B.R.I.C.K.** in HACS, the integrations list, the side
 ## Contact
 B.R.I.C.K. is made by **Emery Frijters** from Belgium, a LEGO collector and Home Assistant user. I wanted to keep better track of my own collection: what I have, where it is, what it is worth and when a set on my wishlist is on sale. That is how this app started. I work on it in my spare time, together with a group of beta testers whose reports make it better every week.
 
-Found a bug or have an idea? Please open an [issue](https://github.com/emeryf81/lot/issues), so others can follow along. Like the app? [Buy me a coffee](https://www.buymeacoffee.com/emeryf).
+Found a bug or have an idea? Please open an [issue](https://github.com/emeryf81/brick/issues), so others can follow along. Like the app? [Buy me a coffee](https://www.buymeacoffee.com/emeryf).
 
 ## Development
 ```
