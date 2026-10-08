@@ -3398,6 +3398,7 @@ async def test_developer_data_check_schedule_jobs_and_sources(hass: HomeAssistan
     c.store["offers"]["10281"]["amazon_nl"] = {"url": "https://www.amazon.nl/dp/B0AAAAAAAA", "history": [[200, 30.0], [100, 31.0]]}
     c.store["collection"]["10281"] = {"qty": 3, "items": [{"paid": 30}]}
     c.store["sets"]["10281"].update(pieces=5, rrp=49.99, pieces_source="import")
+    c.store["sets"]["10311"] = {"pieces": "608", "rrp": "49,99"}         # stored data is not validated: no crash
     ws = await hass_ws_client(hass)
     await ws.send_json({"id": 1, "type": "lego_tracker/dev/tool", "action": "health"})
     kinds = {f["kind"]: f for f in (await ws.receive_json())["result"]["findings"]}
@@ -3416,7 +3417,7 @@ async def test_developer_data_check_schedule_jobs_and_sources(hass: HomeAssistan
     r = (await ws.receive_json())["result"]
     assert "price_checks" in r and "set_database" in r and "deal_scan" in r
     await ws.send_json({"id": 5, "type": "lego_tracker/dev/tool", "action": "sources"})
-    assert (await ws.receive_json())["result"]["pieces"] == {"import": 1}
+    assert (await ws.receive_json())["result"]["pieces"] == {"import": 1, "unknown": 1}
 
 
 async def test_piece_counts_read_wrongly_are_removed(hass: HomeAssistant, entry, no_network):
