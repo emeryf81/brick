@@ -460,7 +460,7 @@
 "Imported value first": "가져온 가치 우선",
 "Importing…": "가져오는 중…",
 "In Chrome/Edge also switch on “Allow user scripts” for the extension, or developer mode.": "Chrome/Edge에서는 확장 프로그램의 “사용자 스크립트 허용” 또는 개발자 모드도 켜세요.",
-"In Home Assistant: your profile → Security → Long-lived access tokens → Create token (name e.g. “LEGO userscript”). Copy the token, you only see it once.": "Home Assistant에서: 프로필 → 보안 → 장기 액세스 토큰 → 토큰 만들기 (이름 예: “LEGO userscript”). 토큰은 한 번만 표시되니 복사하세요.",
+"In Home Assistant: your profile → Security → Long-lived access tokens → Create token (name e.g. “B.R.I.C.K. userscript”). Copy the token, you only see it once.": "Home Assistant에서: 프로필 → 보안 → 장기 액세스 토큰 → 토큰 만들기 (이름 예: “B.R.I.C.K. userscript”). 토큰은 한 번만 표시되니 복사하세요.",
 "In my collection": "내 컬렉션에 있음",
 "In the logbook": "로그에 추가됨",
 "In the shops": "판매 중",

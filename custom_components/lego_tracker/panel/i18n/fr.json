@@ -460,7 +460,7 @@
 "Imported value first": "Valeur importée d'abord",
 "Importing…": "Importation…",
 "In Chrome/Edge also switch on “Allow user scripts” for the extension, or developer mode.": "Dans Chrome/Edge, activez aussi « Autoriser les scripts utilisateur » pour l'extension, ou le mode développeur.",
-"In Home Assistant: your profile → Security → Long-lived access tokens → Create token (name e.g. “LEGO userscript”). Copy the token, you only see it once.": "Dans Home Assistant : votre profil → Sécurité → Jetons d'accès longue durée → Créer un jeton (nom p. ex. « LEGO userscript »). Copiez le jeton, il n'est affiché qu'une fois.",
+"In Home Assistant: your profile → Security → Long-lived access tokens → Create token (name e.g. “B.R.I.C.K. userscript”). Copy the token, you only see it once.": "Dans Home Assistant : votre profil → Sécurité → Jetons d'accès longue durée → Créer un jeton (nom p. ex. « B.R.I.C.K. userscript »). Copiez le jeton, il n'est affiché qu'une fois.",
 "In my collection": "Dans ma collection",
 "In the logbook": "Dans le journal",
 "In the shops": "En magasin",

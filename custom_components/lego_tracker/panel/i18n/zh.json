@@ -460,7 +460,7 @@
 "Imported value first": "优先导入的价值",
 "Importing…": "导入中…",
 "In Chrome/Edge also switch on “Allow user scripts” for the extension, or developer mode.": "在 Chrome/Edge 中，还需为扩展开启“允许用户脚本”或开发者模式。",
-"In Home Assistant: your profile → Security → Long-lived access tokens → Create token (name e.g. “LEGO userscript”). Copy the token, you only see it once.": "在 Home Assistant 中：你的个人资料 → 安全 → 长期访问令牌 → 创建令牌（名称例如“LEGO userscript”）。复制令牌，它只显示一次。",
+"In Home Assistant: your profile → Security → Long-lived access tokens → Create token (name e.g. “B.R.I.C.K. userscript”). Copy the token, you only see it once.": "在 Home Assistant 中：你的个人资料 → 安全 → 长期访问令牌 → 创建令牌（名称例如“B.R.I.C.K. userscript”）。复制令牌，它只显示一次。",
 "In my collection": "在我的收藏中",
 "In the logbook": "已写入日志",
 "In the shops": "在售",
