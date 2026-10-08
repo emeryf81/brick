@@ -1,0 +1,9 @@
+B.R.I.C.K. – Brick Registration & Inventory Cataloging Kit
+Copyright (c) 2026 emeryf81, licensed under the MIT License (see LICENSE).
+
+LEGO® is a trademark of the LEGO Group, which does not sponsor, authorize or
+endorse this software.
+
+The images in images/ and custom_components/lego_tracker/brand/ are part of the
+Software. The fonts used to draw them (Outfit, Inter) are under the SIL Open
+Font License.
