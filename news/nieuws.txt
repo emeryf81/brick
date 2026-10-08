@@ -1,4 +1,4 @@
-# Nieuws voor de ticker van B.R.I.C.K. (https://www.emery.be/lot/nieuws.txt)
+# Nieuws voor de ticker van B.R.I.C.K. (https://www.emery.be/brick/nieuws.txt)
 #
 # Elk bericht is een blok, gescheiden door een regel met alleen ---
 # Velden bovenaan (id, date, lang, title, link), dan een lege regel, dan de tekst.

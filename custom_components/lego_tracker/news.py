@@ -16,7 +16,7 @@ import re
 import time
 from typing import Any
 
-NEWS_URL = "https://www.emery.be/lot/nieuws.txt"
+NEWS_URL = "https://www.emery.be/brick/nieuws.txt"
 CACHE_SECONDS = 3 * 3600
 MAX_BYTES = 200_000
 MAX_ITEMS = 30
