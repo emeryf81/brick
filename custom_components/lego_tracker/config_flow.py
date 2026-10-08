@@ -102,7 +102,7 @@ class LegoTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             try:
-                return self.async_create_entry(title="LEGO Organizing Tool", data={},
+                return self.async_create_entry(title="B.R.I.C.K.", data={},
                                                options={**_clean(user_input), CONF_KNOWN_SHOPS: profile_ids(), CONF_SETUP_VERSION: 1})
             except InvalidTimes:
                 errors[CONF_REFRESH_TIMES] = "invalid_times"

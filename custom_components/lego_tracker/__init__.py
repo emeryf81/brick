@@ -1,4 +1,4 @@
-"""LEGO Price Tracker: prices, deals and collection value for LEGO sets."""
+"""B.R.I.C.K.: prices, deals and collection value for LEGO sets."""
 from __future__ import annotations
 
 import json
@@ -85,7 +85,7 @@ SERVICE_SCHEMAS = {
 def _coordinator(hass: HomeAssistant) -> LegoCoordinator:
     entries = hass.data.get(DOMAIN, {})
     if not entries:
-        raise ServiceValidationError("LEGO Price Tracker is not set up")
+        raise ServiceValidationError("B.R.I.C.K. is not set up")
     return next(iter(entries.values()))
 
 
@@ -144,7 +144,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     for old, new in same_site:
         if old not in coord.retailers:
             coord.move_shop(old, new)
-    _LOGGER.info("LEGO Price Tracker %s starting (request transport: %s)", VERSION, coord.fetcher.transport)
+    _LOGGER.info("B.R.I.C.K. %s starting (request transport: %s)", VERSION, coord.fetcher.transport)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coord
     coord.async_set_updated_data(coord.compute())
     # No shop round at start-up: hammering 5 shops on every HA restart gets us blocked.
@@ -203,7 +203,7 @@ async def _register_frontend(hass: HomeAssistant) -> None:
     version = f"{VERSION}-{digest}"
     await panel_custom.async_register_panel(
         hass, webcomponent_name=PANEL_ELEMENT, frontend_url_path=PANEL_URL,
-        sidebar_title="LEGO", sidebar_icon="mdi:toy-brick",
+        sidebar_title="B.R.I.C.K.", sidebar_icon="mdi:toy-brick",
         module_url=f"{STATIC_URL}/lego-tracker-panel.js?v={version}", embed_iframe=False, require_admin=False,
     )
 

@@ -164,7 +164,7 @@ def ws_overview(hass, connection, msg):
     """Send panel overview data, or a not-loaded error when no coordinator is available."""
     coord = _coord(hass)
     if coord is None:
-        connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
+        connection.send_error(msg["id"], "not_loaded", "B.R.I.C.K. is not loaded")
         return
     from . import VERSION
 
@@ -220,7 +220,7 @@ def ws_set_detail(hass, connection, msg):
 def ws_collection(hass, connection, msg):
     coord = _coord(hass)
     if coord is None:
-        connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
+        connection.send_error(msg["id"], "not_loaded", "B.R.I.C.K. is not loaded")
         return
     connection.send_result(msg["id"], {
         "series": coord.series(),
@@ -365,7 +365,7 @@ def ws_import_preview(hass, connection, msg):
     """Dry run: parse + validate a CSV without changing anything."""
     coord = _coord(hass)
     if coord is None:
-        connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
+        connection.send_error(msg["id"], "not_loaded", "B.R.I.C.K. is not loaded")
         return
     connection.send_result(msg["id"], analyze_csv(msg["csv_text"], coord.store, replace=msg["replace"]))
 
@@ -376,7 +376,7 @@ def ws_job(hass, connection, msg):
     """Progress of the running background job (polled by the panel)."""
     coord = _coord(hass)
     if coord is None:
-        connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
+        connection.send_error(msg["id"], "not_loaded", "B.R.I.C.K. is not loaded")
         return
     connection.send_result(msg["id"], coord.job_info())
 
@@ -387,7 +387,7 @@ def ws_job(hass, connection, msg):
 def ws_settings_get(hass, connection, msg):
     coord = _coord(hass)
     if coord is None:
-        connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
+        connection.send_error(msg["id"], "not_loaded", "B.R.I.C.K. is not loaded")
         return
     connection.send_result(msg["id"], coord.settings_get())
 
@@ -399,7 +399,7 @@ async def ws_settings_set(hass, connection, msg):
     """Validate and store settings; the entry reloads itself (update listener) to apply them."""
     coord = _coord(hass)
     if coord is None:
-        connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
+        connection.send_error(msg["id"], "not_loaded", "B.R.I.C.K. is not loaded")
         return
     try:
         options = coord.settings_validate(msg["fields"])
@@ -423,7 +423,7 @@ async def ws_shop_settings_import(hass, connection, msg):
 
     coord = _coord(hass)
     if coord is None:
-        connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
+        connection.send_error(msg["id"], "not_loaded", "B.R.I.C.K. is not loaded")
         return
     if msg["accept"] is not True:
         connection.send_error(msg["id"], "invalid_format", T("Accept the terms to import shop settings."))
@@ -465,7 +465,7 @@ def ws_shop_settings_export(hass, connection, msg):
 
     coord = _coord(hass)
     if coord is None:
-        connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
+        connection.send_error(msg["id"], "not_loaded", "B.R.I.C.K. is not loaded")
         return
     connection.send_result(msg["id"], export_settings(dict(coord.entry.options)))
 
@@ -479,7 +479,7 @@ async def ws_shop_settings_accept(hass, connection, msg):
 
     coord = _coord(hass)
     if coord is None:
-        connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
+        connection.send_error(msg["id"], "not_loaded", "B.R.I.C.K. is not loaded")
         return
     if not coord.entry.options.get(CONF_SHOP_PROFILE):
         connection.send_error(msg["id"], "invalid_format", T("There are no shop settings yet: import a settings file."))
@@ -505,7 +505,7 @@ async def ws_shop_settings_withdraw(hass, connection, msg):
 
     coord = _coord(hass)
     if coord is None:
-        connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
+        connection.send_error(msg["id"], "not_loaded", "B.R.I.C.K. is not loaded")
         return
     options = {k: v for k, v in coord.entry.options.items() if k not in (CONF_SHOP_PROFILE, CONF_LEGAL)} | {CONF_SETUP_VERSION: 1}
     revoke()                    # at once, not only after the reload
@@ -543,7 +543,7 @@ async def ws_test_key(hass, connection, msg):
 def ws_shop_action(hass, connection, msg):
     coord = _coord(hass)
     if coord is None:
-        connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
+        connection.send_error(msg["id"], "not_loaded", "B.R.I.C.K. is not loaded")
         return
     coord.resume_shop(msg.get("retailer") if msg["action"] == "resume" else None)
     connection.send_result(msg["id"], coord.job_info())
@@ -574,7 +574,7 @@ def ws_ignore_error(hass, connection, msg):
 def ws_notify_get(hass, connection, msg):
     coord = _coord(hass)
     if coord is None:
-        connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
+        connection.send_error(msg["id"], "not_loaded", "B.R.I.C.K. is not loaded")
         return
     connection.send_result(msg["id"], {"rules": coord.notifier.rules, "options": coord.notifier.ha_options(),
                                        "log": list(reversed(coord.store.get("notify_log", [])[-30:])),
@@ -614,7 +614,7 @@ async def ws_notify_test(hass, connection, msg):
         return
     sample = next((s for s in coord.store["sets"].values() if s.get("image")), {})
     res = await coord.notifier.send(
-        rule, "🧱 " + tr("Test notification LEGO Price Tracker"),
+        rule, "🧱 " + tr("Test notification B.R.I.C.K."),
         tr("This is what a notification of '{rule}' looks like.", rule=rule["name"])
         + (" " + tr("Example: {set}", set=f"{sample.get('set_number')} {sample.get('name') or ''}".strip()) if sample else ""),
         url=home_of(next(iter(RETAILERS), "")) if rule.get("link") else None, image=sample.get("image") if rule.get("image") else None,
@@ -634,7 +634,7 @@ def ws_log(hass, connection, msg):
 
     coord = _coord(hass)
     if coord is None:
-        connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
+        connection.send_error(msg["id"], "not_loaded", "B.R.I.C.K. is not loaded")
         return
     connection.send_result(msg["id"], query_activity(coord.store, **{k: msg[k] for k in (
         "level", "kind", "retailer", "source", "set_number", "q", "status", "limit")}, before=msg.get("before")))
@@ -760,7 +760,7 @@ def ws_logs_export(hass, connection, msg):
 
     coord = _coord(hass)
     if coord is None:
-        connection.send_error(msg["id"], "not_loaded", "LEGO Price Tracker is not loaded")
+        connection.send_error(msg["id"], "not_loaded", "B.R.I.C.K. is not loaded")
         return
     if not msg["parts"]:
         connection.send_error(msg["id"], "invalid", tr("Choose at least one part to export."))

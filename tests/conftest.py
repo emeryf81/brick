@@ -17,7 +17,7 @@ for name in ("const", "models", "shops", "parsers", "csv_import"):
     spec.loader.exec_module(mod)
 
 # The integration has no shops of its own: the tests use the example shop settings, imported and accepted.
-EXAMPLE = json.loads((Path(__file__).parent.parent / "examples" / "lot-shops.example.json").read_text("utf-8"))
+EXAMPLE = json.loads((Path(__file__).parent.parent / "examples" / "brick-shops.example.json").read_text("utf-8"))
 # plus one shop of the tests' own, read with the generic reader, whose search results are built with JavaScript
 # (the older tests were written against it; it is not in the example file)
 EXAMPLE["shops"].append({"id": "smyths_be", "name": "Smyths Toys", "domain": "smythstoys.com", "reader": "generic",

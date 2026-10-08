@@ -45,7 +45,7 @@ SUMMARY = (
 
 
 def _device(entry: ConfigEntry) -> DeviceInfo:
-    return DeviceInfo(identifiers={(DOMAIN, entry.entry_id)}, name="LEGO Price Tracker", manufacturer="Community",
+    return DeviceInfo(identifiers={(DOMAIN, entry.entry_id)}, name="B.R.I.C.K.", manufacturer="Community",
                       entry_type=None)
 
 
@@ -73,6 +73,7 @@ class SummarySensor(CoordinatorEntity[LegoCoordinator], SensorEntity):
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
         self._attr_device_info = _device(entry)
+        self.entity_id = f"sensor.brick_{description.key}"           # only a suggestion: existing entities keep theirs
 
     def _deals(self, flag: str) -> list[str]:
         st = self.coordinator.data["statuses"]
@@ -143,6 +144,7 @@ class SetPriceSensor(CoordinatorEntity[LegoCoordinator], SensorEntity):
         self._num = num
         self._attr_unique_id = f"{entry.entry_id}_set_{num}"
         self._attr_device_info = _device(entry)
+        self.entity_id = f"sensor.brick_{num}"
 
     @property
     def name(self) -> str:

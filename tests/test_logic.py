@@ -774,7 +774,7 @@ def test_shop_settings_file_is_checked_and_drives_every_address():
     import json
     from pathlib import Path
     from lego_pkg import compare, shops
-    example = json.loads((Path(__file__).parent.parent / "examples" / "lot-shops.example.json").read_text("utf-8"))
+    example = json.loads((Path(__file__).parent.parent / "examples" / "brick-shops.example.json").read_text("utf-8"))
     ok = shops.validate_settings(example)
     assert [s["reader"] for s in ok["shops"]] == ["lego", "marketplace", "marketplace", "marketplace", "partner", "retail", "generic"]
     for bad, why in ((lambda d: d.update(format="x"), "not a shop settings file"),

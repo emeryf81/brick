@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "LEGO Organizing Tool",
+        "title": "B.R.I.C.K.",
         "description": "La mayoría de ajustes también están en el panel: Gestión → Ajustes.",
         "data": {
           "discount_threshold": "Umbral de descuento",
@@ -46,7 +46,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "LEGO Organizing Tool",
+        "title": "B.R.I.C.K.",
         "description": "La mayoría de ajustes también están en el panel: Gestión → Ajustes.",
         "data": {
           "discount_threshold": "Umbral de descuento",

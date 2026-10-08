@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "LEGO Organizing Tool",
+        "title": "B.R.I.C.K.",
         "description": "La plupart des réglages sont aussi dans le panneau : Gestion → Réglages.",
         "data": {
           "discount_threshold": "Seuil de remise",
@@ -46,7 +46,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "LEGO Organizing Tool",
+        "title": "B.R.I.C.K.",
         "description": "La plupart des réglages sont aussi dans le panneau : Gestion → Réglages.",
         "data": {
           "discount_threshold": "Seuil de remise",

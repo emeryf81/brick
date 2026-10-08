@@ -1,5 +1,5 @@
 {
-  "format": "lot-shop-settings",
+  "format": "brick-shop-settings",
   "version": 1,
   "notice": "The shop settings this installation used before version 1.0.0, carried over once so it keeps working. They are only used after you accept the terms in the panel. It is not a recommendation, not an instruction and not a statement that any of these websites allows its pages to be read automatically. You decide yourself which websites your Home Assistant contacts, and you alone are responsible for everything that happens between your Home Assistant and those websites: respecting their terms of use, robots.txt and the law that applies to you, and all legal consequences. The software is provided as is, without any warranty; to the fullest extent permitted by law, its author and contributors cannot be held liable. Use it only for personal, non-commercial purposes and moderately. LEGO and the names of shops are trademarks of their owners; this project is not affiliated with or endorsed by any of them.",
   "lego_locale": "nl-be",

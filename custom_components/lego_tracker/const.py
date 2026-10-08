@@ -1,11 +1,11 @@
-"""Constants for the LEGO Price Tracker integration."""
+"""Constants for the B.R.I.C.K. integration."""
 from __future__ import annotations
 
 DOMAIN = "lego_tracker"
 STORAGE_KEY = f"{DOMAIN}.data"
 STORAGE_VERSION = 1
 
-PANEL_URL = "lego-tracker"
+PANEL_URL = "brick"
 API_LEVEL = 10         # raise together with API_LEVEL in the panel when the panel needs new server commands
 PANEL_ELEMENT = "lego-tracker-panel"
 STATIC_URL = f"/{DOMAIN}_static"

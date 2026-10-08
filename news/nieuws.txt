@@ -1,4 +1,4 @@
-# Nieuws voor de ticker van LEGO Organizing Tool (https://www.emery.be/lot/nieuws.txt)
+# Nieuws voor de ticker van B.R.I.C.K. (https://www.emery.be/lot/nieuws.txt)
 #
 # Elk bericht is een blok, gescheiden door een regel met alleen ---
 # Velden bovenaan (id, date, lang, title, link), dan een lege regel, dan de tekst.
@@ -52,7 +52,7 @@ id: 2026-10-03-userscript
 date: 2026-10-03
 lang: nl
 title: Tip: laat je eigen browser meehelpen met het userscript
-link: /lego-tracker
+link: /brick
 
 Sommige winkels blokkeren servers zoals Home Assistant, maar niet een gewone browser. Met het userscript haalt je eigen browser die prijzen op. Je hoeft er niets voor te doen: zolang Home Assistant open staat, werkt het rustig op de achtergrond.
 
@@ -78,7 +78,7 @@ id: 2026-10-03-userscript-en
 date: 2026-10-03
 lang: en
 title: Tip: let your own browser help with the userscript
-link: /lego-tracker
+link: /brick
 
 Some shops block servers like Home Assistant, but not a normal browser. With the userscript your own browser fetches those prices. You don't have to do anything: while Home Assistant is open, it works calmly in the background.
 

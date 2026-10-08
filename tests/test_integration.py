@@ -72,17 +72,17 @@ def no_network():
 async def test_setup_services_and_sensors(hass: HomeAssistant, entry, hass_ws_client, no_network):
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert hass.states.get("sensor.lego_price_tracker_tracked_sets").state == "0"
+    assert hass.states.get("sensor.brick_tracked_sets").state == "0"
 
     await hass.services.async_call(DOMAIN, "add_set", {"set_number": "10281", "name": "Bonsai", "theme": "Botanicals", "rrp": 49.99}, blocking=True)
     await hass.services.async_call(DOMAIN, "set_offer", {"set_number": "10281", "retailer": "bol", "url": "https://www.bol.com/nl/nl/p/x/1/"}, blocking=True)
     await hass.services.async_call(DOMAIN, "refresh", {}, blocking=True)
     await hass.async_block_till_done(wait_background_tasks=True)
 
-    assert hass.states.get("sensor.lego_price_tracker_tracked_sets").state == "1"
-    st = hass.states.get("sensor.lego_price_tracker_10281_bonsai")
+    assert hass.states.get("sensor.brick_tracked_sets").state == "1"
+    st = hass.states.get("sensor.brick_10281")
     assert st is not None and float(st.state) == 30.0 and st.attributes["best_retailer"] == "bol.com"
-    assert hass.states.get("sensor.lego_price_tracker_sets_with_high_discount").state == "1"  # 30 vs rrp 49.99 = 40%
+    assert hass.states.get("sensor.brick_high_discounts").state == "1"  # 30 vs rrp 49.99 = 40%
 
     ws = await hass_ws_client(hass)
     await ws.send_json({"id": 1, "type": "lego_tracker/overview"})
@@ -100,8 +100,8 @@ async def test_import_and_collection(hass: HomeAssistant, entry, hass_ws_client)
                                          blocking=True, return_response=True)
     assert res["added"] == 2
     await hass.async_block_till_done()
-    assert float(hass.states.get("sensor.lego_price_tracker_collection_cost").state) == 390.0
-    assert float(hass.states.get("sensor.lego_price_tracker_collection_value").state) == 450.0  # imported values
+    assert float(hass.states.get("sensor.brick_collection_cost").state) == 390.0
+    assert float(hass.states.get("sensor.brick_collection_value").state) == 450.0  # imported values
     ws = await hass_ws_client(hass)
     await ws.send_json({"id": 1, "type": "lego_tracker/collection"})
     msg = (await ws.receive_json())["result"]
@@ -155,11 +155,11 @@ async def test_report_price_by_url_and_manual(hass: HomeAssistant, entry):
     # userscript style: only a URL (with extras) and a price
     await hass.services.async_call(DOMAIN, "report_price", {"url": "https://www.amazon.nl/LEGO-Bonsai/dp/B08XYZ1234/ref=x?th=1", "price": 35.5}, blocking=True)
     await hass.async_block_till_done()
-    assert float(hass.states.get("sensor.lego_price_tracker_10281_bonsai").state) == 35.5
+    assert float(hass.states.get("sensor.brick_10281").state) == 35.5
     # manual entry from the panel: set + retailer, offer created on the fly
     await hass.services.async_call(DOMAIN, "report_price", {"set_number": "10281", "retailer": "bol", "price": 33.0}, blocking=True)
     await hass.async_block_till_done()
-    assert float(hass.states.get("sensor.lego_price_tracker_10281_bonsai").state) == 33.0
+    assert float(hass.states.get("sensor.brick_10281").state) == 33.0
     with pytest.raises(ServiceValidationError):
         await hass.services.async_call(DOMAIN, "report_price", {"url": "https://www.bol.com/nl/nl/p/unknown/1/", "price": 10}, blocking=True)
 
@@ -178,7 +178,7 @@ async def test_bulk_target_notify_export_and_backup(hass: HomeAssistant, entry, 
     res = await hass.services.async_call(DOMAIN, "add_sets", {"set_numbers": "10281, 10311\n42143 10281", "owned": True},
                                          blocking=True, return_response=True)
     assert res == {"added": 3}
-    assert hass.states.get("sensor.lego_price_tracker_tracked_sets").state == "3"
+    assert hass.states.get("sensor.brick_tracked_sets").state == "3"
 
     await hass.services.async_call(DOMAIN, "update_set" if False else "add_set",
                                    {"set_number": "10311", "target_price": 35.0, "name": "Orchid"}, blocking=True)
@@ -187,14 +187,14 @@ async def test_bulk_target_notify_export_and_backup(hass: HomeAssistant, entry, 
     await hass.async_block_till_done()
     assert len(events) == 1 and events[0].data["set_number"] == "10311"
     assert notes and "target price" in notes[0].data["message"]
-    assert hass.states.get("sensor.lego_price_tracker_sets_at_target_price").state == "1"
+    assert hass.states.get("sensor.brick_targets_reached").state == "1"
 
     csv_res = await hass.services.async_call(DOMAIN, "export_collection", {}, blocking=True, return_response=True)
     assert "10281" in csv_res["csv"] and csv_res["csv"].startswith("Number,")
 
     backup = await hass.services.async_call(DOMAIN, "export_data", {}, blocking=True, return_response=True)
     await hass.services.async_call(DOMAIN, "remove_set", {"set_number": "10281"}, blocking=True)
-    assert hass.states.get("sensor.lego_price_tracker_tracked_sets").state == "2"
+    assert hass.states.get("sensor.brick_tracked_sets").state == "2"
     out = await hass.services.async_call(DOMAIN, "import_data", {"data": backup, "merge": False}, blocking=True, return_response=True)
     assert out["sets"] == 3
     with pytest.raises(ServiceValidationError):
@@ -246,7 +246,7 @@ async def test_diagnostics_and_health_sensor(hass: HomeAssistant, entry, no_netw
     await hass.services.async_call(DOMAIN, "set_offer", {"set_number": "10281", "retailer": "bol", "url": "https://www.bol.com/nl/nl/p/x/1/"}, blocking=True)
     await hass.services.async_call(DOMAIN, "refresh", {}, blocking=True)
     await hass.async_block_till_done(wait_background_tasks=True)
-    assert hass.states.get("sensor.lego_price_tracker_offers_with_errors").state == "1"
+    assert hass.states.get("sensor.brick_offers_with_errors").state == "1"
     diag = await async_get_config_entry_diagnostics(hass, entry)
     assert diag["per_retailer"]["bol"]["errors"] == 1 and "blocked (HTTP 403)" in diag["errors"]
     assert diag["options"]["notify_service"] == "**REDACTED**" if "notify_service" in entry.options else True
@@ -260,7 +260,7 @@ async def test_import_preview_ws_and_validated_import(hass: HomeAssistant, entry
     await ws.send_json({"id": 1, "type": "lego_tracker/import_preview", "csv_text": csv})
     prev = (await ws.receive_json())["result"]
     assert prev["summary"]["ok"] == 1 and prev["summary"]["error"] == 2
-    assert hass.states.get("sensor.lego_price_tracker_tracked_sets").state == "0"      # preview wrote nothing
+    assert hass.states.get("sensor.brick_tracked_sets").state == "0"      # preview wrote nothing
     res = await hass.services.async_call(DOMAIN, "import_collection", {"csv_text": csv, "track_prices": False},
                                          blocking=True, return_response=True)
     assert res["added"] == 1 and res["skipped"] == 2
@@ -288,7 +288,7 @@ async def test_update_set_validation_and_overview_extras(hass: HomeAssistant, en
     ov = (await ws.receive_json())["result"]
     assert "suspicious price" in ov["sets"][0]["offers"]["bol"]["error"] and ov["sets"][0]["best_price"] is None
     assert ov["retailer_stats"]["bol"]["errors"] == 1 and "analytics" in ov and isinstance(ov["events"], list)
-    assert hass.states.get("sensor.lego_price_tracker_sets_retiring_soon").state == "1"
+    assert hass.states.get("sensor.brick_retiring_soon").state == "1"
 
 
 # ---------------------------------------------------------------- 0.5.0: jobs, links, enrichment
@@ -789,7 +789,7 @@ async def test_language_setting_translates_outbound_texts(hass: HomeAssistant, e
         c.update_offer("99999", "bol", manual_price=1)
     client = await hass_client_no_auth()
     text = await (await client.get("/api/lego_tracker/lego-tracker.user.js")).text()
-    assert "{{" not in text and "LEGO Price Tracker" in text
+    assert "{{" not in text and "B.R.I.C.K." in text
     await ws.send_json({"id": 2, "type": "lego_tracker/settings/set", "fields": {"language": "xx"}})
     assert not (await ws.receive_json())["success"]
     i18n.set_language("en")
@@ -914,7 +914,7 @@ async def test_browser_relay_list_and_results(hass: HomeAssistant, entry, no_net
 async def test_userscript_has_relay_and_ha_include(hass: HomeAssistant, entry, hass_client_no_auth):
     await _setup(hass, entry)
     text = await (await (await hass_client_no_auth()).get("/api/lego_tracker/lego-tracker.user.js")).text()
-    assert "// @include      *://*/lego-tracker*" in text and "/api/lego_tracker/relay" in text and "{{" not in text
+    assert "// @include      *://*/brick*" in text and "/api/lego_tracker/relay" in text and "{{" not in text
 
 
 def _pages(**by_fragment):
@@ -3232,7 +3232,7 @@ async def test_no_shop_is_contacted_before_shop_settings_are_imported_and_accept
     c.setdb_info.update(busy=False, ts=0)
     c.setdb_tick()
     assert c.setdb_info["busy"] is False
-    example = json.loads((Path(__file__).parent.parent / "examples" / "lot-shops.example.json").read_text("utf-8"))
+    example = json.loads((Path(__file__).parent.parent / "examples" / "brick-shops.example.json").read_text("utf-8"))
     ws = await hass_ws_client(hass)
     await ws.send_json({"id": 1, "type": "lego_tracker/shop_settings/import", "settings": example, "accept": False})
     assert "Accept the terms" in (await ws.receive_json())["error"]["message"]
@@ -3249,7 +3249,7 @@ async def test_no_shop_is_contacted_before_shop_settings_are_imported_and_accept
                                                         "accepted": 1, "legal_version": 1, "accepted_version": 1}
     await ws.send_json({"id": 4, "type": "lego_tracker/shop_settings/export"})
     out = (await ws.receive_json())["result"]
-    assert out["format"] == "lot-shop-settings" and [s["id"] for s in out["shops"]] == [s["id"] for s in example["shops"]]
+    assert out["format"] == "brick-shop-settings" and [s["id"] for s in out["shops"]] == [s["id"] for s in example["shops"]]
     assert "responsible" in out["notice"] and shops.validate_settings(out)["shops"] == shops.validate_settings(example)["shops"]
     await ws.send_json({"id": 5, "type": "lego_tracker/shop_settings/withdraw"})
     assert (await ws.receive_json())["result"]["withdrawn"]
@@ -3300,7 +3300,7 @@ async def test_imported_settings_never_send_an_api_key_to_a_new_address(hass: Ho
     hass.config_entries.async_update_entry(entry, options={**entry.options, "set_data_api_key": "k1", "parts_api_key": "k2",
                                                            "partner_client_id": "id", "partner_client_secret": "sec"})
     await _setup(hass, entry)
-    example = json.loads((Path(__file__).parent.parent / "examples" / "lot-shops.example.json").read_text("utf-8"))
+    example = json.loads((Path(__file__).parent.parent / "examples" / "brick-shops.example.json").read_text("utf-8"))
     ws = await hass_ws_client(hass)
     await ws.send_json({"id": 1, "type": "lego_tracker/shop_settings/import", "settings": example, "accept": True})
     assert (await ws.receive_json())["success"]
@@ -3335,7 +3335,7 @@ async def test_a_key_without_a_known_address_is_removed_at_the_first_import(hass
 
     hass.config_entries.async_update_entry(entry, options={**entry.options, "setup_version": 1, "set_data_api_key": "k1abcdefgh"})
     await _setup(hass, entry)
-    example = json.loads((Path(__file__).parent.parent / "examples" / "lot-shops.example.json").read_text("utf-8"))
+    example = json.loads((Path(__file__).parent.parent / "examples" / "brick-shops.example.json").read_text("utf-8"))
     ws = await hass_ws_client(hass)
     await ws.send_json({"id": 1, "type": "lego_tracker/shop_settings/import", "settings": example, "accept": True})
     assert (await ws.receive_json())["success"]
@@ -3359,7 +3359,7 @@ async def test_names_of_earlier_versions_are_upgraded(hass: HomeAssistant, entry
     from custom_components.lego_tracker import shops
 
     legacy = shops.legacy()
-    old_profile = json.loads((Path(__file__).parent.parent / "examples" / "lot-shops.example.json").read_text("utf-8"))
+    old_profile = json.loads((Path(__file__).parent.parent / "examples" / "brick-shops.example.json").read_text("utf-8"))
     back = {v: k for k, v in legacy["readers"].items()}
     for s in old_profile["shops"]:
         s["reader"] = back.get(s["reader"], s["reader"])

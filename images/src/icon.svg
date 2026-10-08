@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="front" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2f6bff"/><stop offset="1" stop-color="#1d4ed8"/></linearGradient>
+    <linearGradient id="top" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7fb0ff"/><stop offset="1" stop-color="#4d8bff"/></linearGradient>
+    <linearGradient id="stud" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#2a5fe0"/><stop offset=".45" stop-color="#5b95ff"/><stop offset="1" stop-color="#1f4fc4"/></linearGradient>
+  </defs>
+  <!-- side -->
+  <path d="M424 176 L472 136 L472 360 L424 412 Z" fill="#1a3fa8"/>
+  <!-- top -->
+  <path d="M56 176 L104 136 L472 136 L424 176 Z" fill="url(#top)"/>
+  <!-- studs (2 x 2) -->
+  <g>
+    <g transform="translate(150 132)"><rect x="-46" y="-28" width="92" height="28" fill="url(#stud)"/><ellipse cx="0" cy="0" rx="46" ry="13" fill="#1f4fc4"/><ellipse cx="0" cy="-28" rx="46" ry="13" fill="#8bb8ff"/></g>
+    <g transform="translate(310 132)"><rect x="-46" y="-28" width="92" height="28" fill="url(#stud)"/><ellipse cx="0" cy="0" rx="46" ry="13" fill="#1f4fc4"/><ellipse cx="0" cy="-28" rx="46" ry="13" fill="#8bb8ff"/></g>
+    <g transform="translate(184 166)"><rect x="-46" y="-28" width="92" height="28" fill="url(#stud)"/><ellipse cx="0" cy="0" rx="46" ry="13" fill="#1f4fc4"/><ellipse cx="0" cy="-28" rx="46" ry="13" fill="#8bb8ff"/></g>
+    <g transform="translate(344 166)"><rect x="-46" y="-28" width="92" height="28" fill="url(#stud)"/><ellipse cx="0" cy="0" rx="46" ry="13" fill="#1f4fc4"/><ellipse cx="0" cy="-28" rx="46" ry="13" fill="#8bb8ff"/></g>
+  </g>
+  <!-- front -->
+  <rect x="56" y="176" width="368" height="236" rx="10" fill="url(#front)"/>
+  <rect x="56" y="176" width="368" height="10" fill="#ffffff" opacity=".18"/>
+  <text x="232" y="352" text-anchor="middle" font-family="Arial Black, Helvetica, Arial, sans-serif" font-weight="900" font-size="176" fill="#ffffff" letter-spacing="-4">B<tspan fill="#ffb020">.</tspan></text>
+</svg>

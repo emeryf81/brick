@@ -363,9 +363,9 @@ class Notifier:
             if not rule.get("enabled"):
                 continue
             if "job_done" in rule["triggers"]:
-                await self.send(rule, "🧱 LEGO Organizing Tool", text)
+                await self.send(rule, "🧱 B.R.I.C.K.", text)
             elif "problems" in rule["triggers"] and job.get("errors") and self._cooled(f"{rule['id']}|job_errors", rule.get("cooldown_hours", 24)):
-                await self.send(rule, "⚠️ LEGO Organizing Tool", text)
+                await self.send(rule, "⚠️ B.R.I.C.K.", text)
 
     async def on_shop_paused(self, retailer: str, hours: float) -> None:
         for rule in self.rules:
