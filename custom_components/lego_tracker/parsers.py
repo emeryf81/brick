@@ -797,7 +797,7 @@ def parse_brickset_page(page: str) -> dict:
         elif key == "year released" and val[:4].isdigit():
             out["year"] = int(val[:4])
         elif key == "pieces" and re.match(r"\d", val):
-            out["pieces"] = int(re.match(r"[\d,]+", val).group(0).replace(",", ""))
+            out["pieces"] = int(re.sub(r"\D", "", re.match(r"\d[\d,.\s]*", val).group(0)))
         elif key == "rrp":
             eur = re.search(r"([\d.,]+)\s*€|€\s*([\d.,]+)", val)
             if eur:

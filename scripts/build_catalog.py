@@ -49,7 +49,7 @@ def entry(x: dict, today: date) -> dict | None:
     e = {"name": x.get("name"), "rrp": x.get("rrp") if lego_rrp else None, "theme": x.get("theme"),
          "subtheme": x.get("subtheme"), "year": x.get("year"), "pieces": x.get("pieces"),
          "image": x.get("image") if str(x.get("image") or "").startswith("https://www.lego.com/") else None,   # LEGO images only
-         "ean": x.get("ean"), "lego_url": x.get("lego_url"), "exit_date": x.get("exit_date"), "status": status(x, today)}
+         "ean": x.get("ean"), "exit_date": x.get("exit_date"), "status": status(x, today)}
     return {k: v for k, v in e.items() if v not in (None, "")}
 
 

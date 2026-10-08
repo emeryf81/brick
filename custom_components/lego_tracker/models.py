@@ -531,7 +531,7 @@ def collection_analytics(store: dict[str, Any], statuses: dict[str, dict[str, An
 # Where a piece count comes from, best first. The official count (LEGO.com, and Brickset that copies it)
 # beats a parts count of a parts database, which counts differently (e.g. without the minifigure parts).
 PIECE_RANK = {"user": 100, "LEGO.com": 90, "Brickset": 80, "brickset.com": 80, "import": 70, "market": 60,
-              "Rebrickable": 50, "setdb": 40}
+              "Rebrickable": 50, "catalog": 45, "setdb": 40}
 
 
 def set_pieces(s: dict[str, Any], pieces: Any, source: str, *, setdb_pieces: int | None = None,

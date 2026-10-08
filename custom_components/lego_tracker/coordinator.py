@@ -134,6 +134,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._amazon_no_price_is_out_of_stock()
         self._fix_lego_rrp()
         self._fix_lost_commas()
+        self._fix_piece_counts()
         self._rename_market_source()
         self._watch_dates(first=True)
         for num, st in self.store["sets"].items():            # fill gaps from the built-in catalogue (no network)
@@ -979,6 +980,17 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for offers in self.store["offers"].values():
             if (o := offers.get("bol")) and o.get("url") and (new := bol_site_url(o["url"])) != o["url"]:
                 o["url"] = new
+
+    def _fix_piece_counts(self) -> None:
+        """Older imports read a piece count with a thousands separator as its first digits (5.923 became 5).
+        Such a count (below 10 pieces for a set of €15 or more) is removed, so it is looked up again."""
+        for num, s in self.store["sets"].items():
+            p = s.get("pieces")
+            if isinstance(p, (int, float)) and p < 10 and (s.get("rrp") or 0) >= 15 and s.get("pieces_source") != "user":
+                s.pop("pieces")
+                s.pop("pieces_source", None)
+                self.log("info", "meta", T("piece count {old} removed (thousands separator read wrongly); it is looked up again", old=p),
+                         set_number=num, source="server")
 
     def _fix_lost_commas(self) -> None:
         """Older panels used number fields in which some phone keyboards dropped the decimal comma

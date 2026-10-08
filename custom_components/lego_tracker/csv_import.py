@@ -151,7 +151,8 @@ def analyze_csv(text: str, store: dict[str, Any] | None = None, *, replace: bool
         for f, lo, hi in (("year", 1949, today.year + 1), ("pieces", 1, 12000), ("qty", 0, 999)):
             if not row.get(f):
                 continue
-            m = re.search(r"-?\d+", row[f])
+            # 5.923 / 5,923 / 5 923 is five thousand nine hundred and twenty-three, not 5
+            m = re.search(r"-?\d+", re.sub(r"(?<=\d)[.,\s\u00a0\u202f'](?=\d{3}(?!\d))", "", row[f].strip()))
             if not m:
                 issues.append(("warning", T("{field} '{value}' is not a number, ignored", field=FIELD_LABELS[f], value=row[f])))
                 continue

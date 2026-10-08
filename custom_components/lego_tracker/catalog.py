@@ -1,7 +1,7 @@
-"""Built-in set catalogue (data/sets.json): sets already read on LEGO.com, shipped with the integration.
+"""Built-in set catalogue (data/sets.json): sets already read on the official shop, shipped with the integration.
 
-A set in the catalogue needs no LEGO.com lookup and no Brickset/Rebrickable request when it is added:
-name, RRP, theme, year, pieces, image, EAN, LEGO.com link and exit date come from here. Only unknown
+A set in the catalogue needs no lookup online when it is added: name, RRP, theme, year, pieces, image, EAN
+and exit date come from here (the link to the official shop is built from your shop settings). Only unknown
 sets are looked up online. Values you typed yourself always win; the catalogue only fills gaps.
 Rebuild it with scripts/build_catalog.py.
 """
@@ -17,7 +17,7 @@ from .models import set_pieces
 
 _LOGGER = logging.getLogger(__name__)
 PATH = Path(__file__).parent / "data" / "sets.json"
-SOURCE = "LEGO.com"                    # the catalogue holds LEGO.com data: counts as such (no re-fetch)
+SOURCE = "LEGO.com"                    # the catalogue holds data of the official shop: counts as such (no re-fetch)
 _SETS: dict[str, dict[str, Any]] | None = None
 
 
@@ -49,7 +49,7 @@ def apply(num: str, s: dict[str, Any], offers: dict[str, Any]) -> bool:
     if c.get("image") and not s.get("image"):
         s["image"], s["image_source"] = c["image"], SOURCE
     if c.get("pieces"):
-        set_pieces(s, c["pieces"], SOURCE)
+        set_pieces(s, c["pieces"], "catalog")
     for key in ("theme", "subtheme", "year", "ean"):
         if c.get(key) and not s.get(key):
             s[key] = c[key]
@@ -57,9 +57,11 @@ def apply(num: str, s: dict[str, Any], offers: dict[str, Any]) -> bool:
         s["exit_date"], s["exit_date_source"] = c["exit_date"], SOURCE
     if c.get("status") and not s.get("availability"):
         s["availability"] = c["status"]                       # 'retail' | 'retired'
-    if c.get("lego_url") and not (offers.get("lego_com") or {}).get("url"):
+    from .parsers import lego_product_url                       # the address comes from your shop settings
+
+    if c.get("status") != "retired" and not (offers.get("lego_com") or {}).get("url") and (url := lego_product_url(num)):
         old = offers.get("lego_com") or {}
-        offers["lego_com"] = {**old, "url": c["lego_url"], "history": old.get("history", []), "found": time.time(), "via": "catalog"}
+        offers["lego_com"] = {**old, "url": url, "history": old.get("history", []), "found": time.time(), "via": "catalog"}
     s["catalog"] = True
     return True
 

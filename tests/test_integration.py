@@ -979,7 +979,7 @@ async def test_builtin_catalogue_skips_lookups(hass: HomeAssistant, entry, no_ne
 
     cat = json.loads(catalog.PATH.read_text("utf-8"))["sets"]
     catalog._SETS = cat                                    # the real file (other tests run without it)
-    assert len(cat) >= 100 and cat["10368"]["rrp"] == 29.99 and cat["10368"]["lego_url"].endswith("/product/10368")
+    assert len(cat) >= 100 and cat["10368"]["rrp"] == 29.99 and "lego_url" not in cat["10368"]   # the link comes from the shop settings
     c = await _setup(hass, entry)
     lookup = AsyncMock(return_value=({"name": "from Brickset"}, "brickset.com"))
     with patch("custom_components.lego_tracker.coordinator.lookup_metadata", lookup):
@@ -989,7 +989,8 @@ async def test_builtin_catalogue_skips_lookups(hass: HomeAssistant, entry, no_ne
     assert lookup.await_count == 1 and lookup.await_args.args[-1] == "99999"        # only the unknown set is looked up
     assert s["name"] == "Chrysanthemum" and s["rrp"] == 29.99 and s["rrp_source"] == "LEGO.com" and s["year"] == 2024
     assert s["image"].startswith("https://www.lego.com/") and s["availability"] == "retail" and s["exit_date"] == "2027-05-31"
-    assert c.store["offers"]["10368"]["lego_com"]["url"] == "https://www.lego.com/nl-be/product/10368"   # no LEGO.com search
+    assert c.store["offers"]["10368"]["lego_com"]["url"] == "https://www.lego.com/nl-be/product/10368"   # no search: the shop settings' product address
+    assert all(not v.get("pieces") or v["pieces"] >= 10 or (v.get("rrp") or 0) < 15 for v in cat.values())   # no 5.923 read as 5
     assert not c.needs_enrich("10368") or not s.get("pieces")
     # your own values win: the catalogue only fills gaps
     c.store["sets"]["10368"].update(name="Mijn chrysant", name_source="user", rrp=25.0, rrp_source="user")
