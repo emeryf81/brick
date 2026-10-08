@@ -10,7 +10,7 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
-    CONF_KNOWN_SHOPS, CONF_LANGUAGE, CONF_REFRESH_MODE, CONF_SPREAD_HOURS, DEFAULT_REFRESH_MODE, DEFAULT_SPREAD_HOURS, CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_DIGEST_TIME, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, DEFAULT_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_DISCOUNT_THRESHOLD, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
+    CONF_KNOWN_SHOPS, CONF_LANGUAGE, CONF_REFRESH_MODE, CONF_SPREAD_HOURS, DEFAULT_REFRESH_MODE, DEFAULT_SPREAD_HOURS, CONF_AUTO_REFRESH, CONF_SET_DATA_KEY, CONF_DIGEST_TIME, CONF_PARTS_KEY, CONF_REFRESH_TIMES, DEFAULT_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_DISCOUNT_THRESHOLD, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
     DEFAULT_DIGEST_TIME, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS,
     DOMAIN, RETAILERS, CYCLE_CHOICES, CONF_WATCH_CYCLE, WATCH_CYCLE_CHOICES, CONF_DEV_FIXED_TIMES,
     CONF_DEV_FREE_CYCLE,
@@ -65,8 +65,8 @@ def _schema(d: dict[str, Any]) -> vol.Schema:
                                                                   mode=selector.NumberSelectorMode.BOX)),
         vol.Required(CONF_IMPERSONATE, default=d.get(CONF_IMPERSONATE, True)): selector.BooleanSelector(),
         vol.Optional(CONF_NOTIFY, description={"suggested_value": d.get(CONF_NOTIFY, "")}): str,
-        vol.Optional(CONF_REBRICKABLE_KEY, description={"suggested_value": d.get(CONF_REBRICKABLE_KEY, "")}): str,
-        vol.Optional(CONF_BRICKSET_KEY, description={"suggested_value": d.get(CONF_BRICKSET_KEY, "")}): str,
+        vol.Optional(CONF_PARTS_KEY, description={"suggested_value": d.get(CONF_PARTS_KEY, "")}): str,
+        vol.Optional(CONF_SET_DATA_KEY, description={"suggested_value": d.get(CONF_SET_DATA_KEY, "")}): str,
     })
 
 

@@ -12,9 +12,9 @@ from urllib.parse import urlparse
 from .const import RETAILERS
 from .i18n import T
 from .models import parse_price
-from .parsers import (AMAZON_BUYBOX_IDS, BLOCK_MARKERS, _jsonld_blocks, _meta, _walk, is_amazon, lego_number,
+from .parsers import (BUYBOX_IDS, BLOCK_MARKERS, _jsonld_blocks, _meta, _walk, is_marketplace, lego_number,
                       lego_product_url, parse_page, retailer_from_url, search_url, title_check)
-from .shops import bol_site_url, domain_of, reader_of
+from .shops import partner_site_url, domain_of, reader_of
 
 AMOUNT_RE = re.compile(r"(?:€|EUR)\s?(\d{1,4}(?:[.\s]\d{3})*[.,]\d{2})(?!\d)|(?<![\d.,])(\d{1,4}(?:[.\s]\d{3})*,\d{2})\s?(?:€|EUR)")
 JS_HINT_RE = re.compile(r"enable javascript|javascript (?:is )?(?:required|disabled)|schakel javascript in|aktivieren sie javascript", re.I)
@@ -24,7 +24,7 @@ SMALL_PAGE = 8000             # characters of visible text below which a product
 
 def links(coord: Any, rid: str, num: str) -> dict[str, Any]:
     """The addresses the lab can test for this shop and set: the link you have, the product page
-    (LEGO.com) and the shop's search page. 'suggested' is the one filled in."""
+    (the official shop) and the shop's search page. 'suggested' is the one filled in."""
     offer = coord.store["offers"].get(num, {}).get(rid) or {}
     out = {"link": offer.get("url"), "search": search_url(rid, num) if rid in RETAILERS else None,
            "product": lego_product_url(num, rid) if reader_of(rid) == "lego" else None}
@@ -106,8 +106,8 @@ def analyze(rid: str, page: str, parsed: Any, num: str | None, *, status: int | 
         add("info", T("No product data (JSON-LD) on the page."))
     if (mp := _meta(page, "product:price:amount", "og:price:amount")):
         add("info", T("Price in the page's meta data: {price}", price=mp))
-    if is_amazon(rid) and parsed.price is None and not any(i in page for i in AMAZON_BUYBOX_IDS):
-        add("info", T("No Amazon buy box on the page: Amazon doesn't sell it new right now (not in stock)."))
+    if is_marketplace(rid) and parsed.price is None and not any(i in page for i in BUYBOX_IDS):
+        add("info", T("No buy box on the page: the marketplace doesn't sell it new right now (not in stock)."))
     verdict = "ok"
     if parsed.price is not None:
         add("ok", T("Price read: €{price}", price=f"{parsed.price:.2f}"))
@@ -139,8 +139,8 @@ async def run(coord: Any, rid: str | None, num: str | None, url: str, html: str 
     rid = rid or (retailer_from_url(url) if url else None)
     if not rid or rid not in RETAILERS:
         raise ValueError(T("Pick a shop, or an address of a shop the integration knows."))
-    if reader_of(rid) == "bol" and url:
-        url = bol_site_url(url)
+    if reader_of(rid) == "partner" and url:
+        url = partner_site_url(url)
     num = num or (lego_number(url) if reader_of(rid) == "lego" else None)
     status, error, final_url, ms = None, None, None, 0
     if html:

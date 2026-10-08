@@ -140,3 +140,18 @@ def test_redirects_are_anchored_to_the_shops_own_domain():
         assert client.redirect_home("kieskeurig", "https://www.kieskeurig.nl/x") == "kieskeurig.nl"   # no shop domain
     finally:
         shops.apply_shop_options({})
+
+
+async def test_bot_wall_on_the_lego_product_page_pauses_the_shop(hass):
+    """When the LEGO.com search finds nothing and the direct product page shows a bot-protection wall, that is a
+    block (the shop is paused), not 'no matching product found'."""
+    from unittest.mock import AsyncMock
+
+    wall = "<html><head><title>Pardon Our Interruption</title><script>window.isImpervaSpaSupport</script></head></html>"
+    f = Fetcher(hass, False)
+    f.min_delay = 0
+    f.domain_gap = f.search_gap = 0
+    f._get = AsyncMock(side_effect=[(200, "<html><body>no results</body></html>"), (200, wall)])
+    assert await f.discover("lego_com", "10311", force=True) is None
+    assert "bot protection" in f.discover_error["lego_com"] and f.cooldown_left("lego_com") > 0
+    await f.async_close()

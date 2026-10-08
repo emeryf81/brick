@@ -18,7 +18,7 @@
 // (Home Assistant -> profile -> Security -> Long-lived access tokens).
 // 1) On a shop page: the price of a tracked product is sent to Home Assistant.
 // 2) Browser relay: while Home Assistant is open, this browser fetches the shop pages that fail on
-//    the server (e.g. bol.com) in the background, with your own connection, and sends the prices.
+//    the server in the background, with your own connection, and sends the prices.
 // 3) Continuous check (switch on in the Tampermonkey menu or under Manage → Userscript): while a
 //    Home Assistant tab is open, this browser keeps checking by itself: first links without any price,
 //    then searches for sets without any price, then shops the server can't fetch. Calm: every site at
@@ -82,7 +82,7 @@
     }
     return null;
   }
-  // Amazon: only the buy box. The first ".a-price" on the page is often an accessory, a unit
+  // A marketplace: only the buy box. The first ".a-price" on the page is often an accessory, a unit
   // price, a coupon or a struck-through list price (e.g. €13,69 on a €99,95 set).
   function aPrice(el) {
     if (!el) return null;
@@ -92,7 +92,7 @@
     const whole = el.querySelector(".a-price-whole"), frac = el.querySelector(".a-price-fraction");
     return whole ? parse(`${whole.textContent.replace(/[^\d]/g, "")},${frac ? frac.textContent.replace(/[^\d]/g, "") : "00"}`) : null;
   }
-  function amazonPrice(doc) {
+  function marketplacePrice(doc) {
     const hidden = doc.querySelector('input[name="items[0.base][customerVisiblePrice][amount]"], #twister-plus-price-data-price');
     if (hidden && parse(hidden.value)) return parse(hidden.value);
     for (const id of ["corePriceDisplay_desktop_feature_div", "corePrice_feature_div", "apex_desktop", "corePrice_desktop", "desktop_buybox", "buybox"]) {
@@ -112,7 +112,7 @@
     }
     return null;   // better no price than a wrong one
   }
-  function bolPrice(doc) {
+  function partnerPrice(doc) {
     const el = doc.querySelector('[data-test="price"], .promo-price, [data-test="buy-block-price"]');
     if (el) {
       const f = el.querySelector("sup, .promo-price__fraction");
@@ -132,12 +132,12 @@
   }
   function priceOf(doc, host) {
     const reader = readerOf(host);
-    if (reader === "amazon") return amazonPrice(doc);
-    if (reader === "bol") return bolPrice(doc) ?? fromJsonLd(doc);
+    if (reader === "marketplace") return marketplacePrice(doc);
+    if (reader === "partner") return partnerPrice(doc) ?? fromJsonLd(doc);
     const m = doc.querySelector('meta[property="product:price:amount"], meta[itemprop="price"]');
     return (m && parse(m.content)) ?? fromJsonLd(doc);
   }
-  const BLOCKED = /captcha|robot check|bot protection|access denied|Type the characters you see|Voer de tekens in|px-captcha|_Incapsula_|cf-chl|Just a moment/i;
+  const BLOCKED = /captcha|robot check|bot protection|access denied|Type the characters you see|Voer de tekens in|px-captcha|_Incapsula_|cf-chl|Just a moment|Pardon Our Interruption|isImpervaSpaSupport/i;
 
   // ---------------------------------------------------------------- 1) the shop page you are looking at
   function report() {

@@ -16,8 +16,8 @@
           "min_history_days": "“历史最低”所需历史",
           "use_impersonation": "模拟 Chrome",
           "notify_service": "通知服务",
-          "brickset_api_key": "Brickset 密钥",
-          "rebrickable_api_key": "Rebrickable 密钥"
+          "set_data_api_key": "套装数据密钥",
+          "parts_api_key": "零件数据库密钥"
         },
         "data_description": {
           "discount_threshold": "达到此折扣即视为好价。",
@@ -31,8 +31,8 @@
           "min_history_days": "“历史最低”生效前需要的价格天数。",
           "use_impersonation": "curl_cffi：大大减少被封锁。",
           "notify_service": "可选；更好的方式是面板中的通知标签。",
-          "brickset_api_key": "可选，免费。",
-          "rebrickable_api_key": "可选，免费。"
+          "set_data_api_key": "可选，免费。",
+          "parts_api_key": "可选，免费。"
         }
       }
     },
@@ -60,8 +60,8 @@
           "min_history_days": "“历史最低”所需历史",
           "use_impersonation": "模拟 Chrome",
           "notify_service": "通知服务",
-          "brickset_api_key": "Brickset 密钥",
-          "rebrickable_api_key": "Rebrickable 密钥"
+          "set_data_api_key": "套装数据密钥",
+          "parts_api_key": "零件数据库密钥"
         },
         "data_description": {
           "discount_threshold": "达到此折扣即视为好价。",
@@ -75,8 +75,8 @@
           "min_history_days": "“历史最低”生效前需要的价格天数。",
           "use_impersonation": "curl_cffi：大大减少被封锁。",
           "notify_service": "可选；更好的方式是面板中的通知标签。",
-          "brickset_api_key": "可选，免费。",
-          "rebrickable_api_key": "可选，免费。"
+          "set_data_api_key": "可选，免费。",
+          "parts_api_key": "可选，免费。"
         }
       }
     },

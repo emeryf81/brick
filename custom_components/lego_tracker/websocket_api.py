@@ -52,6 +52,19 @@ def _compare_status(coord) -> dict[str, Any] | None:
             "last": max((v["last"] or 0 for v in out.values()), default=0) or None}
 
 
+def _names() -> dict[str, Any]:
+    """The names of the websites in the imported shop settings, for the panel's texts (the panel itself names none)."""
+    from . import compare
+    from .shops import SOURCES, domain_of, shop_with_reader, source_hosts
+
+    partner, official = shop_with_reader("partner"), shop_with_reader("lego")
+    return {"compare": {k: v[0] for k, v in compare.SOURCES.items()},
+            "readers": {k: compare.COMPARE_SITES[k]["reader"] for k in compare.SOURCES if k in compare.COMPARE_SITES},
+            "partner": {"id": partner, "name": RETAILERS[partner][0], "domain": domain_of(partner)} if partner in RETAILERS else None,
+            "official": RETAILERS[official][0] if official in RETAILERS else None,
+            "hosts": {k: h for k in SOURCES if (h := source_hosts((k,))[0])}}
+
+
 def _card(coord, num: str, with_history: bool = False) -> dict[str, Any]:
     """Build a panel set card with offers and optional price history and comparison data."""
     s = coord.store["sets"][num]
@@ -72,7 +85,7 @@ def _card(coord, num: str, with_history: bool = False) -> dict[str, Any]:
                   "manual_price": (o.get("manual_price") or {}).get("price"), "manual_url": bool(o.get("manual_url")),
                   "available": o.get("available"), "error": o.get("error"), "checked": o.get("last_checked"),
                   "unavailable": o.get("unavailable") if not o.get("available") else None,
-                  "held": bool(o.get("unavailable") and o.get("available")),       # LEGO.com: price kept while unavailable
+                  "held": bool(o.get("unavailable") and o.get("available")),       # official shop: price kept while unavailable
                   "low": min((p for _, p in o.get("history", [])), default=None),
                   "title": o.get("title"), "link_status": o.get("link_status"), "link_reason": o.get("link_reason"),
                   "via": o.get("last_via") if o.get("available") and not o.get("manual_price") else None, "found_via": o.get("found_via"),
@@ -105,6 +118,8 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_collection)
     websocket_api.async_register_command(hass, ws_update_set)
     websocket_api.async_register_command(hass, ws_bulk_update)
+    for cmd in (ws_bulk_change, ws_sold, ws_sold_edit, ws_investments, ws_pieces):
+        websocket_api.async_register_command(hass, cmd)
     websocket_api.async_register_command(hass, ws_import_preview)
     websocket_api.async_register_command(hass, ws_job)
     websocket_api.async_register_command(hass, ws_settings_get)
@@ -160,6 +175,7 @@ def ws_overview(hass, connection, msg):
         "threshold": coord.threshold,
         "themes": coord.all_themes(),
         "retailers": {k: v[0] for k, v in RETAILERS.items()},
+        "names": _names(),
         "sets": [_card(coord, n) for n in coord.store["sets"]],
         "summary": (coord.data or coord.compute())["summary"],
         "wishlist": (coord.data or coord.compute())["wishlist"],
@@ -172,7 +188,7 @@ def ws_overview(hass, connection, msg):
         "relay": {"enabled": coord.relay_enabled, "pending": coord.relay_items(100)["total"] if coord.relay_enabled else 0,
                   "continuous": coord.continuous_items(1)["counts"] if coord.relay_enabled else {},
                   "heartbeat": coord.store.get("relay_heartbeat")},
-        "bol_api": bool(coord.bol_api),
+        "bol_api": bool(coord.partner_api),
         "compare": _compare_status(coord), "deal_rules": coord.deal_rules | {"filter": coord.deal_filter},
         "deal_blocked": {n: why for n in coord.store["sets"]
                          if (why := coord.deal_blocked(n, (coord.data or coord.compute())["statuses"].get(n, {})))},
@@ -267,6 +283,76 @@ async def ws_bulk_update(hass, connection, msg):
             errors[num] = str(err)
     coord.push_update()
     connection.send_result(msg["id"], {"saved": done, "added": added, "errors": errors})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({
+    vol.Required("type"): f"{DOMAIN}/bulk_change",
+    vol.Required("sets"): vol.All([str], vol.Length(min=1, max=2000)),
+    vol.Required("field"): vol.In(["location", "notes", "added", "condition", "sold"]),
+    vol.Optional("value", default=""): str, vol.Optional("append", default=False): bool,
+    vol.Optional("price"): vol.Any(None, str, int, float), vol.Optional("date", default=""): str,
+    vol.Optional("which", default="all"): vol.In(["all", "one"]),
+})
+@callback
+def ws_bulk_change(hass, connection, msg):
+    """Manage → Edit all → Bulk change: one field for the chosen sets of your collection, or sell them."""
+    coord = _coord(hass)
+    try:
+        res = coord.bulk_change(msg["sets"], msg["field"], msg["value"], append=msg["append"], price=msg.get("price"),
+                                sold_on=msg["date"], which=msg["which"])
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
+    connection.send_result(msg["id"], res)
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/pieces"})
+@callback
+def ws_pieces(hass, connection, msg):
+    """Manage → Shops & jobs → piece counts again (a background job)."""
+    try:
+        connection.send_result(msg["id"], _coord(hass).start_pieces())
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/sold", vol.Optional("basis", default="paid"): vol.In(["paid", "rrp"])})
+@callback
+def ws_sold(hass, connection, msg):
+    """Collection → Sold: the ledger of sold copies and its statistics."""
+    connection.send_result(msg["id"], _coord(hass).sold_info(msg["basis"]))
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({
+    vol.Required("type"): f"{DOMAIN}/sold/edit", vol.Required("sale"): str,
+    vol.Required("action"): vol.In(["update", "delete", "restore"]),
+    vol.Optional("price"): vol.Any(None, str, int, float), vol.Optional("date"): str,
+})
+@websocket_api.async_response
+async def ws_sold_edit(hass, connection, msg):
+    """Change, delete or undo one sale."""
+    coord = _coord(hass)
+    try:
+        if msg["action"] == "update":
+            coord.sold_update(msg["sale"], msg.get("price"), msg.get("date"))
+        elif msg["action"] == "delete":
+            coord.sold_delete(msg["sale"])
+        else:
+            await coord.sold_restore(msg["sale"])
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
+    connection.send_result(msg["id"], {"ok": True})
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/investments", vol.Optional("basis", default="paid"): vol.In(["paid", "rrp"])})
+@callback
+def ws_investments(hass, connection, msg):
+    """Collection → Investment return."""
+    connection.send_result(msg["id"], _coord(hass).investments(msg["basis"]))
 
 
 @websocket_api.require_admin
@@ -431,7 +517,7 @@ async def ws_shop_settings_withdraw(hass, connection, msg):
 
 @websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/settings/test_key",
-                                  vol.Required("source"): vol.In(["brickset", "rebrickable", "bol"]),
+                                  vol.Required("source"): vol.In(["set_data", "parts", "partner"]),
                                   vol.Optional("key"): str, vol.Optional("secret"): str})
 @websocket_api.async_response
 async def ws_test_key(hass, connection, msg):
@@ -440,8 +526,8 @@ async def ws_test_key(hass, connection, msg):
     from .client import test_metadata_source
 
     coord = _coord(hass)
-    if msg["source"] == "bol":
-        ok, text = await coord.test_bol(msg.get("key"), msg.get("secret"))
+    if msg["source"] == "partner":
+        ok, text = await coord.test_partner(msg.get("key"), msg.get("secret"))
         connection.send_result(msg["id"], {"ok": ok, "message": text})
         return
     key = msg.get("key") or (coord.api_key(f"{msg['source']}_api_key") if coord else "")
@@ -593,7 +679,7 @@ async def ws_offer_fetch(hass, connection, msg):
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/set/enrich", vol.Required("set_number"): str})
 @websocket_api.async_response
 async def ws_set_enrich(hass, connection, msg):
-    """Fill in the set data now: LEGO.com first (image, RRP, name), then Brickset / Rebrickable."""
+    """Fill in the set data now: the official shop first (image, RRP, name), then the set data sources."""
     coord = _coord(hass)
     num = normalize_set_number(msg["set_number"])
     if num not in coord.store["sets"]:
@@ -934,7 +1020,7 @@ class UserscriptView(HomeAssistantView):
 @websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/dev/tool",
                                   vol.Required("action"): vol.In(["stats", "reset", "parse", "fetch", "queue", "outliers",
-                                                                  "debug", "dump"]),
+                                                                  "debug", "dump", "health", "schedule", "jobs", "sources"]),
                                   vol.Optional("what", default=""): str, vol.Optional("retailer"): str,
                                   vol.Optional("html", default=""): vol.All(str, vol.Length(max=5_000_000)),
                                   vol.Optional("url", default=""): str, vol.Optional("set_number"): str,
@@ -968,6 +1054,16 @@ async def ws_dev_tool(hass, connection, msg):
                 coord.push_update()
         elif a == "debug":
             out = {"debug": devtools.set_debug(msg["on"])}
+        elif a == "health":
+            out = {"findings": devtools.health(coord, msg["apply"])}
+            if msg["apply"]:
+                coord.push_update()
+        elif a == "schedule":
+            out = devtools.schedule(coord)
+        elif a == "jobs":
+            out = {"jobs": devtools.jobs(coord)}
+        elif a == "sources":
+            out = devtools.sources(coord)
         else:
             out = json.loads(json.dumps(devtools.dump(coord), default=str))
     except ValueError as err:

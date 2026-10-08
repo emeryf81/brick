@@ -1,4 +1,4 @@
-"""Collection CSV import (collection sites / Brickset / Rebrickable / own spreadsheet) with validation.
+"""Collection CSV import (exports of collection sites / set databases / own spreadsheet) with validation.
 
 Flow: ``analyze_csv`` parses and checks every line without touching the store (used for the
 preview in the panel); ``apply_import`` then merges only the lines without errors.
@@ -151,7 +151,8 @@ def analyze_csv(text: str, store: dict[str, Any] | None = None, *, replace: bool
         for f, lo, hi in (("year", 1949, today.year + 1), ("pieces", 1, 12000), ("qty", 0, 999)):
             if not row.get(f):
                 continue
-            m = re.search(r"-?\d+", row[f])
+            # 5.923 / 5,923 / 5 923 is five thousand nine hundred and twenty-three, not 5
+            m = re.search(r"-?\d+", re.sub(r"(?<=\d)[.,\s\u00a0\u202f'](?=\d{3}(?!\d))", "", row[f].strip()))
             if not m:
                 issues.append(("warning", T("{field} '{value}' is not a number, ignored", field=FIELD_LABELS[f], value=row[f])))
                 continue
@@ -198,7 +199,7 @@ def analyze_csv(text: str, store: dict[str, Any] | None = None, *, replace: bool
 
         item.setdefault("qty", 1)
         if not item.get("name") and not store["sets"].get(num, {}).get("name"):
-            issues.append(("info", T("no name; will be filled in from LEGO.com or Brickset")))
+            issues.append(("info", T("no name; will be filled in automatically")))
         if num in seen and not any(lvl == "error" for lvl, _ in issues):
             issues.append(("info", T("same set as line {line}: counts as an extra copy", line=seen[num])))
             result["summary"]["merged"] += 1
@@ -268,8 +269,8 @@ def apply_import(store: dict[str, Any], rows: list[dict[str, Any]], replace: boo
         for f in ("name", "theme", "subtheme", "year", "pieces", "rrp"):
             if r.get(f) and not s.get(f):
                 s[f] = r[f]
-                if f == "name":
-                    s["name_source"] = "import"
+                if f in ("name", "pieces"):
+                    s[f"{f}_source"] = "import"
         entry = store["collection"].get(num)
         new = {k: r[k] for k in COLLECTION_FIELDS if k in r}
         if "current_value" in new:   # keep a value history so the growth chart follows your re-imports

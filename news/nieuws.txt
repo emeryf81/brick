@@ -20,7 +20,6 @@ Wat is er nieuw?
 • Deals op álle LEGO-sets: de tool kijkt elke dag rustig een deel van alle recente sets na, ook sets die je niet volgt. Je vindt ze bij Deals → Alle LEGO-sets. Sets die uit handel zijn, worden overgeslagen (dat wordt elke maand opnieuw nagekeken).
 • Sets bladeren en toevoegen: zoek op nummer of een stukje van de naam (met automatisch aanvullen), filter op thema en jaar, en zet een set met één klik op je watchlist of in je collectie.
 • Na het toevoegen van een set worden de prijzen meteen opgehaald.
-• Smyths Toys is nu een vaste winkel en staat standaard aan, net als bol.com. Had je Smyths zelf toegevoegd? Dan worden je links en prijzen automatisch overgezet.
 • Uitverkocht of uit het assortiment? Dan staat de reden erbij. Dat is een waarschuwing, geen fout: je hoeft er niets mee te doen.
 • Meerdere exemplaren van dezelfde set: geef per exemplaar de prijs, aankoopdatum, staat, locatie en notities op. De waarde wordt per exemplaar berekend (verzegeld = nieuwwaarde, geopend of gebouwd = gebruikte waarde).
 • De ticker toont enkel echte deals op basis van de dealscore, ook voor je watchlist. Nieuws, deals en watchlist staan standaard door elkaar (uit te zetten bij Beheer → Instellingen → Ticker).
@@ -41,7 +40,6 @@ What's new?
 • Deals on every LEGO set: every day the tool calmly checks part of all recent sets, also sets you don't follow. Find them under Deals → All LEGO sets. Retired sets are skipped (checked again every month).
 • Browse and add sets: search by number or part of the name (with autocomplete), filter by theme and year, and put a set on your watchlist or in your collection with one click.
 • After you add a set, its prices are fetched right away.
-• Smyths Toys is now a built-in shop and on by default, just like bol.com. Did you add Smyths yourself? Your links and prices are moved over automatically.
 • Sold out or no longer sold? The reason is shown. It is a warning, not an error: there is nothing to fix.
 • Several copies of the same set: enter the price, purchase date, condition, location and notes per copy. The value is calculated per copy (sealed = new value, opened or built = used value).
 • The ticker only shows real deals based on the deal score, also for your watchlist. News, deals and watchlist are mixed by default (switch it off under Manage → Settings → Ticker).
@@ -56,7 +54,7 @@ lang: nl
 title: Tip: laat je eigen browser meehelpen met het userscript
 link: /lego-tracker
 
-Sommige winkels (bol.com, Amazon, Smyths, ...) blokkeren servers zoals Home Assistant, maar niet een gewone browser. Met het userscript haalt je eigen browser die prijzen op. Je hoeft er niets voor te doen: zolang Home Assistant open staat, werkt het rustig op de achtergrond.
+Sommige winkels blokkeren servers zoals Home Assistant, maar niet een gewone browser. Met het userscript haalt je eigen browser die prijzen op. Je hoeft er niets voor te doen: zolang Home Assistant open staat, werkt het rustig op de achtergrond.
 
 Wat doet het?
 • Het zoekt prijzen voor links die nog nooit een prijs hadden.
@@ -82,7 +80,7 @@ lang: en
 title: Tip: let your own browser help with the userscript
 link: /lego-tracker
 
-Some shops (bol.com, Amazon, Smyths, ...) block servers like Home Assistant, but not a normal browser. With the userscript your own browser fetches those prices. You don't have to do anything: while Home Assistant is open, it works calmly in the background.
+Some shops block servers like Home Assistant, but not a normal browser. With the userscript your own browser fetches those prices. You don't have to do anything: while Home Assistant is open, it works calmly in the background.
 
 What does it do?
 • It looks up prices for links that never had one.

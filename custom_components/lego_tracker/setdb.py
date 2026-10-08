@@ -1,6 +1,6 @@
 """The LEGO set database: every set there is, with name, year, theme, subtheme, pieces and picture.
 
-Rebrickable publishes the complete list of LEGO sets every day as a free download (no key needed):
+A parts database publishes the complete list of LEGO sets every day as a free download (no key needed):
 sets.csv.gz and themes.csv.gz, about 1 MB together; their addresses come from the shop settings
 ("set_database_sets", "set_database_themes"). The integration fetches it once a day, keeps it in
 its own storage file and uses it to
@@ -22,7 +22,7 @@ REFRESH_HOURS = 24
 MAX_BYTES = 40_000_000             # unpacked size limit per file
 NEW_KEEP_DAYS = 365                # how long a set stays in "new sets"
 NEW_MAX = 1000
-SOURCE = "Rebrickable"
+SOURCE = "setdb"                    # the source of set data that came from the set database
 NUM_RE = re.compile(r"^\d{3,7}$")
 # a set row: [name, year, theme, subtheme, pieces, image]
 NAME, YEAR, THEME, SUB, PIECES, IMAGE = range(6)

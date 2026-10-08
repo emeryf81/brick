@@ -1,12 +1,12 @@
-"""bol.com Marketing Catalog API (free with a bol.com affiliate / partner account).
+"""The partner (catalog) API of the shop read as "partner", for its partners / affiliates.
 
-Official route to bol.com prices: no bot protection, no scraping. Needs a client id + secret from
-the bol.com affiliate program (Partnerplatform → API credentials).
+The official route to that shop's prices: no bot protection, no scraping. Needs a client id + secret from
+the shop's partner programme (API credentials).
 
-The addresses come from the shop settings ("bol_api_token", "bol_api"):
-- token:  POST <bol_api_token>?grant_type=client_credentials (HTTP basic auth)
-- search: GET  <bol_api>/products/search?search-term=…&country-code=NL|BE
-- offer:  GET  <bol_api>/products/{ean}/offers/best?country-code=NL|BE
+The addresses come from the shop settings ("partner_api_token", "partner_api"):
+- token:  POST <partner_api_token>?grant_type=client_credentials (HTTP basic auth)
+- search: GET  <partner_api>/products/search?search-term=…&country-code=NL|BE
+- offer:  GET  <partner_api>/products/{ean}/offers/best?country-code=NL|BE
 
 The response parsing is deliberately tolerant (walks the JSON for product-like and price-like
 objects) so small schema differences don't break it.
@@ -25,8 +25,8 @@ from .shops import ready
 TIMEOUT = aiohttp.ClientTimeout(total=20)
 
 
-class BolApiError(Exception):
-    """Readable (English, translatable) error from the bol.com API."""
+class PartnerApiError(Exception):
+    """Readable (English, translatable) error from the partner API."""
 
 
 def _num(v: Any) -> float | None:
@@ -106,10 +106,10 @@ def products(data: Any) -> list[dict[str, Any]]:
     return out
 
 
-class BolApi:
+class PartnerApi:
     def __init__(self, session: aiohttp.ClientSession, client_id: str, client_secret: str, country: str = "NL", *,
                  token_url: str, api_url: str) -> None:
-        """token_url / api_url: the "bol_api_token" and "bol_api" addresses from the shop settings."""
+        """token_url / api_url: the "partner_api_token" and "partner_api" addresses from the shop settings."""
         self._session, self._id, self._secret = session, client_id, client_secret
         self._token_url, self._api = token_url, api_url.rstrip("/")
         self.country = "BE" if country.upper() == "BE" else "NL"
@@ -118,7 +118,7 @@ class BolApi:
 
     async def _auth(self) -> str:
         if not ready():           # withdrawn: not even a login
-            raise BolApiError(T("no shop settings imported (or their terms not accepted): nothing is fetched"))
+            raise PartnerApiError(T("no shop settings imported (or their terms not accepted): nothing is fetched"))
         if self._token and time.time() < self._expires - 60:
             return self._token
         basic = base64.b64encode(f"{self._id}:{self._secret}".encode()).decode()
@@ -126,15 +126,15 @@ class BolApi:
             async with self._session.post(self._token_url, params={"grant_type": "client_credentials"}, timeout=TIMEOUT,
                                           headers={"Authorization": f"Basic {basic}", "Accept": "application/json"}) as r:
                 if r.status in (400, 401, 403):
-                    raise BolApiError(T("bol.com API: client id or secret not accepted"))
+                    raise PartnerApiError(T("Partner API: client id or secret not accepted"))
                 if r.status >= 400:
-                    raise BolApiError(T("bol.com API: login failed (HTTP {status})", status=r.status))
+                    raise PartnerApiError(T("Partner API: login failed (HTTP {status})", status=r.status))
                 data = await r.json(content_type=None)
         except aiohttp.ClientError as err:
-            raise BolApiError(T("network error: {error}", error=str(err)[:120])) from err
+            raise PartnerApiError(T("network error: {error}", error=str(err)[:120])) from err
         self._token = data.get("access_token")
         if not self._token:
-            raise BolApiError(T("bol.com API: login failed (HTTP {status})", status=200))
+            raise PartnerApiError(T("Partner API: login failed (HTTP {status})", status=200))
         self._expires = time.time() + float(data.get("expires_in") or 300)
         return self._token
 
@@ -142,7 +142,7 @@ class BolApi:
         for attempt in (1, 2):
             token = await self._auth()
             if not ready():       # withdrawn while logging in
-                raise BolApiError(T("no shop settings imported (or their terms not accepted): nothing is fetched"))
+                raise PartnerApiError(T("no shop settings imported (or their terms not accepted): nothing is fetched"))
             try:
                 async with self._session.get(f"{self._api}{path}", params={"country-code": self.country, **params}, timeout=TIMEOUT,
                                              headers={"Authorization": f"Bearer {token}", "Accept": "application/json",
@@ -153,12 +153,12 @@ class BolApi:
                     if r.status == 404:
                         return None
                     if r.status == 429:
-                        raise BolApiError(T("bol.com API: too many requests, try again later"))
+                        raise PartnerApiError(T("Partner API: too many requests, try again later"))
                     if r.status >= 400:
-                        raise BolApiError(T("bol.com API: error (HTTP {status})", status=r.status))
+                        raise PartnerApiError(T("Partner API: error (HTTP {status})", status=r.status))
                     return await r.json(content_type=None)
             except aiohttp.ClientError as err:
-                raise BolApiError(T("network error: {error}", error=str(err)[:120])) from err
+                raise PartnerApiError(T("network error: {error}", error=str(err)[:120])) from err
         return None
 
     async def search(self, term: str) -> list[dict[str, Any]]:
@@ -166,7 +166,7 @@ class BolApi:
         return products(data) if data else []
 
     async def best_price(self, ean: str) -> float | None:
-        """Price of the best offer, or None when bol.com has no offer (not available)."""
+        """Price of the best offer, or None when the shop has no offer (not available)."""
         data = await self._get(f"/products/{ean}/offers/best")
         return offer_price(data) if data else None
 

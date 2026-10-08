@@ -1,14 +1,14 @@
 """Build custom_components/lego_tracker/data/sets.json (the built-in set catalogue) from the sets a
-Home Assistant instance already looked up on LEGO.com.
+Home Assistant instance already looked up on the official shop.
 
 Input: the rows of the integration's websocket command `lego_tracker/overview` (field `sets`), or the
 compact export used for the first catalogue (a list of dicts with num, name, rrp, rrp_src, ...).
 
     python scripts/build_catalog.py export.json            # merges into the existing catalogue
 
-Only sets whose LEGO.com page was really read (checked on LEGO.com, or an RRP from LEGO.com) are taken.
-"In / out of stock" is only marked with evidence: a past exit date or LEGO.com saying unavailable
-means retired; LEGO.com selling it (and a recent set, or an exit date in the future) means retail.
+Only sets whose page at the official shop was really read (checked there, or an RRP from there) are taken.
+"In / out of stock" is only marked with evidence: a past exit date or the official shop saying unavailable
+means retired; the official shop selling it (and a recent set, or an exit date in the future) means retail.
 """
 from __future__ import annotations
 
@@ -39,17 +39,17 @@ def status(x: dict, today: date) -> str | None:
         return "retired"
     if x.get("lego_available") and ((exit_date and exit_date >= today.isoformat()) or (x.get("year") or 0) >= today.year - 3):
         return "retail"
-    return None                        # LEGO.com shows old sets too: don't guess
+    return None                        # the official shop shows old sets too: don't guess
 
 
 def entry(x: dict, today: date) -> dict | None:
-    lego_rrp = x.get("rrp_src") == "LEGO.com"
-    if not (x.get("lego_checked") or lego_rrp) or not x.get("num") or not x.get("name"):   # really read on LEGO.com
+    lego_rrp = x.get("rrp_src") == "official"
+    if not (x.get("lego_checked") or lego_rrp) or not x.get("num") or not x.get("name"):   # really read on the official shop
         return None
     e = {"name": x.get("name"), "rrp": x.get("rrp") if lego_rrp else None, "theme": x.get("theme"),
          "subtheme": x.get("subtheme"), "year": x.get("year"), "pieces": x.get("pieces"),
-         "image": x.get("image") if str(x.get("image") or "").startswith("https://www.lego.com/") else None,   # LEGO images only
-         "ean": x.get("ean"), "lego_url": x.get("lego_url"), "exit_date": x.get("exit_date"), "status": status(x, today)}
+         "image": x.get("image") if x.get("image_src") == "official" else None,   # images of the official shop only
+         "ean": x.get("ean"), "exit_date": x.get("exit_date"), "status": status(x, today)}
     return {k: v for k, v in e.items() if v not in (None, "")}
 
 

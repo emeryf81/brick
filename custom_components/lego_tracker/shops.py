@@ -20,20 +20,57 @@ LEGAL_VERSION = 1                 # raise when the terms change: everyone accept
 CONF_SHOP_PROFILE = "shop_profile"
 CONF_LEGAL = "legal"
 CONF_SETUP_VERSION = "setup_version"   # 1: installed (or settings withdrawn) since shop settings exist: nothing to carry over
-# how a shop's pages are read (the page structure the parser knows), not a website
-READERS = ("lego", "amazon", "bol", "kruidvat", "generic")
-FIXED_IDS = {"lego": "lego_com", "bol": "bol"}   # readers with their own logic (RRP, API): one shop each, this id
-MARKET_VALUE = "market_value"     # the comparison entry with market values and retirement dates
-_COMPARE_IDS = {MARKET_VALUE: "brickeconomy"}      # settings id -> internal source id (stored data keeps its key)
+# how a shop's pages are read (the page structure the parser knows), not a website:
+#   lego         the official LEGO shop (RRP, image, name, retirement)
+#   marketplace  a marketplace with a "buy box" (the price of the seller that wins it) and product codes in the address
+#   partner      a shop with a Dutch and a Belgian site and a partner API for prices
+#   retail       a shop whose product data sits in JSON-LD and data attributes
+#   generic      any other shop (JSON-LD / meta data)
+READERS = ("lego", "marketplace", "partner", "retail", "generic")
+FIXED_IDS = {"lego": "lego_com"}   # the official shop has its own logic (RRP): one shop, this id
+SINGLE_READERS = ("lego", "partner")   # at most one shop each
+# how a comparison site is read: a page with the market value of a set, a search with links to a product page with
+# its shops, a page whose data sits in an Inertia "data-page" attribute, or a search result list (one shop per result)
+COMPARE_READERS = ("listing", "product_list", "inertia", "market")
+MARKET = "market"                  # internal id of the site read as "market" (market value + retirement date)
 
 SEARCH: dict[str, str] = dict(DEFAULT_SEARCH)      # effective search template per shop
-LOCALE = {"lego": DEFAULT_LEGO_LOCALE, "bol": "nl"}  # "bol": which bol.com site is asked, "nl" (bol.com/nl/nl) or "be"
-BOL_PATH_RE = re.compile(r"(bol\.com)/(?:nl|be)/nl/", re.I)
+LOCALE = {"lego": DEFAULT_LEGO_LOCALE, "partner": "nl"}  # "partner": which of its sites is asked, "nl" (/nl/nl/) or "be" (/be/nl/)
 
-# other websites in the settings file: set data, the set database download and the bol.com API
-DATA_SOURCES = {"brickset_api": "Brickset API", "brickset_page": "Brickset set page", "rebrickable_api": "Rebrickable API",
+# other websites in the settings file: set data, the set database download and the partner API
+DATA_SOURCES = {"set_data_api": "Set data API", "set_data_page": "Set data page", "parts_api": "Parts database API",
                 "set_database_sets": "Set database (sets)", "set_database_themes": "Set database (themes)",
-                "bol_api_token": "bol.com API login", "bol_api": "bol.com API"}
+                "partner_api_token": "Partner API login", "partner_api": "Partner API"}
+_LEGACY: dict[str, Any] = {}
+
+
+def legacy() -> dict[str, Any]:
+    """How identifiers of versions before 1.1 translate to the current ones (in data/previous_shop_settings.json)."""
+    if not _LEGACY:
+        import json
+        from pathlib import Path
+
+        try:
+            _LEGACY.update(json.loads((Path(__file__).parent / "data" / "previous_shop_settings.json").read_text("utf-8")).get("legacy") or {})
+        except (OSError, ValueError):
+            pass
+        _LEGACY.setdefault("readers", {})
+    return _LEGACY
+
+
+def _upgrade(data: dict[str, Any]) -> dict[str, Any]:
+    """A settings file written for a version before 1.1: its old reader names and data source keys, translated."""
+    old = legacy()
+    data = dict(data)
+    if isinstance(data.get("shops"), list):
+        data["shops"] = [dict(x, reader=old["readers"].get(x.get("reader"), x.get("reader"))) if isinstance(x, dict) else x
+                         for x in data["shops"]]
+    if isinstance(data.get("comparison_sites"), list):
+        data["comparison_sites"] = [dict(x, reader=x.get("reader") or (old.get("comparison_readers") or {}).get(x.get("id"), "listing"))
+                                    if isinstance(x, dict) else x for x in data["comparison_sites"]]
+    if isinstance(data.get("data_sources"), dict):
+        data["data_sources"] = {(old.get("data_sources") or {}).get(k, k): v for k, v in data["data_sources"].items()}
+    return data
 PROFILE: dict[str, dict[str, Any]] = {}            # shop id -> its entry in the imported settings file
 SOURCES: dict[str, str] = {}                        # data source key -> its address in the settings file
 COMPARE: dict[str, dict[str, Any]] = {}            # internal source id -> comparison site entry
@@ -61,7 +98,7 @@ def validate_custom_shop(shop: dict[str, Any]) -> dict[str, str]:
     if not name:
         raise LocalizedError("Give the shop a name.")
     if not re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+", domain):
-        raise LocalizedError("Invalid domain {domain} (e.g. dreamland.be).", domain=domain)
+        raise LocalizedError("Invalid domain {domain} (e.g. example-shop.be).", domain=domain)
     if search and (not valid_search(search) or not _on(search, domain)):   # the shop's own host
         raise LocalizedError("The search URL must start with https://, be on the shop's domain and contain {query} or {number}.")
     return {"id": str(shop.get("id") or shop_id(name)), "name": name, "domain": domain, "search": search}
@@ -81,6 +118,7 @@ def validate_settings(data: Any) -> dict[str, Any]:
         raise LocalizedError("This is not a shop settings file for this integration.")
     if data.get("version") != SETTINGS_VERSION:
         raise LocalizedError("Shop settings file version {version} is not supported.", version=data.get("version"))
+    data = _upgrade(data)
     for key, kind in (("shops", list), ("comparison_sites", list), ("data_sources", dict)):
         if data.get(key) is not None and not isinstance(data[key], kind):
             raise LocalizedError("{field}: wrong type in the shop settings file.", field=key)
@@ -98,6 +136,8 @@ def validate_settings(data: Any) -> dict[str, Any]:
             raise LocalizedError("Shop {id}: unknown reader {reader} (one of: {readers}).", id=rid, reader=reader, readers=", ".join(READERS))
         if (fixed := FIXED_IDS.get(reader)) and rid != fixed:
             raise LocalizedError("Shop {id}: a shop read as {reader} must have the id {fixed}.", id=rid, reader=reader, fixed=fixed)
+        if reader in SINGLE_READERS and any(x["reader"] == reader for x in shops):
+            raise LocalizedError("Shop {id}: only one shop can be read as {reader}.", id=rid, reader=reader)
         shop = {"id": rid, "name": name, "domain": domain, "reader": reader}
         for key in ("search", "home", "product"):
             if (v := raw.get(key)) in (None, ""):
@@ -131,7 +171,11 @@ def validate_settings(data: Any) -> dict[str, Any]:
         for tpl in start.values():
             if not isinstance(tpl, str) or not tpl.startswith("https://") or (urlparse(tpl).hostname or "") not in hosts:
                 raise LocalizedError("Comparison site {id}: every start address must be https:// on one of its hosts.", id=sid)
-        sites.append({"id": sid, "name": str(raw.get("name") or sid)[:40], "hosts": hosts,
+        reader = raw.get("reader") or "listing"
+        if reader not in COMPARE_READERS or (reader == MARKET and any(x["reader"] == MARKET for x in sites)):
+            raise LocalizedError("Comparison site {id}: unknown reader {reader} (one of: {readers}; market only once).",
+                                 id=sid, reader=reader, readers=", ".join(COMPARE_READERS))
+        sites.append({"id": sid, "name": str(raw.get("name") or sid)[:40], "reader": reader, "hosts": hosts,
                       "start": {str(k).upper() if k != "*" else "*": v for k, v in start.items()},
                       "langs": [x.lower() for x in raw_langs or []][:10]})
     raw_sources = data.get("data_sources") or {}
@@ -142,7 +186,7 @@ def validate_settings(data: Any) -> dict[str, Any]:
         if key not in DATA_SOURCES:
             raise LocalizedError("Unknown data source {key} (one of: {keys}).", key=key, keys=", ".join(DATA_SOURCES))
         if not isinstance(url, str) or not url.startswith("https://") or " " in url or not urlparse(url).hostname \
-                or (key == "brickset_page" and "{number}" not in url):
+                or (key == "set_data_page" and "{number}" not in url):
             raise LocalizedError("Data source {key}: must be an https:// address.", key=key)
         sources[key] = url
     locale = str(data.get("lego_locale") or "").lower()
@@ -168,8 +212,29 @@ def previous_settings(options: dict[str, Any]) -> dict[str, Any] | None:
 
 # API keys and the data sources they are sent to: a key is only ever sent to the host(s) it was entered or used with
 CONF_KEY_HOSTS = "key_hosts"
-KEY_SOURCES = {"brickset_api_key": ("brickset_api",), "rebrickable_api_key": ("rebrickable_api",),
-               "bol_client_id": ("bol_api_token", "bol_api"), "bol_client_secret": ("bol_api_token", "bol_api")}
+KEY_SOURCES = {"set_data_api_key": ("set_data_api",), "parts_api_key": ("parts_api",),
+               "partner_client_id": ("partner_api_token", "partner_api"), "partner_client_secret": ("partner_api_token", "partner_api")}
+
+
+def upgrade_options(options: dict[str, Any]) -> dict[str, Any] | None:
+    """Options of a version before 1.1 with the current names (API keys, the hosts they may go to, the
+    comparison sites in use, the imported settings). None when nothing changes."""
+    old = legacy()
+    names, ids = old.get("options") or {}, old.get("compare_ids") or {}
+    new = {k: v for k, v in options.items() if k not in names}
+    for k, v in options.items():
+        if k in names:
+            new.setdefault(names[k], v)            # an option under its current name wins over its old name
+    if isinstance(new.get(CONF_KEY_HOSTS), dict):
+        new[CONF_KEY_HOSTS] = {names.get(k, k): v for k, v in new[CONF_KEY_HOSTS].items()}
+    if isinstance(new.get("compare_sources"), list):
+        new["compare_sources"] = [ids.get(x, x) for x in new["compare_sources"]]
+    if isinstance(new.get(CONF_SHOP_PROFILE), dict):
+        try:
+            new[CONF_SHOP_PROFILE] = validate_settings(new[CONF_SHOP_PROFILE])
+        except (ValueError, TypeError, AttributeError):
+            pass
+    return new if new != options else None
 
 
 def source_hosts(sources: tuple[str, ...], profile: dict[str, Any] | None = None) -> list[str]:
@@ -259,7 +324,7 @@ def apply_shop_options(options: dict[str, Any]) -> None:
             GENERIC_SHOPS[shop["id"]] = {"domain": shop["domain"], "search": shop.get("search", "")}
         ALIASES.extend((a, shop["id"]) for a in shop["aliases"])
     for site in (profile or {}).get("comparison_sites", []):
-        COMPARE[_COMPARE_IDS.get(site["id"], site["id"])] = site
+        COMPARE[MARKET if site["reader"] == MARKET else site["id"]] = site
     ALIASES.sort(key=lambda a: -len(a[0]))
     compare.load_sites(COMPARE)
     for shop in options.get("custom_shops", []) or []:
@@ -282,10 +347,10 @@ def apply_shop_options(options: dict[str, Any]) -> None:
             if rid in GENERIC_SHOPS:
                 GENERIC_SHOPS[rid]["search"] = tpl
     LOCALE["lego"] = (options.get("lego_locale") or (profile or {}).get("lego_locale") or DEFAULT_LEGO_LOCALE).lower()
-    LOCALE["bol"] = bol_site(options)
+    LOCALE["partner"] = partner_site(options)
     for rid in PROFILE:
-        if reader_of(rid) == "bol" and SEARCH.get(rid) == DEFAULT_SEARCH.get(rid):   # your own search URL stays as you wrote it
-            SEARCH[rid] = bol_site_url(SEARCH[rid])
+        if reader_of(rid) == "partner" and SEARCH.get(rid) == DEFAULT_SEARCH.get(rid):   # your own search URL stays as you wrote it
+            SEARCH[rid] = partner_site_url(SEARCH[rid])
 
 
 def export_settings(options: dict[str, Any]) -> dict[str, Any]:
@@ -325,15 +390,23 @@ def compare_start(source: str, num: str, lego_locale: str | None, ean: str | Non
             .replace("{cc_lower}", cc.lower()).replace("{cc}", cc).replace("{ean14}", (ean or "").zfill(14)))
 
 
-def bol_site(options: dict[str, Any]) -> str:
-    """The bol.com site to ask: "be" (bol.com/be/nl) or "nl" (bol.com/nl/nl), as chosen in Settings.
-    Not chosen yet ("auto"): bol.com/nl/nl, the site that was always asked before the choice existed."""
-    return "be" if str(options.get("bol_country") or "").upper() == "BE" else "nl"
+def partner_site(options: dict[str, Any]) -> str:
+    """The site of the partner shop to ask: "be" (/be/nl/) or "nl" (/nl/nl/), as chosen in Settings.
+    Not chosen yet ("auto"): /nl/nl/, the site that was always asked before the choice existed."""
+    return "be" if str(options.get("partner_country") or "").upper() == "BE" else "nl"
 
 
-def bol_site_url(url: str) -> str:
-    """The same bol.com page on the chosen site (bol.com/nl/nl/p/... ↔ bol.com/be/nl/p/...)."""
-    return BOL_PATH_RE.sub(lambda m: f"{m.group(1)}/{LOCALE['bol']}/nl/", url or "")
+def partner_path_re() -> re.Pattern[str] | None:
+    """/nl/nl/ or /be/nl/ in an address of the partner shop."""
+    rid = shop_with_reader("partner")
+    dom = domain_of(rid) if rid else None
+    return re.compile(rf"({re.escape(dom)})/(?:nl|be)/nl/", re.I) if dom else None
+
+
+def partner_site_url(url: str) -> str:
+    """The same page of the partner shop on the chosen site (/nl/nl/p/... ↔ /be/nl/p/...)."""
+    rx = partner_path_re()
+    return rx.sub(lambda m: f"{m.group(1)}/{LOCALE['partner']}/nl/", url or "") if rx else (url or "")
 
 
 def domain_of(rid: str) -> str | None:
@@ -344,7 +417,7 @@ def home_of(rid: str) -> str | None:
     """The page a visit to this shop starts on (as a visitor would): from the settings, else the shop's root."""
     home = (PROFILE.get(rid) or {}).get("home")
     if home:
-        return bol_site_url(home) if reader_of(rid) == "bol" else home
+        return partner_site_url(home) if reader_of(rid) == "partner" else home
     return f"https://www.{d}/" if (d := domain_of(rid)) else None
 
 

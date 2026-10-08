@@ -6,22 +6,23 @@ STORAGE_KEY = f"{DOMAIN}.data"
 STORAGE_VERSION = 1
 
 PANEL_URL = "lego-tracker"
-API_LEVEL = 9          # raise together with API_LEVEL in the panel when the panel needs new server commands
+API_LEVEL = 10         # raise together with API_LEVEL in the panel when the panel needs new server commands
 PANEL_ELEMENT = "lego-tracker-panel"
 STATIC_URL = f"/{DOMAIN}_static"
+OFFICIAL = "official"      # the source of data read on the official LEGO shop (its RRP, image, name, pieces)
 
 CONF_DISCOUNT_THRESHOLD = "discount_threshold"
 CONF_UPDATE_HOURS = "update_hours"
 CONF_RETAILERS = "retailers"
 CONF_DIGEST_TIME = "digest_time"
-CONF_BRICKSET_KEY = "brickset_api_key"
+CONF_SET_DATA_KEY = "set_data_api_key"
 CONF_MIN_HISTORY_DAYS = "min_history_days"
 CONF_IMPERSONATE = "use_impersonation"
 CONF_NOTIFY = "notify_service"
-CONF_REBRICKABLE_KEY = "rebrickable_api_key"
-CONF_BOL_CLIENT_ID = "bol_client_id"        # bol.com affiliate / Marketing Catalog API
-CONF_BOL_CLIENT_SECRET = "bol_client_secret"
-CONF_BOL_COUNTRY = "bol_country"            # auto | NL | BE
+CONF_PARTS_KEY = "parts_api_key"
+CONF_PARTNER_CLIENT_ID = "partner_client_id"    # the partner API of the shop read as "partner"
+CONF_PARTNER_CLIENT_SECRET = "partner_client_secret"
+CONF_PARTNER_COUNTRY = "partner_country"    # auto | NL | BE
 CONF_RELAY = "browser_relay"                # userscript fetches shop pages from the user's browser
 CONF_RELAY_HOURS = "relay_hours"
 DEFAULT_RELAY_HOURS = 6
@@ -32,11 +33,10 @@ CONF_DEAL_FILTER = "deal_filter"           # Deals → Settings: themes switched
 DEAL_FILTER_DEFAULT = {"themes_off": [], "min_price": None, "max_price": None, "min_discount": None,
                        "min_pieces": None, "max_pieces": None, "skip_owned": False, "skip_retired": False}
 CONF_TICKER = "ticker"                      # bottom ticker: {"watch": bool, "deals": bool, "news": bool, "max_*": int}
-LEGO_RETIRED_REST = 30 * 86400             # a LEGO.com page that says "out of the range" is fetched again after a month
+LEGO_RETIRED_REST = 30 * 86400             # a page of the official shop that says "out of the range" is fetched again after a month
 TICKER_RELOAD = 600                        # the ticker's content (deals, watchlist, news, solved errors) is reloaded every 10 minutes
 TICKER_GOOD_SCORE = 45                     # a watched set shows in the ticker from this deal score (🔥 good price)
 TICKER_DEFAULT = {"watch": True, "deals": True, "news": True, "max_watch": 3, "max_deals": 3, "max_news": 3, "shuffle": True}
-CONF_COMPARE_OLD = "brickwatch"             # name of that option before 0.9.10 (still read once)
 CONF_BLOCK_WORDS = "block_words"            # your own words: a product with one of these is never the set
 CONF_ALLOW_WORDS = "allow_words"            # exceptions: words/phrases that may appear in a real set's title
 CONF_COMPARE_SOURCES = "compare_sources"    # which comparison sites (default: all)
@@ -79,7 +79,7 @@ RETAILERS: dict[str, tuple[str, str]] = {}
 # shops read with the generic parser (JSON-LD / meta tags): id -> {"domain", "search"}
 GENERIC_SHOPS: dict[str, dict[str, str]] = {}
 # search URL per shop from the settings file. {query} = url-encoded "LEGO <set number>", {number} = set number,
-# {locale} = LEGO.com locale (e.g. nl-be). Editable in the settings panel.
+# {locale} = locale of the official shop (e.g. nl-be). Editable in the settings panel.
 DEFAULT_SEARCH: dict[str, str] = {}
 CONF_LEGO_LOCALE = "lego_locale"
 DEFAULT_LEGO_LOCALE = "nl-be"

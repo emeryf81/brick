@@ -21,12 +21,13 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
-from .client import DOMAIN_GAP, SEARCH_GAP, Fetcher, lookup_metadata
+from .client import DOMAIN_GAP, PARTS_API, SEARCH_GAP, SET_DATA_API, SET_DATA_PAGE, Fetcher, lookup_metadata
 from .const import (
-    CONF_COMPARE, CONF_COMPARE_OLD, CONF_BLOCK_WORDS, CYCLE_CHOICES, CONF_WATCH_CYCLE, WATCH_CYCLE_CHOICES, WATCH_LIMIT,
+    OFFICIAL,
+    CONF_COMPARE, CONF_BLOCK_WORDS, CYCLE_CHOICES, CONF_WATCH_CYCLE, WATCH_CYCLE_CHOICES, WATCH_LIMIT,
     FULL_REFRESH_GAP, MANUAL_GAP, CONF_DEAL_MIN_SCORE, CONF_DEAL_ATL, CONF_DEAL_TARGET, DEFAULT_DEAL_MIN_SCORE, CONF_DEV_FIXED_TIMES, CONF_DEV_FULL_REFRESH, CONF_DEV_FREE_CYCLE, CONF_DEV_WATCH_UNLIMITED, CONF_ALLOW_WORDS, CONF_COMPARE_SOURCES, COMPARE_FRESH_HOURS, COMPARE_MISSING_HOURS, COMPARE_NET_ERRORS, COMPARE_PAUSE_HOURS,
-    CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET, CONF_BOL_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS, CONF_MARKET, CONF_TICKER, TICKER_DEFAULT, TICKER_GOOD_SCORE, TICKER_RELOAD, LEGO_RETIRED_REST, CONF_DEAL_FILTER, DEAL_FILTER_DEFAULT, CONF_SCAN,
-    CONF_AUTO_REFRESH, CONF_BRICKSET_KEY, CONF_LANGUAGE, CONF_REFRESH_MODE, CONF_SPREAD_HOURS, DEFAULT_REFRESH_MODE, DEFAULT_SPREAD_HOURS, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, CONF_CUSTOM_SHOPS, CONF_DIGEST_TIME, CONF_NO_AUTOPAUSE, CONF_SHOP_SEARCH, CONF_VALUE_SOURCE, DEFAULT_DIGEST_TIME, GENERIC_SHOPS, CONF_DISCOUNT_THRESHOLD, CONF_REBRICKABLE_KEY, CONF_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
+    CONF_PARTNER_CLIENT_ID, CONF_PARTNER_CLIENT_SECRET, CONF_PARTNER_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS, CONF_MARKET, CONF_TICKER, TICKER_DEFAULT, TICKER_GOOD_SCORE, TICKER_RELOAD, LEGO_RETIRED_REST, CONF_DEAL_FILTER, DEAL_FILTER_DEFAULT, CONF_SCAN,
+    CONF_AUTO_REFRESH, CONF_SET_DATA_KEY, CONF_LANGUAGE, CONF_REFRESH_MODE, CONF_SPREAD_HOURS, DEFAULT_REFRESH_MODE, DEFAULT_SPREAD_HOURS, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, CONF_CUSTOM_SHOPS, CONF_DIGEST_TIME, CONF_NO_AUTOPAUSE, CONF_SHOP_SEARCH, CONF_VALUE_SOURCE, DEFAULT_DIGEST_TIME, GENERIC_SHOPS, CONF_DISCOUNT_THRESHOLD, CONF_PARTS_KEY, CONF_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
     DEFAULT_REFRESH_TIMES, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS,
     DOMAIN, EVENT_JOB_DONE, EVENT_HIGH_DISCOUNT, EVENT_NEW_LOW, EVENT_TARGET_HIT, RETAILERS, STORAGE_KEY,
     STORAGE_VERSION,
@@ -34,12 +35,13 @@ from .const import (
 from .models import (
     add_activity, add_event, clean_history, collection_analytics, link_check, collection_rows, collection_series, is_suspicious_price, collection_summary, COLLECTION_COLUMNS, rows_to_csv, validate_backup, wishlist_summary, is_watched, compute_set_status, new_store, normalize_set_number,
     offer_price, query_activity, record_price, today_iso, COPY_FIELDS, OPENED, copies, copy_value, sync_copies,
+    investment_report, sold_record, sold_summary, SOLD_MAX, set_pieces,
 )
 from .i18n import DEFAULT_LANGUAGE, LANGUAGES, LocalizedError, T, resolve, set_language
 from .notifications import Notifier, default_rules
-from .bol_api import BolApi, BolApiError
+from .partner_api import PartnerApi, PartnerApiError
 from . import catalog, sitemaps, compare, setdb, scan
-from .shops import (CONF_LEGAL, CONF_SHOP_PROFILE, LEGAL_VERSION, all_domains, bol_site, bol_site_url, domain_of, profile_ids,
+from .shops import (CONF_LEGAL, CONF_SHOP_PROFILE, LEGAL_VERSION, MARKET, legacy, all_domains, partner_site, partner_site_url, domain_of, profile_ids, shop_with_reader,
                     reader_of, ready, site_root, source_url, CONF_KEY_HOSTS, KEY_SOURCES, key_allowed, source_hosts)
 from .parsers import Parsed, title_check, wrong_product
 from .shops import SEARCH, valid_search
@@ -68,8 +70,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.store: dict[str, Any] = new_store()
         self.fetcher = Fetcher(hass, bool(self.opt(entry, CONF_IMPERSONATE, True)))
         self.fetcher.no_autopause = set(self.opt(entry, CONF_NO_AUTOPAUSE, []) or [])
-        self._bol_api: BolApi | None = None
-        self._bol_found: dict[str, dict[str, Any]] = {}
+        self._partner_api: PartnerApi | None = None
+        self._partner_found: dict[str, dict[str, Any]] = {}
         self._alerted: set[tuple[str, str]] = set()
         self.job: dict[str, Any] | None = None
         self.last_job: dict[str, Any] | None = None
@@ -129,10 +131,11 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if (sc := await self._scan_store.async_load()):
             self.scan = sc.get("sets") or {}
         self._drop_old_source_links()
-        self._bol_links_to_site()
-        self._amazon_no_price_is_out_of_stock()
+        self._partner_links_to_site()
+        self._marketplace_no_price_is_out_of_stock()
         self._fix_lego_rrp()
         self._fix_lost_commas()
+        self._fix_piece_counts()
         self._rename_market_source()
         self._watch_dates(first=True)
         for num, st in self.store["sets"].items():            # fill gaps from the built-in catalogue (no network)
@@ -714,6 +717,10 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             job["current"] = None
             job["finished"] = time.time()
             self.last_job = dict(job)
+            hist = self.store.setdefault("job_history", [])          # developer tools: the last jobs and how long they took
+            hist.append({k: job.get(k) for k in ("kind", "label", "total", "done", "updated", "found", "errors", "skipped",
+                                                 "started", "finished", "cancelled")})
+            del hist[: max(0, len(hist) - 30)]
             parts = [T("{n} updated", n=job["updated"]) if job.get("updated") else "",
                      T("{n} links found", n=job["found"]) if job.get("found") else "",
                      T("{n} skipped (paused)", n=job["skipped"]) if job.get("skipped") else "",
@@ -731,34 +738,34 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if job["kind"] == "refresh":
                 self._snapshot()
             if job["kind"] in ("enrich", "update"):
-                self.verify_links()      # new RRPs from LEGO.com: re-judge links, drop impossible prices
+                self.verify_links()      # new RRPs from the official shop: re-judge links, drop impossible prices
             self.push_update()
             self.hass.async_create_task(self.notifier.on_job_done(dict(job)))
             self.hass.bus.async_fire(EVENT_JOB_DONE, {k: job[k] for k in ("kind", "total", "done", "found", "updated",
                                                                          "errors", "skipped", "cancelled")})
 
-    # ------------------------------------------------------------ bol.com API
+    # ------------------------------------------------------------ partner API
     @property
-    def bol_country(self) -> str:
-        """The bol.com site asked for prices and links (scraping and API alike): "NL" or "BE"."""
-        return bol_site({CONF_BOL_COUNTRY: self.opt(self.entry, CONF_BOL_COUNTRY, "auto"),
+    def partner_country(self) -> str:
+        """The site of the partner shop asked for prices and links (scraping and API alike): "NL" or "BE"."""
+        return partner_site({CONF_PARTNER_COUNTRY: self.opt(self.entry, CONF_PARTNER_COUNTRY, "auto"),
                          CONF_LEGO_LOCALE: self.opt(self.entry, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE)}).upper()
 
     @property
-    def bol_api(self) -> BolApi | None:
-        """The official bol.com API when the user entered affiliate credentials (else: scraping)."""
-        cid, secret = self.api_key(CONF_BOL_CLIENT_ID), self.api_key(CONF_BOL_CLIENT_SECRET)
-        token_url, api_url = source_url("bol_api_token"), source_url("bol_api")
+    def partner_api(self) -> PartnerApi | None:
+        """The partner shop's own API when the user entered partner credentials (else: scraping)."""
+        cid, secret = self.api_key(CONF_PARTNER_CLIENT_ID), self.api_key(CONF_PARTNER_CLIENT_SECRET)
+        token_url, api_url = source_url("partner_api_token"), source_url("partner_api")
         if not (cid and secret and token_url and api_url):     # source_url: only with shop settings + accepted terms
             return None
-        if self._bol_api is None:
-            self._bol_api = BolApi(async_get_clientsession(self.hass), cid, secret, self.bol_country,
+        if self._partner_api is None:
+            self._partner_api = PartnerApi(async_get_clientsession(self.hass), cid, secret, self.partner_country,
                                    token_url=token_url, api_url=api_url)
-        return self._bol_api
+        return self._partner_api
 
-    async def _bol_match(self, num: str, url: str | None = None) -> dict[str, Any] | None:
-        """Find the set in the bol.com catalog: title must pass the link check; same product id wins."""
-        found = [p for p in await self.bol_api.search(f"LEGO {num}") if title_check(p["title"], num)[0] == "ok"]
+    async def _partner_match(self, num: str, url: str | None = None) -> dict[str, Any] | None:
+        """Find the set in the partner shop's catalog: title must pass the link check; same product id wins."""
+        found = [p for p in await self.partner_api.search(f"LEGO {num}") if title_check(p["title"], num)[0] == "ok"]
         pid = re.search(r"/(\d{13,17})/?", url or "")
         for p in found:
             if pid and p.get("url") and pid.group(1) in p["url"]:
@@ -766,36 +773,36 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return found[0] if found else None
 
     async def _discover(self, rid: str, num: str, force: bool = False, url: str | None = None) -> str | None:
-        if rid == "bol" and self.bol_api:
+        if reader_of(rid) == "partner" and self.partner_api:
             try:
-                match = await self._bol_match(num)
-            except BolApiError as err:
-                self.log("error", "discover", str(err), set_number=num, retailer=rid, source="bol.com API")
+                match = await self._partner_match(num)
+            except PartnerApiError as err:
+                self.log("error", "discover", str(err), set_number=num, retailer=rid, source="partner_api")
                 return None
             if not match:
                 return None
-            self._bol_found[num] = match
-            return match.get("url") or bol_site_url(f"{site_root(rid)}/nl/nl/s/?searchtext={match['ean']}")
+            self._partner_found[num] = match
+            return match.get("url") or partner_site_url(f"{site_root(rid)}/nl/nl/s/?searchtext={match['ean']}")
         skip = set(self.store.get("rejected", {}).get(num, []))
         return await self.fetcher.discover(rid, num, force=force, url=url, skip=skip)
 
     async def _fetch(self, rid: str, offer: dict[str, Any], num: str, force: bool = False) -> tuple[Any, str | None]:
         if compare.is_compare_url(offer.get("url")):
             return None, T("no comparison-site price for this shop")
-        if rid == "bol" and self.bol_api:
+        if reader_of(rid) == "partner" and self.partner_api:
             try:
                 ean, title, image = offer.get("ean"), offer.get("title"), None
                 if not ean:
-                    match = self._bol_found.pop(num, None) or await self._bol_match(num, offer.get("url"))
+                    match = self._partner_found.pop(num, None) or await self._partner_match(num, offer.get("url"))
                     if not match:
-                        return None, T("bol.com API: set not found in the catalog")
+                        return None, T("Partner API: set not found in the catalog")
                     ean, title, image = match["ean"], match["title"], match.get("image")
                     offer["ean"] = ean
                     if num in self.store["sets"] and str(ean).isdigit():
-                        self.store["sets"][num].setdefault("ean", str(ean).zfill(13))   # also used by Producthero
-                price = await self.bol_api.best_price(ean)
+                        self.store["sets"][num].setdefault("ean", str(ean).zfill(13))   # also used by comparison sites
+                price = await self.partner_api.best_price(ean)
                 return Parsed(price=price, title=title, image=image, unavailable=price is None), None
-            except BolApiError as err:
+            except PartnerApiError as err:
                 return None, str(err)
         return await self.fetcher.fetch_offer(rid, offer["url"], force=force)
 
@@ -876,7 +883,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def market_tick(self, _now: Any = None) -> None:
         """Every minute: when it is time, the market value of the set that waited longest. All sets are
         spread over the whole day (one set every 24 h / number of sets, at least 2 minutes apart)."""
-        src, now = "brickeconomy", time.time()
+        src, now = MARKET, time.time()
         if not self.market_enabled or getattr(self, "_market_busy", False) or now < getattr(self, "_market_next", 0) \
                 or self.fetcher.cooldown_left(src) > 0 or not self.store["sets"]:
             return
@@ -905,31 +912,44 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.push_update()
         self.entry.async_create_background_task(self.hass, run(), f"{DOMAIN}_market_{num}")
 
-    OLD_SOURCE_HOSTS = ("brickwatch.net",)       # sources that were removed: keep their data, drop every link
-
-    OLD_MARKET_LABEL, MARKET_LABEL = "BrickEconomy", "Market value"
+    MARKET_LABEL = "Market value"
 
     def _rename_market_source(self) -> None:
-        """Data stored before 0.9.19 names the market value source; it is shown as 'Market value' now."""
-        old, new = self.OLD_MARKET_LABEL, self.MARKET_LABEL
+        """Data stored by earlier versions uses the identifiers of then (data/previous_shop_settings.json, "legacy"):
+        the sources of set data, the market value source and its stored data get their current names."""
+        old = legacy()
+        names = {**(old.get("sources") or {}), **(old.get("labels") or {})}
+        for oid, nid in (old.get("compare_ids") or {}).items():          # stored comparison data and pauses
+            comp = self.store.setdefault("compare", {})
+            if oid in comp:
+                comp.setdefault(nid, {}).update(comp.pop(oid))
+            for part in (self.store.get("cooldowns") or {}).values():
+                if isinstance(part, dict) and oid in part:
+                    part[nid] = part.pop(oid)
+
+        def new_name(v: Any) -> Any:
+            if not isinstance(v, str) or not names:
+                return v
+            return "+".join(names.get(p, p) for p in v.split("+"))
         for rec in [*self.store["sets"].values(), *self.store["collection"].values()]:
             for k, v in list(rec.items()):
-                if v == old and k.endswith("source"):
-                    rec[k] = new
-            if isinstance(rec.get("market"), dict) and rec["market"].get("source") == old:
-                rec["market"]["source"] = new
+                if k.endswith("source") and (nv := new_name(v)) != v:
+                    rec[k] = nv
+            if isinstance(rec.get("market"), dict) and (nv := new_name(rec["market"].get("source"))) != rec["market"].get("source"):
+                rec["market"]["source"] = nv
         for e in self.store.get("activity", []):
-            if e.get("source") == old:
-                e["source"] = new
-            if old in (e.get("message") or ""):
-                e["message"] = e["message"].replace(old, new)
-        for e in (self.store.get("compare", {}).get("brickeconomy") or {}).values():
-            if e.get("name") == old:
-                e["name"] = new
+            if (nv := new_name(e.get("source"))) != e.get("source"):
+                e["source"] = nv
+            for ol, nl in (old.get("labels") or {}).items():           # a source's old name in the words of the log
+                if ol in (e.get("message") or ""):
+                    e["message"] = e["message"].replace(ol, nl)
+        for e in (self.store.get("compare", {}).get(MARKET) or {}).values():
+            if (nv := new_name(e.get("name"))) != e.get("name"):
+                e["name"] = nv
 
     def _fix_lego_rrp(self) -> None:
-        """Once (1.0.0): earlier versions took every LEGO.com price as the RRP, so a promotion could become it.
-        A promotion is always below the regular price, so the regular price is the highest price LEGO.com showed
+        """Once (1.0.0): earlier versions took every price of the official shop as the RRP, so a promotion could become it.
+        A promotion is always below the regular price, so the regular price is the highest price the official shop showed
         at least twice (or the only price it showed). The RRP is only ever raised to it, never lowered: a
         promotion that was checked more often than the regular price can't replace a correct RRP. Your own RRPs
         are left alone."""
@@ -939,7 +959,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for num, s in self.store["sets"].items():
             o = (self.store["offers"].get(num) or {}).get("lego_com") or {}
             prices = [round(float(p), 2) for _, p in o.get("history") or [] if p]
-            if s.get("rrp_source") != "LEGO.com" or not prices:
+            if s.get("rrp_source") != OFFICIAL or not prices:
                 continue
             count: dict[float, int] = {}
             for p in prices:
@@ -947,37 +967,50 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             seen_twice = [p for p, n in count.items() if n >= 2]
             regular = max(seen_twice) if seen_twice else max(prices) if len(count) == 1 else None
             if regular is not None and (s.get("rrp") is None or regular - float(s["rrp"]) >= 0.01):
-                self.log("info", "meta", T("RRP corrected: €{old} → €{new} (the regular LEGO.com price, not a promotion)",
+                self.log("info", "meta", T("RRP corrected: €{old} → €{new} (the regular price of the official shop, not a promotion)",
                                            old=f"{float(s.get('rrp') or 0):.2f}", new=f"{regular:.2f}"), set_number=num, source="server")
                 s["rrp"] = regular
                 fixed += 1
         self.store["rrp_fixed"] = 1
 
-    AMAZON_NO_PRICE = ("price not found on the page",)
+    MARKETPLACE_NO_PRICE = ("price not found on the page",)
 
-    def _amazon_no_price_is_out_of_stock(self) -> None:
-        """An Amazon page without a price means not in stock, never an error (since 0.10.0). Errors stored by
+    def _marketplace_no_price_is_out_of_stock(self) -> None:
+        """A marketplace page without a price means not in stock, never an error (since 0.10.0). Errors stored by
         earlier versions become that warning at every start; they leave Open errors without counting as solved."""
-        from .parsers import is_amazon
+        from .parsers import is_marketplace
 
         track = (self.store.get("err_track") or {}).get("open") or {}
         moved = 0
         for num, offers in self.store["offers"].items():
             for rid, o in offers.items():
-                if is_amazon(rid) and o.get("error") in self.AMAZON_NO_PRICE and not o.get("manual_price"):
+                if is_marketplace(rid) and o.get("error") in self.MARKETPLACE_NO_PRICE and not o.get("manual_price"):
                     o.update(error=None, available=False, unavailable="sold_out")
                     o.pop("ignored_error", None)
                     track.pop(f"{num}|{rid}", None)
                     moved += 1
         if moved:
-            self.log("info", "shop", T("{n} Amazon pages without a price are now 'not in stock' instead of an error", n=moved), source="server")
+            self.log("info", "shop", T("{n} marketplace pages without a price are now 'not in stock' instead of an error", n=moved), source="server")
 
-    def _bol_links_to_site(self) -> None:
-        """Your bol.com links point at the bol.com site chosen in Settings (bol.com/nl/nl or bol.com/be/nl),
+    def _partner_links_to_site(self) -> None:
+        """Your links of the partner shop point at its site chosen in Settings (/nl/nl/ or /be/nl/),
         so prices, links you open and the browser relay all use the same site."""
+        if not (rid := shop_with_reader("partner")):
+            return
         for offers in self.store["offers"].values():
-            if (o := offers.get("bol")) and o.get("url") and (new := bol_site_url(o["url"])) != o["url"]:
+            if (o := offers.get(rid)) and o.get("url") and (new := partner_site_url(o["url"])) != o["url"]:
                 o["url"] = new
+
+    def _fix_piece_counts(self) -> None:
+        """Older imports read a piece count with a thousands separator as its first digits (5.923 became 5).
+        Such a count (below 10 pieces for a set of €15 or more) is removed, so it is looked up again."""
+        for num, s in self.store["sets"].items():
+            p = s.get("pieces")
+            if isinstance(p, (int, float)) and p < 10 and (s.get("rrp") or 0) >= 15 and s.get("pieces_source") != "user":
+                s.pop("pieces")
+                s.pop("pieces_source", None)
+                self.log("info", "meta", T("piece count {old} removed (thousands separator read wrongly); it is looked up again", old=p),
+                         set_number=num, source="server")
 
     def _fix_lost_commas(self) -> None:
         """Older panels used number fields in which some phone keyboards dropped the decimal comma
@@ -1013,12 +1046,16 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 fix(num, e, key, ref * max(1, int(e.get("qty") or 1)) if ref and key == "paid" else ref)
 
     def _drop_old_source_links(self) -> None:
-        """Brickwatch was removed in 0.9.10: its prices and history stay, but no link to it remains
+        """A comparison source removed in 0.9.10: its prices and history stay, but no link to it remains
         (shop links that point to comparison pages of it are removed; real shop links stay)."""
-        old = self.store.pop("brickwatch", None)                  # 0.9.4 layout
-        bw = self.store.setdefault("compare", {}).setdefault("brickwatch", old or {}) if old else \
-            (self.store.get("compare") or {}).get("brickwatch")
-        gone = lambda url: bool(url) and any(h in url for h in self.OLD_SOURCE_HOSTS)   # noqa: E731
+        removed = legacy().get("removed_source") or {}
+        key, hosts = removed.get("key"), tuple(removed.get("hosts") or ())
+        if not key:
+            return
+        old = self.store.pop(key, None)                  # 0.9.4 layout
+        bw = self.store.setdefault("compare", {}).setdefault(key, old or {}) if old else \
+            (self.store.get("compare") or {}).get(key)
+        gone = lambda url: bool(url) and any(h in url for h in hosts)   # noqa: E731
         for entry in (bw or {}).values():
             if gone(entry.get("url")):
                 entry.pop("url", None)
@@ -1059,7 +1096,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         have the set is not asked again within a day, a paused site is skipped (unless forced from the panel)."""
         out: dict[str, dict[str, Any]] = {}
         for src in (sources or self.compare_sources) if ready() else []:
-            if src == "brickeconomy" and not self.market_enabled:      # the market value is switched off
+            if src == MARKET and not self.market_enabled:      # the market value is switched off
                 continue
             try:
                 if (entry := await self._compare_one(src, num, refresh or force, force, retry_missing)):
@@ -1172,9 +1209,11 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _apply_market(self, num: str, s: dict[str, Any], d: dict[str, Any], name: str, now: float) -> None:
         """Market value: set data where empty, the retirement (forecast) date unless you set one yourself,
         and the market value of owned sets (new, or used for opened / built sets) as their value."""
-        for key in ("theme", "subtheme", "year", "pieces"):
+        for key in ("theme", "subtheme", "year"):
             if d.get(key) and not s.get(key):
                 s[key] = d[key]
+        if d.get("pieces"):
+            set_pieces(s, d["pieces"], "market", setdb_pieces=self._setdb_pieces(num))
         s["market"] = {k: d.get(k) for k in ("market_new", "market_used", "availability", "retired", "retirement",
                                                "forecast_1y", "forecast_5y")} | {"ts": now, "source": name}
         when = compare.forecast_date(d.get("retired") or d.get("retirement"))
@@ -1305,7 +1344,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def start_refresh(self, force: bool = False) -> dict[str, Any]:
         """Start a background job that fetches the shop prices of every set with a live link (or all sets when
-        comparison sites are on); `force` also includes paused shops and resting LEGO.com pages."""
+        comparison sites are on); `force` also includes paused shops and resting pages of the official shop."""
         live = self._live_retailers(force)
         nums = list(self.store["sets"]) if self.compare_enabled else [
             n for n, offers in self.store["offers"].items()
@@ -1321,7 +1360,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         Writes one 'check' entry to the logbook with a green/red result per shop, plus separate
         'price' entries for changes. A manual price always wins over the automatic one.
-        `wake` (a forced round) also fetches a LEGO.com page that rests because the set is out of the range."""
+        `wake` (a forced round) also fetches a page of the official shop that rests because the set is out of the range."""
         live = retailers if retailers is not None else self._live_retailers(False)
         s = self.store["sets"][num]
         bw_prices: dict[str, dict[str, Any]] = {}
@@ -1344,7 +1383,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                  if o.get("available") and o.get("last_price")}
         for (rid, offer), (parsed, error) in zip(offers, results):
             via = None
-            # LEGO.com says "temporarily unavailable": no new LEGO price, the one we had stays
+            # the official shop says "temporarily unavailable": no new LEGO price, the one we had stays
             held = self._lego_hold(num, offer, parsed) if rid == "lego_com" and not error else None
             retired = rid == "lego_com" and parsed is not None and parsed.unavailable and parsed.reason == "discontinued"
             if held is None and not retired and (bwp := bw_prices.get(rid)) and (error or not parsed or parsed.price is None):
@@ -1435,7 +1474,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def fetch_shop(self, set_number: str, retailer: str, url: str | None = None) -> dict[str, Any]:
         """Panel button per shop: fetch this shop for this set now, also when the shop is paused.
-        Without a link the shop is searched first. LEGO.com also fills in image, RRP and name.
+        Without a link the shop is searched first. The official shop also fills in image, RRP and name.
         url: what you pasted — a product page (becomes the link) or a search page of the shop (searched)."""
         num = normalize_set_number(set_number)
         if num not in self.store["sets"]:
@@ -1463,8 +1502,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.push_update()
                 return {"ok": False, "found": False, "error": reason}
             self._set_discovered(offers, retailer, url)
-            if retailer == "bol" and num in self._bol_found:
-                offers[retailer]["ean"] = self._bol_found[num]["ean"]
+            if reader_of(retailer) == "partner" and num in self._partner_found:
+                offers[retailer]["ean"] = self._partner_found[num]["ean"]
             found = True
             self.log("ok", "discover", T("link found"), set_number=num, retailer=retailer, url=url, source="panel")
         await self.refresh_set(num, [retailer], source="panel", force=True)
@@ -1509,8 +1548,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for rid, url in zip(todo, urls):
             if url and url_key(rid, url) not in rejected:
                 self.store["offers"].setdefault(num, {})[rid] = {"url": url, "history": [], "found": time.time()}
-                if rid == "bol" and num in self._bol_found:
-                    self.store["offers"][num][rid]["ean"] = self._bol_found[num]["ean"]
+                if reader_of(rid) == "partner" and num in self._partner_found:
+                    self.store["offers"][num][rid]["ean"] = self._partner_found[num]["ean"]
                 found += 1
                 self.log("ok", "discover", T("link found"), set_number=num, retailer=rid, url=url)
             elif url:
@@ -1534,7 +1573,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def relay_items(self, limit: int = 40) -> dict[str, Any]:
         """Shop pages the user's own browser should fetch (userscript relay): links that failed on the
-        server or weren't fetched in the last 20 h, oldest first. bol.com via the API is left out."""
+        server or weren't fetched in the last 20 h, oldest first. The partner shop via its API is left out."""
         items: list[tuple[float, dict[str, Any]]] = []
         if self.relay_enabled and ready():          # no shop settings or terms: the browser fetches nothing either
             day = time.time() - 20 * 3600
@@ -1543,7 +1582,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     continue
                 for rid, o in offers.items():
                     if (rid not in self.retailers or rid == "lego_com" or not o.get("url") or o.get("manual_price")
-                            or o.get("link_status") == "rejected" or (rid == "bol" and self.bol_api)):
+                            or o.get("link_status") == "rejected" or (reader_of(rid) == "partner" and self.partner_api)):
                         continue
                     last = o.get("last_ok") or 0
                     if o.get("error") or last < day:
@@ -1568,7 +1607,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "items": [i for _, i in items[:limit]], "total": len(items)}
 
     # ------------------------------------------------------------ product links from shop sitemaps
-    SITEMAP_EXCLUDE = {"lego", "amazon", "bol"}   # readers of shops with huge sitemaps / a search that works
+    SITEMAP_EXCLUDE = {"lego", "marketplace", "partner"}   # readers of shops with huge sitemaps / a search that works
 
     def _note_js(self, rid: str) -> None:
         """Remember shops whose search page is built with JavaScript (the userscript can render it in a tab)."""
@@ -1589,7 +1628,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return url
         ean = str(self.store["sets"].get(num, {}).get("ean") or "")
         tpl = SEARCH.get(rid)
-        if slow and ean.isdigit() and tpl and reader_of(rid) not in ("lego", "bol"):
+        if slow and ean.isdigit() and tpl and reader_of(rid) not in ("lego", "partner"):
             url = await self._discover(rid, num, url=tpl.replace("{query}", ean).replace("{number}", ean))
             if url:
                 self.log("ok", "discover", T("link found by searching the EAN {ean}", ean=ean), set_number=num, retailer=rid, url=url)
@@ -1705,7 +1744,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             priced = any(o.get("available") and o.get("last_price") or o.get("manual_price") for o in offers.values())
             for rid in live_shops:
                 o = offers.get(rid)
-                if rid == "bol" and self.bol_api:
+                if reader_of(rid) == "partner" and self.partner_api:
                     continue
                 base = {"set_number": num, "retailer": rid, "shop": RETAILERS[rid][0]}
                 if o and o.get("url") and not compare.is_compare_url(o["url"]):
@@ -1726,7 +1765,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                                                        "render": rid in self.store.get("shop_js", {})}))
         if self.market_enabled:
             # market values the server can't fetch (paused / errors): last, at most once a day per set
-            src, locale = "brickeconomy", self.opt(self.entry, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE)
+            src, locale = MARKET, self.opt(self.entry, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE)
             paused, tried = self.fetcher.cooldown_left(src) > 0, self.store.setdefault("relay_market", {})
             for num, s in self.store["sets"].items():
                 e = self._cstore(src).get(num) or {}
@@ -1820,7 +1859,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             status, step = int(item.get("status") or 0), max(0, min(compare.MAX_STEPS - 1, int(item.get("step") or 0)))
         except (TypeError, ValueError):
             status, step = 0, 0
-        if src == "brickeconomy":
+        if src == MARKET:
             self.store.setdefault("relay_market", {})[num] = time.time()     # not asked again within a day
         if status == 0:        # the browser couldn't reach it either: log, but don't count it towards a server pause
             self.log("warning", "userscript", T("your browser could not fetch the price either: {error}", error=str(item.get("error") or "")[:120] or "?"),
@@ -1828,7 +1867,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             kind, nxt = "error", None
         else:
             kind, nxt = self.compare_page(src, num, url, status, html, None, step, via="relay")
-        if kind == "ok" and src != "brickeconomy":           # the market value has no shop prices
+        if kind == "ok" and src != MARKET:           # the market value has no shop prices
             self._compare_links(num)
             self._compare_apply_prices(num)
         elif kind == "ok":
@@ -1858,7 +1897,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         name, src = s.get("name"), s.get("name_source")
         if not name or src == "shop":
             return True
-        if src in ("user", "import") or (src and src[0].isupper() or src == "brickset.com" or "+" in (src or "")):
+        if src in ("user", "import", "catalog", setdb.SOURCE, SET_DATA_API, SET_DATA_PAGE, PARTS_API) \
+                or (src and src[0].isupper() or "+" in (src or "")):
             return False
         # names from older versions: replace the ones that look like a shop title
         return bool(re.search(r"\blego\b", name, re.I) or accessory_word(name) or KNOCKOFF_RE.search(name)
@@ -1866,15 +1906,15 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def needs_enrich(self, num: str) -> bool:
         s = self.store["sets"][num]
-        lego_missing = s.get("rrp_source") not in ("LEGO.com", "user") or s.get("image_source") not in ("LEGO.com", "user")
+        lego_missing = s.get("rrp_source") not in (OFFICIAL, "user") or s.get("image_source") not in (OFFICIAL, "user")
         lego_due = lego_missing and time.time() - s.get("lego_checked", 0) > 7 * 86400
         return lego_due or self._name_replaceable(s) or not all(s.get(k) for k in ("theme", "year", "pieces", "image"))
 
     @staticmethod
     def _lego_retired_rest(rid: str, offer: dict[str, Any]) -> bool:
-        """LEGO.com said the set is out of the range ("Product uit handel"): its page is not fetched again for
+        """The official shop said the set is out of the range ("Product uit handel"): its page is not fetched again for
         a month (no prices to get there); ↻ in the set still fetches it. The month counts from the last time
-        LEGO.com confirmed it (`discontinued_at`), so a failed fetch in between doesn't stretch it."""
+        The official shop confirmed it (`discontinued_at`), so a failed fetch in between doesn't stretch it."""
         if rid != "lego_com" or offer.get("unavailable") != "discontinued":
             return False
         since = offer.setdefault("discontinued_at", offer.get("last_checked") or 0)   # offers from before 0.9.23
@@ -1893,7 +1933,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             offer.pop("discontinued_at", None)
 
     def _lego_hold(self, num: str, offer: dict[str, Any], parsed: Any) -> tuple[float, str] | None:
-        """LEGO.com shows the set as temporarily unavailable (sold out, not retired): no new price is taken.
+        """The official shop shows the set as temporarily unavailable (sold out, not retired): no new price is taken.
         The LEGO price is the set's RRP (never a promotion price that happened to be the last one); without an
         RRP, the regular price the page shows ('rrp'). None: nothing to hold."""
         if not (parsed and parsed.unavailable and parsed.reason == "sold_out" and parsed.price is None):
@@ -1904,37 +1944,39 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return (round(float(rrp), 2), "rrp") if rrp else None
 
     def _apply_lego(self, num: str, parsed: Any) -> bool:
-        """LEGO.com is the first source for RRP, image and name. Values the user typed win."""
+        """The official shop is the first source for RRP, image and name. Values the user typed win."""
         s = self.store["sets"][num]
-        before = (s.get("rrp"), s.get("image"), s.get("name"), s.get("retiring"))
-        # the RRP is the regular price LEGO.com shows the first time and stays that: a later promotion (or a
+        before = (s.get("rrp"), s.get("image"), s.get("name"), s.get("retiring"), s.get("pieces"))
+        # the RRP is the regular price the official shop shows the first time and stays that: a later promotion (or a
         # price that changes) never moves it. A value you typed yourself always wins.
-        if parsed.list_price and s.get("rrp_source") not in ("LEGO.com", "user"):
-            s["rrp"], s["rrp_source"] = round(max(parsed.list_price, parsed.price or 0), 2), "LEGO.com"
+        if parsed.list_price and s.get("rrp_source") not in (OFFICIAL, "user"):
+            s["rrp"], s["rrp_source"] = round(max(parsed.list_price, parsed.price or 0), 2), OFFICIAL
         if parsed.list_price and (o := self.store["offers"].get(num, {}).get("lego_com")) and o.get("history"):
-            # LEGO.com never sells far below its own regular price: such points were another product's price
+            # the official shop never sells far below its own regular price: such points were another product's price
             # (older versions read a recommended product on a sold-out page)
             keep = [p for p in o["history"] if p[1] >= parsed.list_price * 0.4]
             if len(keep) != len(o["history"]):
-                self.log("info", "price", T("removed {n} wrong LEGO.com prices (another product on the page)",
+                self.log("info", "price", T("removed {n} wrong prices of the official shop (another product on the page)",
                                             n=len(o["history"]) - len(keep)), set_number=num, retailer="lego_com", source="server")
                 o["history"] = keep
                 if o.get("last_price") is not None and o["last_price"] < parsed.list_price * 0.4:
                     o["last_price"], o["available"] = None, False
         if parsed.image and parsed.image.startswith("https://") and s.get("image_source") != "user":
-            s["image"], s["image_source"] = parsed.image, "LEGO.com"
-        if parsed.title and (self._name_replaceable(s) or s.get("name_source") == "LEGO.com"):
-            s["name"], s["name_source"] = clean_title(parsed.title, num), "LEGO.com"
+            s["image"], s["image_source"] = parsed.image, OFFICIAL
+        if parsed.title and (self._name_replaceable(s) or s.get("name_source") == OFFICIAL):
+            s["name"], s["name_source"] = clean_title(parsed.title, num), OFFICIAL
         if parsed.retiring:
-            s["retiring"], s["retiring_source"] = True, "LEGO.com"
-        elif s.get("retiring_source") == "LEGO.com":
+            s["retiring"], s["retiring_source"] = True, OFFICIAL
+        elif s.get("retiring_source") == OFFICIAL:
             s.pop("retiring", None)
             s.pop("retiring_source", None)
+        if getattr(parsed, "pieces", None):              # the official piece count
+            set_pieces(s, parsed.pieces, OFFICIAL, setdb_pieces=self._setdb_pieces(num))
         s["lego_checked"] = time.time()
-        return before != (s.get("rrp"), s.get("image"), s.get("name"), s.get("retiring"))
+        return before != (s.get("rrp"), s.get("image"), s.get("name"), s.get("retiring"), s.get("pieces"))
 
     async def lego_lookup(self, num: str, force: bool = False, wake: bool = False) -> bool:
-        """Find + read the set's LEGO.com page (also kept as a 'LEGO.com' shop link)."""
+        """Find + read the set's page at the official shop (also kept as the official shop's link)."""
         if not force and self.fetcher.cooldown_left("lego_com") > 0:
             return False
         s = self.store["sets"][num]
@@ -1958,7 +2000,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             offer["title"] = parsed.title[:300]
         held = self._lego_hold(num, offer, parsed) if not error else None
         fetched = held[0] if held else parsed.price if parsed else None
-        if offer.get("manual_price"):                     # your own price wins: only remember what LEGO.com said
+        if offer.get("manual_price"):                     # your own price wins: only remember what the official shop said
             offer["auto_price"], offer["last_checked"], offer["error"] = fetched, time.time(), error
             self._price_choice(num, "lego_com", offer, fetched, "server")
         else:
@@ -1977,16 +2019,16 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def start_enrich(self, all_sets: bool = False) -> dict[str, Any]:
         nums = [n for n in self.store["sets"] if all_sets or self.needs_enrich(n)]
-        has_key = bool(self.opt(self.entry, CONF_BRICKSET_KEY, "") or self.opt(self.entry, CONF_REBRICKABLE_KEY, ""))
+        has_key = bool(self.opt(self.entry, CONF_SET_DATA_KEY, "") or self.opt(self.entry, CONF_PARTS_KEY, ""))
         return self.start_job("enrich", T("Filling in set data"), nums, self.enrich_set,
-                              None if has_key else T("no API key set: public Brickset pages are used"))
+                              None if has_key else T("no API key set: the public set data pages are used"))
 
     async def enrich_set(self, num: str, force: bool = False, wake: bool = False) -> dict[str, int]:
-        """Fill in a set's RRP, image, name and other details from LEGO.com first, then the metadata sources."""
+        """Fill in a set's RRP, image, name and other details from the official shop first, then the metadata sources."""
         s = self.store["sets"][num]
         lego_changed = await self.lego_lookup(num, force=force, wake=wake)       # 1st source: RRP, image, name
-        meta, source = await lookup_metadata(async_get_clientsession(self.hass), self.api_key(CONF_BRICKSET_KEY),
-                                             self.api_key(CONF_REBRICKABLE_KEY), num)
+        meta, source = await lookup_metadata(async_get_clientsession(self.hass), self.api_key(CONF_SET_DATA_KEY),
+                                             self.api_key(CONF_PARTS_KEY), num)
         await asyncio.sleep(1.0)   # be gentle with the metadata sources
         if not meta:
             return {"updated": 1} if lego_changed else {"errors": 1}
@@ -1994,16 +2036,48 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if meta.get("name") and self._name_replaceable(s) and s.get("name") != meta["name"]:
             s["name"], s["name_source"] = meta["name"], source
             changed = True
-        for key in ("theme", "subtheme", "year", "pieces", "image", "rrp", "exit_date"):
+        for key in ("theme", "subtheme", "year", "image", "rrp", "exit_date"):
             if meta.get(key) and not s.get(key):
                 s[key] = meta[key]
                 if key in self.SOURCE_KEYS:
                     s[self.SOURCE_KEYS[key]] = source or "meta"
                 changed = True
+        if meta.get("pieces"):
+            changed |= set_pieces(s, meta["pieces"], (meta.get("_from") or {}).get("pieces") or source or "meta",
+                                  setdb_pieces=self._setdb_pieces(num))
         if changed:
-            self.log("ok", "meta", T("set data filled in from {source}", source=source or "LEGO.com"), set_number=num,
-                     source=(source or "LEGO.com"))
+            self.log("ok", "meta", T("set data filled in from {source}", source=source or OFFICIAL), set_number=num,
+                     source=(source or OFFICIAL))
         return {"updated": 1} if changed else {}
+
+    def start_pieces(self) -> dict[str, Any]:
+        """Manage → piece counts again: look up the piece count of every set in the best source there is
+        (the official count first) and replace counts from a weaker source. A count you typed stays."""
+        if not (self.api_key(CONF_SET_DATA_KEY) or self.api_key(CONF_PARTS_KEY) or source_url("set_data_page") or self.setdb):
+            raise LocalizedError("There is no source for piece counts: add a key under Settings, or a set data source to your shop settings.")
+        session = async_get_clientsession(self.hass)
+
+        async def work(num: str) -> dict[str, int]:
+            s = self.store["sets"].get(num)
+            if s is None or s.get("pieces_source") == "user":
+                return {"skipped": 1}
+            meta, source = await lookup_metadata(session, self.api_key(CONF_SET_DATA_KEY), self.api_key(CONF_PARTS_KEY), num)
+            await asyncio.sleep(1.0)        # be gentle with the metadata sources
+            found = meta.get("pieces")
+            src = (meta.get("_from") or {}).get("pieces") or source
+            if not found and (row := self.setdb.get(num)) and row[setdb.PIECES]:
+                found, src = row[setdb.PIECES], "setdb"
+            if not found:
+                return {"errors": 1}
+            old = s.get("pieces")
+            if set_pieces(s, found, src, setdb_pieces=self._setdb_pieces(num), replace_unknown=True):
+                self.log("ok", "meta", T("piece count {old} → {new} ({source})", old=old or "–", new=s["pieces"], source=src),
+                         set_number=num, source=src)
+                return {"updated": 1}
+            return {}
+
+        nums = sorted(self.store["sets"], key=lambda n: (n not in self.store["collection"], n))
+        return self.start_job("pieces", T("Piece counts"), nums, work)
 
     # ------------------------------------------------------------ update (CSV)
     def start_update(self, nums: list[str], force: bool = False) -> dict[str, Any]:
@@ -2024,7 +2098,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return self.start_job("update", T("Updating collection"), nums, work)
 
     # ---------------------------------------------------------------- settings
-    SECRET_KEYS = (CONF_BRICKSET_KEY, CONF_REBRICKABLE_KEY, CONF_BOL_CLIENT_ID, CONF_BOL_CLIENT_SECRET)
+    SECRET_KEYS = (CONF_SET_DATA_KEY, CONF_PARTS_KEY, CONF_PARTNER_CLIENT_ID, CONF_PARTNER_CLIENT_SECRET)
 
     def api_key(self, key: str) -> str:
         """A stored API key, but only for the address it was entered or used with (never one an imported file chose)."""
@@ -2065,7 +2139,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "cycle_choices": list(CYCLE_CHOICES), "watch_cycle_choices": list(WATCH_CYCLE_CHOICES), "watch_limit": self.watch_limit,
             "dev": {k: self.dev(k) for k in (CONF_DEV_FIXED_TIMES, CONF_DEV_FULL_REFRESH, CONF_DEV_FREE_CYCLE, CONF_DEV_WATCH_UNLIMITED)},
             "language": o.get(CONF_LANGUAGE, DEFAULT_LANGUAGE), "languages": LANGUAGES,
-            "bol_country": self.bol_country, "bol_api": bool(self.bol_api),
+            "partner_country": self.partner_country, "partner_api": bool(self.partner_api),
             "browser_relay": bool(o.get(CONF_RELAY, True)), "compare": self.compare_enabled,
             "market_value": self.market_enabled, "ticker": self.ticker, "deal_filter": self.deal_filter,
             "catalog_scan": self.scan_per_day, "scan_choices": list(scan.PER_DAY_CHOICES),
@@ -2143,7 +2217,6 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if key in fields:
                 opts[key] = bool(fields[key])
         if CONF_COMPARE in fields:
-            opts.pop(CONF_COMPARE_OLD, None)
             opts.pop("compare", None)                       # the option's name before 0.9.19
         for key in (CONF_BLOCK_WORDS, CONF_ALLOW_WORDS):
             if key in fields:
@@ -2190,7 +2263,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for key in self.SECRET_KEYS:          # None/absent = keep, "" = clear
             if fields.get(key) is not None:
                 val = str(fields[key]).strip()
-                if val and not re.fullmatch(r"[A-Za-z0-9_\-]{8,128}" if key in (CONF_BRICKSET_KEY, CONF_REBRICKABLE_KEY) else r"[\x21-\x7e]{8,256}", val):
+                if val and not re.fullmatch(r"[A-Za-z0-9_\-]{8,128}" if key in (CONF_SET_DATA_KEY, CONF_PARTS_KEY) else r"[\x21-\x7e]{8,256}", val):
                     raise LocalizedError("{field}: invalid key", field=key)
                 opts[key] = val
                 hosts = dict(opts.get(CONF_KEY_HOSTS) or {})   # a key you enter belongs to the addresses in force now
@@ -2247,16 +2320,16 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if fields["language"] != "auto" and fields["language"] not in LANGUAGES:
                 raise LocalizedError("Unknown language")
             opts[CONF_LANGUAGE] = fields["language"]
-        if "bol_country" in fields:
-            if str(fields["bol_country"]) not in ("auto", "NL", "BE"):
-                raise LocalizedError("{field}: invalid value", field="bol_country")
-            opts[CONF_BOL_COUNTRY] = str(fields["bol_country"])
+        if "partner_country" in fields:
+            if str(fields["partner_country"]) not in ("auto", "NL", "BE"):
+                raise LocalizedError("{field}: invalid value", field="partner_country")
+            opts[CONF_PARTNER_COUNTRY] = str(fields["partner_country"])
         if "relay_hours" in fields:
             num(CONF_RELAY_HOURS, 1, 168)
         if "lego_locale" in fields:
             loc = str(fields["lego_locale"] or "").strip().lower()
             if not re.fullmatch(r"[a-z]{2}-[a-z]{2}", loc):
-                raise LocalizedError("LEGO.com country like en-gb, nl-be, de-de")
+                raise LocalizedError("country of the official shop like en-gb, nl-be, de-de")
             opts[CONF_LEGO_LOCALE] = loc
         valid_ids = set(RETAILERS) | {s["id"] for s in opts.get(CONF_CUSTOM_SHOPS, [])}
         if "retailers" in fields:
@@ -2271,19 +2344,19 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             opts[CONF_NO_AUTOPAUSE] = [r for r in fields["no_autopause"] if r in valid_ids]
         return opts
 
-    async def test_bol(self, client_id: str | None = None, secret: str | None = None) -> tuple[bool, str]:
-        """Settings test button: log in and look up set 10281 in the bol.com catalog."""
-        cid = client_id or self.api_key(CONF_BOL_CLIENT_ID)        # typed in now, or stored for these addresses
-        sec = secret or self.api_key(CONF_BOL_CLIENT_SECRET)
+    async def test_partner(self, client_id: str | None = None, secret: str | None = None) -> tuple[bool, str]:
+        """Settings test button: log in and look up set 10281 in the partner shop's catalog."""
+        cid = client_id or self.api_key(CONF_PARTNER_CLIENT_ID)        # typed in now, or stored for these addresses
+        sec = secret or self.api_key(CONF_PARTNER_CLIENT_SECRET)
         if not (cid and sec):
             return False, T("no key entered")
-        token_url, api_url = source_url("bol_api_token"), source_url("bol_api")
+        token_url, api_url = source_url("partner_api_token"), source_url("partner_api")
         if not (token_url and api_url):
             return False, T("this source is not in your shop settings (or their terms are not accepted)")
-        api = BolApi(async_get_clientsession(self.hass), cid, sec, self.bol_country, token_url=token_url, api_url=api_url)
+        api = PartnerApi(async_get_clientsession(self.hass), cid, sec, self.partner_country, token_url=token_url, api_url=api_url)
         try:
             found = [p for p in await api.search("LEGO 10281") if title_check(p["title"], "10281")[0] == "ok"]
-        except BolApiError as err:
+        except PartnerApiError as err:
             return False, str(err)
         if not found:
             return True, T("logged in, but set 10281 was not found")
@@ -2540,11 +2613,11 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         known = catalog.apply(num, s, self.store["offers"].setdefault(num, {}))   # built-in catalogue first
         self._fill_from_setdb(num, s)                                              # then the LEGO set database
         if known and catalog.complete(s):
-            meta, source = {}, "LEGO.com"                     # nothing to look up online
+            meta, source = {}, OFFICIAL                     # nothing to look up online
             self.log("info", "enrich", T("set data from the built-in catalogue"), set_number=num, source="catalog")
         else:
-            meta, source = await lookup_metadata(async_get_clientsession(self.hass), self.api_key(CONF_BRICKSET_KEY),
-                                                 self.api_key(CONF_REBRICKABLE_KEY), num)
+            meta, source = await lookup_metadata(async_get_clientsession(self.hass), self.api_key(CONF_SET_DATA_KEY),
+                                                 self.api_key(CONF_PARTS_KEY), num)
         if name:
             s["name_source"] = "user"
         elif meta.get("name") and self._name_replaceable(s):
@@ -2553,9 +2626,14 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                          "target_price": target_price}.items():
             if val:
                 s[key] = val
-        for key in ("name", "theme", "subtheme", "year", "pieces", "image", "rrp", "exit_date"):
+        if pieces:
+            s["pieces_source"] = "user"
+        for key in ("name", "theme", "subtheme", "year", "image", "rrp", "exit_date"):
             if meta.get(key) and not s.get(key):
                 s[key] = meta[key]
+        if meta.get("pieces"):
+            set_pieces(s, meta["pieces"], (meta.get("_from") or {}).get("pieces") or source or "meta",
+                       setdb_pieces=self._setdb_pieces(num))
         self.store["offers"].setdefault(num, {})
         if owned is not None:
             self.store["collection"][num] = owned
@@ -2587,7 +2665,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 try:
                     await self.refresh_set(num, source="added")
                     if not self.compare_enabled and self.market_enabled:   # refresh_set already did it otherwise
-                        await self.compare_refresh(num, sources=["brickeconomy"])
+                        await self.compare_refresh(num, sources=[MARKET])
                 except Exception:  # noqa: BLE001 - the regular rounds try again
                     _LOGGER.exception("first check failed for %s", num)
                 self._first_current = None
@@ -2606,13 +2684,20 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if known["name"] and not s.get("name"):
             s["name"], s["name_source"] = known["name"], setdb.SOURCE
             changed = True
-        for key in ("theme", "subtheme", "year", "pieces", "image"):
+        for key in ("theme", "subtheme", "year", "image"):
             if known[key] and not s.get(key):
                 s[key] = known[key]
                 if key in self.SOURCE_KEYS:
                     s[self.SOURCE_KEYS[key]] = setdb.SOURCE
                 changed = True
+        if known["pieces"] and not s.get("pieces"):
+            s["pieces"], s["pieces_source"] = known["pieces"], "setdb"
+            changed = True
         return changed
+
+    def _setdb_pieces(self, num: str) -> int | None:
+        row = self.setdb.get(num)
+        return row[setdb.PIECES] if row else None
 
     # ------------------------------------------------------------ the LEGO set database + new sets
     @callback
@@ -2764,7 +2849,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not self.compare_enabled:
             return None
         locale = self.opt(self.entry, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE)
-        srcs = [x for x in scan.PRICE_SOURCES if x in self.compare_sources and self.fetcher.cooldown_left(x) <= 0
+        srcs = [x for x in self.compare_sources if (compare.COMPARE_SITES.get(x) or {}).get("reader") in scan.PRICE_READERS and self.fetcher.cooldown_left(x) <= 0
                 and compare.first_url(x, num, locale, None)]
         if not srcs:
             return None
@@ -2811,8 +2896,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         shop price on a comparison site. A deal is remembered and, the first time or when cheaper, notified."""
         now = time.time()
         e = self.scan.setdefault(num, {})
-        if self.market_enabled and scan.needs_retired_check(e, now) and self.fetcher.cooldown_left("brickeconomy") <= 0:
-            res = await self._scan_page("brickeconomy", num)
+        if self.market_enabled and scan.needs_retired_check(e, now) and self.fetcher.cooldown_left(MARKET) <= 0:
+            res = await self._scan_page(MARKET, num)
             if res is not None:
                 e["rts"] = now
                 d = res.data if res.kind == "data" and res.data else {}
@@ -2935,7 +3020,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     CLEARABLE = {"target_price", "notes", "priority", "retiring", "exit_date", "subtheme", "watch",
                  "name", "theme", "rrp", "pieces", "year", "image"}      # cleared = automatic again
     SOURCE_KEYS = {"name": "name_source", "rrp": "rrp_source", "image": "image_source", "retiring": "retiring_source",
-                   "exit_date": "exit_date_source"}
+                   "exit_date": "exit_date_source", "pieces": "pieces_source"}
 
     @staticmethod
     def _coerce(key: str, typ: type, value: Any) -> Any:
@@ -3061,7 +3146,9 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             s["image_source"] = "user"
         if "theme" in clean_set:
             s["theme_source"] = "user"
-        if refill and not self.job_running:     # cleared by the user: let LEGO.com/Brickset fill it again
+        if "pieces" in clean_set:
+            s["pieces_source"] = "user"
+        if refill and not self.job_running:     # cleared by the user: let the official shop / set data fill it again
             s.pop("lego_checked", None)
             self.entry.async_create_background_task(self.hass, self._refill(num), f"{DOMAIN}_refill_{num}")
         if fields.get("owned") is False:
@@ -3083,6 +3170,114 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else:
                 entry.update(clean_coll)
         self.push_update()
+
+    BULK_FIELDS = ("location", "notes", "added", "condition", "sold")
+
+    def bulk_change(self, set_numbers: list[str], field: str, value: Any = "", *, append: bool = False,
+                    price: Any = None, sold_on: str = "", which: str = "all") -> dict[str, Any]:
+        """Edit all → Bulk change: one field for every copy of the chosen sets of your collection (location, notes,
+        purchase date or condition), or sell them. A sold copy leaves the collection and is kept in the sold
+        ledger; a set without copies left is no longer tracked unless it is on your watchlist on purpose.
+        Every set is checked on its own: a set with a wrong value is reported and left as it was."""
+        if field not in self.BULK_FIELDS:
+            raise LocalizedError("Unknown field {field}.", field=field)
+        sale_price = None
+        if field == "sold":
+            if price not in (None, ""):
+                raw = str(price).strip().replace("€", "").replace(",", ".")
+                sale_price = round(self._coerce("paid", float, raw), 2)
+            sold_on = (sold_on or today_iso()).strip()
+            self._coerce("added", str, sold_on)            # a valid date, not in the future
+        done, errors, removed = 0, {}, []
+        statuses = (self.data or self.compute())["statuses"]
+        for raw_num in set_numbers:
+            num = normalize_set_number(raw_num)
+            entry = self.store["collection"].get(num)
+            if entry is None:
+                errors[num] = T("Set {number} is not in your collection.", number=num)
+                continue
+            try:
+                items = [dict(c) for c in copies(entry)]
+                if field == "sold":
+                    s = self.store["sets"].get(num, {})
+                    sell = items if which == "all" else items[:1]
+                    ledger = self.store.setdefault("sold", [])
+                    for i, c in enumerate(sell):
+                        unit, _ = copy_value(c, entry, statuses.get(num, {}), s, self.store.get("value_source") == "import_first")
+                        ledger.append(sold_record(num, c, s, unit, sale_price, sold_on, seq=len(ledger) + i))
+                    del ledger[: max(0, len(ledger) - SOLD_MAX)]
+                    rest = items[len(sell):]
+                    self.log("info", "user", T("sold: {n} copies", n=len(sell)), set_number=num, source="panel")
+                    if rest:
+                        entry["items"] = rest
+                        sync_copies(entry)
+                    else:
+                        self.store["collection"].pop(num, None)
+                        if s.get("watch") is not True:          # sold and not watched on purpose: no longer tracked
+                            for key in ("sets", "offers"):
+                                self.store[key].pop(num, None)
+                            removed.append(num)
+                else:
+                    for c in items:
+                        v = str(value or "").strip()
+                        if field == "notes" and append and v:
+                            v = f"{c['notes']} {v}".strip() if c.get("notes") else v
+                        c[field] = v
+                    entry["items"] = self._clean_copies(items)
+                    sync_copies(entry)
+                    self.log("info", "user", T("details edited: {fields}", fields=field), set_number=num, source="panel")
+                done += 1
+            except ValueError as err:
+                errors[num] = str(err)
+        self.push_update()
+        return {"saved": done, "errors": errors, "removed": removed}
+
+    def _sold(self, rec_id: str) -> dict[str, Any]:
+        for rec in self.store.get("sold") or []:
+            if rec.get("id") == rec_id:
+                return rec
+        raise LocalizedError("This sale is not in the list (any more).")
+
+    def sold_update(self, rec_id: str, price: Any = None, sold_on: str | None = None) -> None:
+        """Change the price or the date of a sale."""
+        rec = self._sold(rec_id)
+        if price is not None:
+            raw = str(price).strip().replace("€", "").replace(",", ".")
+            if raw:
+                rec["price"] = round(self._coerce("paid", float, raw), 2)
+            else:
+                rec.pop("price", None)
+        if sold_on:
+            rec["date"] = self._coerce("added", str, sold_on)
+        self.push_update()
+
+    def sold_delete(self, rec_id: str) -> None:
+        self.store["sold"].remove(self._sold(rec_id))
+        self.push_update()
+
+    async def sold_restore(self, rec_id: str) -> str:
+        """Undo a sale: the copy goes back into your collection (the set is tracked again when it was removed)."""
+        rec = self._sold(rec_id)
+        num = rec["set_number"]
+        if num not in self.store["sets"]:
+            await self.add_set(num, name=rec.get("name"), theme=rec.get("theme"), owned={"qty": 1}, discover=False, watch=False)
+            self.store["collection"].pop(num, None)           # filled with the restored copy below
+        entry = self.store["collection"].get(num)
+        items = [dict(c) for c in copies(entry)] if entry else []
+        items.append({k: rec[k] for k in COPY_FIELDS if rec.get(k) not in (None, "")})
+        new_entry = self.store["collection"].setdefault(num, {"qty": 1})
+        new_entry["items"] = items
+        sync_copies(new_entry)
+        self.store["sold"].remove(rec)
+        self.log("info", "user", T("sale undone"), set_number=num, source="panel")
+        self.push_update()
+        return num
+
+    def sold_info(self, basis: str = "paid") -> dict[str, Any]:
+        return sold_summary(self.store, basis)
+
+    def investments(self, basis: str = "paid") -> dict[str, Any]:
+        return investment_report(self.store, (self.data or self.compute())["statuses"], basis)
 
     async def _refill(self, num: str) -> None:
         try:
@@ -3187,7 +3382,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.log("error", "userscript", warn, set_number=num, retailer=retailer, url=url, price=price, source=source)
             raise ValueError(warn)   # already English (panel translates)
         offer = self.store["offers"][num][retailer]
-        if title:   # the userscript sends the page title: lets the link check judge Amazon links too
+        if title:   # the userscript sends the page title: lets the link check judge marketplace links too
             offer["title"] = title[:300]
             offer["link_status"], offer["link_reason"] = link_check(offer, self.store["sets"][num], num)
         before = self.compute()["statuses"].get(num, {})
@@ -3230,6 +3425,8 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     {r: o for r, o in offers.items() if r not in self.store["offers"].get(num, {})})
             for num, e in clean["collection"].items():
                 self.store["collection"].setdefault(num, e)
+            known = {r.get("id") for r in self.store.setdefault("sold", [])}
+            self.store["sold"].extend(r for r in clean["sold"] if r.get("id") not in known)
         else:
             self.store = clean
         self._rename_market_source()          # a backup from before 0.9.19 still has the old label

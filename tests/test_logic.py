@@ -707,7 +707,7 @@ def test_amazon_without_a_price_is_out_of_stock_on_every_amazon_site():
                                                 "search": "https://www.amazon.fr/s?k={query}"}]})
     try:
         rid = shops.shop_id("Amazon FR")
-        assert parsers.is_amazon(rid) and not parsers.is_amazon("bol")
+        assert parsers.is_marketplace(rid) and not parsers.is_marketplace("bol")
         p = parsers.parse_page(rid, page)
         assert p.unavailable and p.reason == "sold_out"
         assert parsers.normalize_url(rid, "B0BX8YQ8M1") == "https://www.amazon.fr/dp/B0BX8YQ8M1"
@@ -724,19 +724,19 @@ def test_bol_com_site_choice_belgium_or_netherlands():
     """bol.com/nl/nl or bol.com/be/nl: only the chosen site is asked (search, links, the same product key)."""
     from lego_pkg import shops
     try:
-        shops.apply_shop_options({"bol_country": "BE"})
-        assert shops.LOCALE["bol"] == "be" and "bol.com/be/nl/" in parsers.search_url("bol", "10280")
-        assert shops.bol_site_url("https://www.bol.com/nl/nl/p/lego-10280/9300000/") == "https://www.bol.com/be/nl/p/lego-10280/9300000/"
+        shops.apply_shop_options({"partner_country": "BE"})
+        assert shops.LOCALE["partner"] == "be" and "bol.com/be/nl/" in parsers.search_url("bol", "10280")
+        assert shops.partner_site_url("https://www.bol.com/nl/nl/p/lego-10280/9300000/") == "https://www.bol.com/be/nl/p/lego-10280/9300000/"
         page = '<a href="/nl/nl/p/lego-icons-10280-bloemenboeket/9300000123/">x</a>'
         assert parsers.find_search_result("bol", page, "10280") == "https://www.bol.com/be/nl/p/lego-icons-10280-bloemenboeket/9300000123/"
         # the same product on both sites is one product (a link you blocked stays blocked)
         assert parsers.url_key("bol", "https://www.bol.com/be/nl/p/x/93/") == parsers.url_key("bol", "https://www.bol.com/nl/nl/p/x/93")
-        shops.apply_shop_options({"bol_country": "NL"})
-        assert shops.LOCALE["bol"] == "nl" and "bol.com/nl/nl/" in parsers.search_url("bol", "10280")
-        shops.apply_shop_options({"bol_country": "auto", "lego_locale": "nl-be"})   # not chosen yet: bol.com/nl/nl, as before
-        assert shops.LOCALE["bol"] == "nl"
+        shops.apply_shop_options({"partner_country": "NL"})
+        assert shops.LOCALE["partner"] == "nl" and "bol.com/nl/nl/" in parsers.search_url("bol", "10280")
+        shops.apply_shop_options({"partner_country": "auto", "lego_locale": "nl-be"})   # not chosen yet: bol.com/nl/nl, as before
+        assert shops.LOCALE["partner"] == "nl"
         # your own search URL for bol.com is kept as you wrote it
-        shops.apply_shop_options({"bol_country": "BE", "shop_search": {"bol": "https://www.bol.com/nl/nl/s/?searchtext={query}&x=1"}})
+        shops.apply_shop_options({"partner_country": "BE", "shop_search": {"bol": "https://www.bol.com/nl/nl/s/?searchtext={query}&x=1"}})
         assert parsers.search_url("bol", "1").startswith("https://www.bol.com/nl/nl/s/")
     finally:
         shops.apply_shop_options({})
@@ -776,7 +776,7 @@ def test_shop_settings_file_is_checked_and_drives_every_address():
     from lego_pkg import compare, shops
     example = json.loads((Path(__file__).parent.parent / "examples" / "lot-shops.example.json").read_text("utf-8"))
     ok = shops.validate_settings(example)
-    assert [s["reader"] for s in ok["shops"]] == ["lego", "amazon", "amazon", "amazon", "bol", "kruidvat", "generic", "generic"]
+    assert [s["reader"] for s in ok["shops"]] == ["lego", "marketplace", "marketplace", "marketplace", "partner", "retail", "generic"]
     for bad, why in ((lambda d: d.update(format="x"), "not a shop settings file"),
                      (lambda d: d.update(version=9), "version 9"),
                      (lambda d: d.update(shops=[]), "no shops"),
@@ -787,8 +787,8 @@ def test_shop_settings_file_is_checked_and_drives_every_address():
                      (lambda d: d["comparison_sites"][0]["start"].update(BE="https://evil.example/?q={query}"), "on one of its hosts"),
                      (lambda d: d["comparison_sites"][3].update(langs="en"), "hosts and start addresses"),
                      (lambda d: d["comparison_sites"][0].update(hosts="www.kieskeurig.be"), "hosts and start addresses"),
-                     (lambda d: d["data_sources"].update(brickset_page="https://brickset.com/sets/"), "must be an https:// address"),
-                     (lambda d: d["data_sources"].update(rebrickable_api="http://rebrickable.com/api"), "must be an https:// address"),
+                     (lambda d: d["data_sources"].update(set_data_page="https://brickset.com/sets/"), "must be an https:// address"),
+                     (lambda d: d["data_sources"].update(parts_api="http://rebrickable.com/api"), "must be an https:// address"),
                      (lambda d: d["data_sources"].update(evil="https://x.example/"), "Unknown data source"),
                      (lambda d: d.update(shops=1), "wrong type"),
                      (lambda d: d.update(comparison_sites={"a": 1}), "wrong type"),
@@ -807,14 +807,103 @@ def test_shop_settings_file_is_checked_and_drives_every_address():
     assert compare.first_url("producthero", "10311", "it-it", "5702017416281") == \
         "https://shopping.producthero.com/en/product/05702017416281?country=it"
     assert compare.first_url("producthero", "10311", "nl-be") is None                 # needs an EAN
-    assert compare.first_url("brickeconomy", "10311") == "https://www.brickeconomy.com/set/10311-1/"
-    assert shops.source_url("brickset_page") == "https://brickset.com/sets/{number}-1" and set(ok["data_sources"]) == set(shops.DATA_SOURCES)
+    assert compare.first_url("market", "10311") == "https://www.brickeconomy.com/set/10311-1/"
+    assert shops.source_url("set_data_page") == "https://brickset.com/sets/{number}-1" and set(ok["data_sources"]) == set(shops.DATA_SOURCES)
     assert compare.is_compare_url("https://www.kieskeurig.nl/x") and compare.shop_retailer("Amazon BE", None, {}) == "amazon_be"
     # without settings: no shops, no comparison sites, no addresses at all
     try:
         shops.raw_apply_shop_options({})
         assert shops.RETAILERS == {} and compare.SOURCES == {} and not shops.ready()
         assert parsers.search_url("amazon_be", "10311") is None and parsers.lego_product_url("10311") is None
-        assert shops.SOURCES == {} and shops.source_url("brickset_api") is None
+        assert shops.SOURCES == {} and shops.source_url("set_data_api") is None
     finally:
         shops.apply_shop_options({})
+
+
+IMPERVA_WALL = """<!DOCTYPE html><html><head><noscript><title>Pardon Our Interruption</title></noscript>
+<meta name="robots" content="noindex, nofollow"><script>window.reeseSkipExpirationCheck = true;
+const isSpa = new URLSearchParams(window.location.search).get('X-SPA') === '1' || window.isImpervaSpaSupport;</script></head>
+<body><div class="container"><h1>Pardon Our Interruption</h1></div></body></html>"""
+
+
+def test_a_bot_protection_wall_is_a_block_not_a_missing_price():
+    """A shop that shows its protection against automated visits (here Imperva, as Smyths Toys does) is blocked:
+    the shop gets paused and is left alone, it is never reported as a page without a price."""
+    for rid in ("smyths_be", "dreamland_be", "kruidvat_be", "bol", "lego_com", "amazon_nl", "c_unknown"):
+        p = parsers.parse_page(rid, IMPERVA_WALL, "10311")
+        assert p.blocked and p.price is None and not p.unavailable, rid
+    assert parsers.bot_wall("<html><title>Just a moment...</title></html>")
+    # a normal product page that merely mentions a captcha (e.g. in a login form) is not a wall
+    ok = ('<html><head><title>LEGO 10311 Orchidee</title><meta property="product:price:amount" content="39.99"></head>'
+          '<body><form class="g-recaptcha">captcha</form></body></html>')
+    assert not parsers.bot_wall(ok) and parsers.parse_page("dreamland_be", ok).price == 39.99
+
+
+def test_piece_count_comes_from_the_best_source():
+    """The official piece count beats a parts count; a count you typed stays; an unknown count is only
+    replaced by Manage → piece counts again, or when it is the set database's own count."""
+    from custom_components.lego_tracker.models import set_pieces
+
+    s = {}
+    assert set_pieces(s, 1000, "setdb") and s == {"pieces": 1000, "pieces_source": "setdb"}
+    assert set_pieces(s, 1010, "parts_api") and s["pieces"] == 1010
+    assert set_pieces(s, 1023, "set_data_page") and s["pieces_source"] == "set_data_page"
+    assert not set_pieces(s, 1000, "parts_api") and s["pieces"] == 1023          # a weaker source never wins
+    assert set_pieces(s, 1024, "official") and s["pieces"] == 1024
+    assert not set_pieces(s, 0, "official") and not set_pieces(s, "x", "official") and not set_pieces(s, 50000, "official")
+    mine = {"pieces": 999, "pieces_source": "user"}
+    assert not set_pieces(mine, 1024, "official", replace_unknown=True) and mine["pieces"] == 999
+    old = {"pieces": 980}                                # from before 1.1: source unknown
+    assert not set_pieces(old, 1024, "set_data_api")
+    assert set_pieces(old, 1024, "set_data_api", setdb_pieces=980)                      # it was the set database's count
+    old2 = {"pieces": 980}
+    assert set_pieces(old2, 1024, "set_data_api", replace_unknown=True) and old2["pieces_source"] == "set_data_api"
+
+
+def test_lego_page_gives_the_official_piece_count():
+    from custom_components.lego_tracker.parsers import parse_lego
+
+    page = ('<link rel="canonical" href="https://www.lego.com/nl-be/product/bonsai-tree-10281">'
+            '<script>{"productCode":"10281","pieceCount":878,"price":{"centAmount":4999},"listPrice":{"centAmount":4999}}'
+            '{"productCode":"10311","pieceCount":608,"price":{"centAmount":4999}}</script>')
+    assert parse_lego(page, "10281").pieces == 878
+    html = ('<link rel="canonical" href="https://www.lego.com/nl-be/product/bonsai-tree-10281">'
+            '<div data-test="pieces-value"><span>1.023</span></div>')
+    assert parse_lego(html, "10281").pieces == 1023
+    assert parse_lego('<div data-test="pieces-value">878</div>', "10281").pieces is None   # not the set's own page
+
+
+async def test_metadata_prefers_the_official_piece_count(monkeypatch):
+    from custom_components.lego_tracker import client
+
+    async def rb(session, key, num):
+        return {"name": "Bonsai", "theme": "Icons", "year": 2021, "pieces": 860, "image": "https://x/i.jpg"}
+
+    async def page(session, num):
+        return {"pieces": 878, "rrp": 49.99}
+
+    monkeypatch.setattr(client, "parts_lookup", rb)
+    monkeypatch.setattr(client, "set_data_page_lookup", page)
+    monkeypatch.setattr(client, "source_url", lambda key: "https://example.test/{number}")
+    meta, source = await client.lookup_metadata(None, "", "key", "10281")
+    assert meta["pieces"] == 878 and meta["_from"]["pieces"] == "set_data_page" and meta["name"] == "Bonsai"
+    assert source == "parts_api+set_data_page"
+
+
+def test_csv_piece_count_with_a_thousands_separator():
+    """5.923, 5,923 and 5 923 are five thousand nine hundred and twenty-three pieces, not 5."""
+    text = "Number;Name;Pieces\n10256;Taj Mahal;5.923\n10270;Bookshop;2,504\n10297;Boutique Hotel;3 066\n10281;Bonsai;878\n"
+    rows, _ = csv_import.parse_collection_csv(text)
+    assert {r["set_number"]: r.get("pieces") for r in rows} == {"10256": 5923, "10270": 2504, "10297": 3066, "10281": 878}
+
+
+def test_a_sale_without_a_known_cost_is_revenue_not_profit():
+    st = models.new_store()
+    st["sold"] = [{"id": "a", "set_number": "10281", "price": 60, "date": "2025-01-01"},
+                  {"id": "b", "set_number": "10311", "price": 50, "paid": 40, "date": "2025-02-01"}]
+    s = models.sold_summary(st)
+    assert s["revenue"] == 110 and s["cost"] == 40 and s["profit"] == 10 and s["by_year"]["2025"]["profit"] == 10
+    with pytest.raises(ValueError):
+        models.validate_backup({"sets": {}, "sold": [{"set_number": "10281", "price": 1}]})      # a sale needs its id
+    with pytest.raises(ValueError, match="invalid copies"):
+        models.validate_backup({"sets": {"10281": {}}, "collection": {"10281": {"qty": 2, "items": [1]}}})

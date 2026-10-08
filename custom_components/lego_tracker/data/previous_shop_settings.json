@@ -23,7 +23,7 @@
       "id": "amazon_nl",
       "name": "Amazon.nl",
       "domain": "amazon.nl",
-      "reader": "amazon",
+      "reader": "marketplace",
       "home": "https://www.amazon.nl/",
       "search": "https://www.amazon.nl/s?k={query}",
       "aliases": [
@@ -36,7 +36,7 @@
       "id": "amazon_de",
       "name": "Amazon.de",
       "domain": "amazon.de",
-      "reader": "amazon",
+      "reader": "marketplace",
       "home": "https://www.amazon.de/",
       "search": "https://www.amazon.de/s?k={query}",
       "aliases": [
@@ -49,7 +49,7 @@
       "id": "amazon_be",
       "name": "Amazon.com.be",
       "domain": "amazon.com.be",
-      "reader": "amazon",
+      "reader": "marketplace",
       "home": "https://www.amazon.com.be/",
       "search": "https://www.amazon.com.be/s?k={query}",
       "aliases": [
@@ -63,7 +63,7 @@
       "id": "bol",
       "name": "bol.com",
       "domain": "bol.com",
-      "reader": "bol",
+      "reader": "partner",
       "home": "https://www.bol.com/nl/nl/",
       "search": "https://www.bol.com/nl/nl/s/?searchtext={query}",
       "aliases": [
@@ -75,7 +75,7 @@
       "id": "kruidvat_be",
       "name": "Kruidvat.be",
       "domain": "kruidvat.be",
-      "reader": "kruidvat",
+      "reader": "retail",
       "home": "https://www.kruidvat.be/nl/",
       "search": "https://www.kruidvat.be/nl/search?text={query}",
       "aliases": [
@@ -93,25 +93,13 @@
         "dreamland.be",
         "dreamland"
       ]
-    },
-    {
-      "id": "smyths_be",
-      "name": "Smyths Toys",
-      "domain": "smythstoys.com",
-      "reader": "generic",
-      "search": "https://www.smythstoys.com/be/nl-be/search?text={number}",
-      "aliases": [
-        "smythstoys.com",
-        "smythstoys",
-        "smyths toys",
-        "smyths"
-      ]
     }
   ],
   "comparison_sites": [
     {
       "id": "kieskeurig",
       "name": "Kieskeurig",
+      "reader": "product_list",
       "hosts": [
         "www.kieskeurig.be",
         "www.kieskeurig.nl"
@@ -124,6 +112,7 @@
     {
       "id": "shoparize",
       "name": "Shoparize",
+      "reader": "listing",
       "hosts": [
         "www.shoparize.com"
       ],
@@ -135,6 +124,7 @@
     {
       "id": "channable",
       "name": "Channable Shopping",
+      "reader": "listing",
       "hosts": [
         "shopping.channable.com"
       ],
@@ -145,6 +135,7 @@
     {
       "id": "producthero",
       "name": "Producthero",
+      "reader": "inertia",
       "hosts": [
         "shopping.producthero.com"
       ],
@@ -161,6 +152,7 @@
     {
       "id": "market_value",
       "name": "Market value",
+      "reader": "market",
       "hosts": [
         "www.brickeconomy.com"
       ],
@@ -170,12 +162,60 @@
     }
   ],
   "data_sources": {
-    "brickset_api": "https://brickset.com/api/v3.asmx/getSets",
-    "brickset_page": "https://brickset.com/sets/{number}-1",
-    "rebrickable_api": "https://rebrickable.com/api/v3/lego",
+    "set_data_api": "https://brickset.com/api/v3.asmx/getSets",
+    "set_data_page": "https://brickset.com/sets/{number}-1",
+    "parts_api": "https://rebrickable.com/api/v3/lego",
     "set_database_sets": "https://cdn.rebrickable.com/media/downloads/sets.csv.gz",
     "set_database_themes": "https://cdn.rebrickable.com/media/downloads/themes.csv.gz",
-    "bol_api_token": "https://login.bol.com/token",
-    "bol_api": "https://api.bol.com/marketing/catalog/v1"
+    "partner_api_token": "https://login.bol.com/token",
+    "partner_api": "https://api.bol.com/marketing/catalog/v1"
+  },
+  "legacy": {
+    "_comment": "Identifiers of versions before 1.1, translated once to the current ones.",
+    "readers": {
+      "amazon": "marketplace",
+      "bol": "partner",
+      "kruidvat": "retail"
+    },
+    "data_sources": {
+      "brickset_api": "set_data_api",
+      "brickset_page": "set_data_page",
+      "rebrickable_api": "parts_api",
+      "bol_api_token": "partner_api_token",
+      "bol_api": "partner_api"
+    },
+    "comparison_readers": {
+      "kieskeurig": "product_list",
+      "producthero": "inertia",
+      "market_value": "market",
+      "shoparize": "listing",
+      "channable": "listing"
+    },
+    "options": {
+      "brickset_api_key": "set_data_api_key",
+      "rebrickable_api_key": "parts_api_key",
+      "bol_client_id": "partner_client_id",
+      "bol_client_secret": "partner_client_secret",
+      "bol_country": "partner_country",
+      "brickwatch": "compare_sites"
+    },
+    "compare_ids": {
+      "brickeconomy": "market"
+    },
+    "sources": {
+      "Brickset": "set_data_api",
+      "brickset.com": "set_data_page",
+      "Rebrickable": "parts_api",
+      "LEGO.com": "official"
+    },
+    "removed_source": {
+      "key": "brickwatch",
+      "hosts": [
+        "brickwatch.net"
+      ]
+    },
+    "labels": {
+      "BrickEconomy": "Market value"
+    }
   }
 }

@@ -57,16 +57,14 @@ def select_sets(store: dict[str, Any], f: dict[str, Any], is_watched: Callable[[
     return out
 
 
-COMPARE_NAMES = {"kieskeurig": "Kieskeurig", "shoparize": "Shoparize", "channable": "Channable Shopping",
-                 "producthero": "Producthero", "brickeconomy": "Market value"}
-
-
 def method(via: str | None, source: str | None) -> str:
     """How the price was read, in words: the shop's own site, a comparison site, or the user's browser."""
+    from .compare import SOURCES
+
     if via in ("relay", "userscript") or source in ("relay", "userscript"):
         return "userscript (your browser)"
-    if via in COMPARE_NAMES:
-        return f"{COMPARE_NAMES[via]} (comparison site)"
+    if via in SOURCES:
+        return f"{SOURCES[via][0]} (comparison site)"
     if source == "panel" or source == "user":
         return "entered by hand"
     return "shop site (direct)"

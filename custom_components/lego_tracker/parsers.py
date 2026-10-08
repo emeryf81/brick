@@ -15,7 +15,7 @@ from urllib.parse import quote_plus, urlparse
 from .const import GENERIC_SHOPS
 from .i18n import T
 from .models import parse_price
-from .shops import BOL_PATH_RE, LOCALE, PROFILE, SEARCH, all_domains, bol_site_url, domain_of, reader_of, site_root
+from .shops import LOCALE, PROFILE, partner_path_re, SEARCH, all_domains, partner_site_url, domain_of, reader_of, site_root
 
 
 @dataclass
@@ -25,9 +25,10 @@ class Parsed:
     image: str | None = None
     blocked: bool = False
     unavailable: bool = False
-    list_price: float | None = None      # LEGO.com: regular price = RRP (price may be a sale price)
+    list_price: float | None = None      # official shop: regular price = RRP (price may be a sale price)
     retiring: bool = False
     reason: str | None = None            # why there is no price: "sold_out" or "discontinued" (no error, a warning)
+    pieces: int | None = None            # official shop: the official piece count of the set
 
 
 # Why a shop page has no price. The structured availability (JSON-LD / schema.org) counts first; the words
@@ -89,10 +90,19 @@ def availability_reason(page: str, set_number: str | None = None) -> str | None:
 
 
 BLOCK_MARKERS = (
-    "api-services-support@amazon", "Type the characters you see", "Voer de tekens in",
+    "api-services-support@", "Type the characters you see", "Voer de tekens in",
     "Geben Sie die Zeichen", "/errors/validateCaptcha", "captcha", "Access Denied",
     "Just a moment...", "Attention Required",
+    "Pardon Our Interruption", "_Incapsula_Resource", "isImpervaSpaSupport", "Incapsula incident ID",
 )
+# a shop's protection against automated visits (a bot protection service): an unmistakable wall page, never
+# a normal product page that merely mentions "captcha" somewhere. Seen on any shop, it means: blocked, leave it alone.
+BOT_WALL_RE = re.compile(r"<title>\s*Pardon Our Interruption|_Incapsula_Resource|isImpervaSpaSupport|Incapsula incident ID"
+                         r"|<title>\s*Just a moment\.\.\.|<title>\s*Attention Required! \| Cloudflare|/cdn-cgi/challenge-platform", re.I)
+
+
+def bot_wall(page: str | None) -> bool:
+    return bool(page) and bool(BOT_WALL_RE.search(page[:60000]))
 
 
 def _jsonld_blocks(page: str):
@@ -160,7 +170,7 @@ def parse_generic(page: str) -> Parsed:
     return Parsed(price, _meta(page, "og:title") or _title(page), _meta(page, "og:image"))
 
 
-def parse_amazon(page: str) -> Parsed:
+def parse_marketplace(page: str) -> Parsed:
     if any(marker.lower() in page[:200000].lower() for marker in BLOCK_MARKERS[:6]):
         return Parsed(None, blocked=True)
     title = None
@@ -171,14 +181,14 @@ def parse_amazon(page: str) -> Parsed:
     m = re.search(r'"hiRes"\s*:\s*"(https:[^"]+)"', page) or re.search(r'id="landingImage"[^>]+src="([^"]+)"', page)
     if m:
         image = m.group(1)
-    price = amazon_buybox_price(page)
+    price = buybox_price(page)
     if price is not None:
         return Parsed(price, title, image)
     unavailable = bool(re.search(r'id="outOfStock"|Momenteel niet verkrijgbaar|Derzeit nicht verfügbar|Currently unavailable', page))
     return Parsed(None, title, image, unavailable=unavailable)
 
 
-AMAZON_BUYBOX_IDS = ("corePriceDisplay_desktop_feature_div", "corePrice_feature_div", "apex_desktop",
+BUYBOX_IDS = ("corePriceDisplay_desktop_feature_div", "corePrice_feature_div", "apex_desktop",
                      "corePrice_desktop", "buybox", "desktop_buybox", "newAccordionRow")
 
 
@@ -194,10 +204,10 @@ def _offscreen_prices(block: str) -> list[float]:
     return out
 
 
-def amazon_buybox_price(page: str) -> float | None:
+def buybox_price(page: str) -> float | None:
     """The price in the buy box, never just the first price on the page (that can be an
     accessory, a unit price, a coupon or a struck-through list price)."""
-    # 1. structured data Amazon ships for the buy box / twister
+    # 1. structured data the marketplace ships for the buy box / twister
     for pat in (r'name="items\[0\.base\]\[customerVisiblePrice\]\[amount\]"\s+value="([\d.]+)"',
                 r'id="twister-plus-price-data-price"\s+value="([\d.]+)"',
                 r'"priceToPay"\s*:\s*\{[^{}]*?"(?:amount|price)"\s*:\s*"?([\d.]+)',
@@ -206,7 +216,7 @@ def amazon_buybox_price(page: str) -> float | None:
         if m and (p := parse_price(float(m.group(1)))):
             return p
     # 2. "price to pay" inside the buy box
-    for bid in AMAZON_BUYBOX_IDS:
+    for bid in BUYBOX_IDS:
         i = page.find(f'id="{bid}"')
         if i < 0:
             continue
@@ -225,7 +235,7 @@ def amazon_buybox_price(page: str) -> float | None:
     return None
 
 
-def parse_bol(page: str) -> Parsed:
+def parse_partner(page: str) -> Parsed:
     if "Access Denied" in page[:2000] or "Just a moment" in page[:3000]:
         return Parsed(None, blocked=True)
     if (p := _from_jsonld(page)) is not None:
@@ -243,7 +253,7 @@ def parse_bol(page: str) -> Parsed:
     return Parsed(price, _meta(page, "og:title") or _title(page), _meta(page, "og:image"), unavailable=unavailable and price is None)
 
 
-def parse_kruidvat(page: str) -> Parsed:
+def parse_retail(page: str) -> Parsed:
     if "Access Denied" in page[:2000]:
         return Parsed(None, blocked=True)
     if (p := _from_jsonld(page)) is not None:
@@ -281,7 +291,7 @@ def _lego_own_page(page: str, num: str | None) -> bool:
 def _lego_product(page: str, num: str | None) -> tuple[float | None, str | None, str | None, bool | None, bool]:
     """(price, name, image, in stock, ambiguous) of the page's own product in JSON-LD: the node for this set
     number, also when it is sold out (then its price is the regular price, not a price you can pay now).
-    LEGO.com does not always put the set number in it (the sku can be its own article number): then the
+    The official shop does not always put the set number in it (the sku can be its own article number): then the
     only Product on the set's own page (canonical URL with the number) is the set. ambiguous: several such
     Products, so it can't tell which one is the set (and no price without the set's own code is safe)."""
     nodes = []
@@ -343,7 +353,7 @@ def _lego_window(page: str, num: str | None, ld_price: float | None, strict: boo
 
 def _lego_text_status(page: str, num: str | None) -> str | None:
     """'discontinued' ("Product uit handel") or 'sold_out' ("Tijdelijk niet beschikbaar") from the words you see
-    on a LEGO.com page, only when they are about this set: on its own page only in its product block (title to
+    on a page of the official shop, only when they are about this set: on its own page only in its product block (title to
     the next heading, before the recommendations); on other pages (search) when this set's number is the number
     closest to the words. Words in scripts don't count (translation bundles hold them on every page)."""
     if not num:
@@ -378,7 +388,7 @@ def _lego_text_status(page: str, num: str | None) -> str | None:
 
 
 def parse_lego(page: str, num: str | None = None) -> Parsed:
-    """LEGO.com product page: JSON-LD + the Next.js/Apollo state (centAmount prices). Only the prices of the
+    """Product page of the official shop: JSON-LD + the Next.js/Apollo state (centAmount prices). Only the prices of the
     product itself count; a sold-out set gives its regular price (RRP) but no price to buy at."""
     if "Access Denied" in page[:3000] or "captcha" in page[:5000].lower():
         return Parsed(None, blocked=True)
@@ -414,31 +424,55 @@ def parse_lego(page: str, num: str | None = None) -> Parsed:
         if own_page and not list_price:                     # the regular price, also when it can't be bought now
             list_price = parse_price(_meta(page, "product:price:amount", "og:price:amount"))
         return Parsed(None, title, image, unavailable=True, list_price=list_price, retiring=bool(LEGO_RETIRING_RE.search(head)),
-                      reason="discontinued" if gone else "sold_out")
+                      reason="discontinued" if gone else "sold_out", pieces=_lego_pieces(state, page, num, own_page))
     if own_page and price is None:                          # the set's own page: its price in the page's meta data
         price = parse_price(_meta(page, "product:price:amount", "og:price:amount"))
         list_price = list_price or price
-    return Parsed(price, title, image, list_price=list_price, retiring=bool(LEGO_RETIRING_RE.search(head)))
+    return Parsed(price, title, image, list_price=list_price, retiring=bool(LEGO_RETIRING_RE.search(head)),
+                  pieces=_lego_pieces(state, page, num, own_page))
+
+
+LEGO_PIECES_JSON_RE = re.compile(r'"pieceCount"\s*:\s*"?(\d{1,5})\b')
+LEGO_PIECES_HTML_RE = re.compile(r'data-test="[^"]*piece[^"]*"[^>]*>(?:\s*<[^>]+>)*\s*(\d{1,2}[.,\u202f\u00a0]?\d{3}|\d{1,4})\s*<', re.I)
+
+
+def _lego_pieces(state: str, page: str, num: str | None, own_page: bool) -> int | None:
+    """The official piece count on a product page of the official shop: from the product's own data (near its code),
+    else, on the set's own page, the piece count shown in the product details."""
+    if num and (m := re.search(rf'"(?:productCode|sku)"\s*:\s*"{re.escape(num)}"', state)):
+        codes = [c.start() for c in re.finditer(r'"productCode"\s*:\s*"', state)]
+        start = max([c + 15 for c in codes if c < m.start()] + [m.start() - 4000, 0])
+        end = min([c for c in codes if c > m.start()] + [m.end() + 4000])
+        if (p := LEGO_PIECES_JSON_RE.search(state, start, end)):
+            return int(p.group(1)) or None
+    if own_page:
+        if len(found := set(LEGO_PIECES_JSON_RE.findall(state))) == 1:
+            return int(found.pop()) or None
+        if (p := LEGO_PIECES_HTML_RE.search(page)):
+            return int(re.sub(r"\D", "", p.group(1))) or None
+    return None
 
 
 def lego_number(url: str | None) -> str | None:
-    """The set number at the end of a LEGO.com product URL (/product/flower-bouquet-10280)."""
+    """The set number at the end of a product URL of the official shop (/product/flower-bouquet-10280)."""
     m = re.search(r"/product/(?:[^/?#]*?-)?(\d{3,7})/?(?:[?#]|$)", url or "")
     return m.group(1) if m else None
 
 
 # how a shop's pages are read: the "reader" of the shop in the shop settings file
-PARSERS = {"amazon": parse_amazon, "bol": parse_bol, "kruidvat": parse_kruidvat}
+PARSERS = {"marketplace": parse_marketplace, "partner": parse_partner, "retail": parse_retail}
 
 
 def parse_page(retailer: str, page: str, set_number: str | None = None) -> Parsed:
+    if bot_wall(page):                             # the shop doesn't want automated visits: blocked, never "no price"
+        return Parsed(None, blocked=True)
     if reader_of(retailer) == "lego":
         return parse_lego(page, set_number)       # never the generic fallback: it may read a recommended product
-    amazon = is_amazon(retailer)
-    parser = parse_amazon if amazon else PARSERS.get(reader_of(retailer), parse_generic)
+    market = is_marketplace(retailer)
+    parser = parse_marketplace if market else PARSERS.get(reader_of(retailer), parse_generic)
     result = parser(page)
-    if amazon and result.price is None and not result.blocked:
-        # an Amazon page without a price in the buy box: not in stock (at Amazon), never an error
+    if market and result.price is None and not result.blocked:
+        # a marketplace page without a price in the buy box: not in stock (there), never an error
         result.unavailable, result.reason = True, "sold_out"
         return result
     if result.price is None and not result.blocked and not result.unavailable:
@@ -453,27 +487,37 @@ def parse_page(retailer: str, page: str, set_number: str | None = None) -> Parse
 
 
 # --------------------------------------------------------------- URL handling
-def is_amazon(retailer: str) -> bool:
-    """Any Amazon site: the built-in ones and a shop you add yourself on amazon.fr, amazon.it, amazon.co.uk..."""
-    if reader_of(retailer) == "amazon":
+def _brand(domain: str) -> str:
+    """The name part of a domain: shop.co.uk, shop.com.be and shop.fr -> 'shop'."""
+    parts = domain.lower().removeprefix("www.").split(".")
+    return parts[-3] if len(parts) >= 3 and parts[-2] in ("co", "com") else parts[-2] if len(parts) >= 2 else parts[0]
+
+
+def is_marketplace(retailer: str) -> bool:
+    """A shop read as "marketplace", also a shop you add yourself on another country site of the same marketplace
+    (same name, other country domain)."""
+    if reader_of(retailer) == "marketplace":
         return True
-    return bool(re.fullmatch(r"(?:www\.)?amazon\.(?:[a-z]{2,3}|com?\.[a-z]{2})", (domain_of(retailer) or "").lower()))
+    dom = domain_of(retailer)
+    if not dom or retailer in PROFILE:
+        return False
+    return any(_brand(dom) == _brand(s["domain"]) for s in PROFILE.values() if s["reader"] == "marketplace")
 
 
-def amazon_url(retailer: str, asin: str) -> str:
+def product_code_url(retailer: str, asin: str) -> str:
     domain = (domain_of(retailer) or "").removeprefix("www.")
     return f"https://www.{domain}/dp/{asin}"
 
 
 def normalize_url(retailer: str, url_or_id: str) -> str:
-    """Accept a full URL, or for Amazon a bare ASIN."""
+    """Accept a full URL, or for a marketplace a bare product code (ASIN)."""
     value = url_or_id.strip()
-    if is_amazon(retailer):
+    if is_marketplace(retailer):
         m = re.search(r"(?:/dp/|/gp/product/|^)(B[0-9A-Z]{9}|\d{9}[\dX])(?:[/?#]|$)", value)
         if m:
-            return amazon_url(retailer, m.group(1))
+            return product_code_url(retailer, m.group(1))
     if not value.startswith("http"):
-        raise ValueError("Provide a full product URL (or an ASIN for Amazon).")
+        raise ValueError("Provide a full product URL (or a product code for a marketplace).")
     host = (urlparse(value).hostname or "").lower().rstrip(".")
     expected = (domain_of(retailer) or "").lower().removeprefix("www.")
     if expected and not (host == expected or host.endswith("." + expected)):      # never 'shop.be.evil.example'
@@ -605,16 +649,18 @@ def is_search_url(url: str | None) -> bool:
 
 
 def slug_title(url: str) -> str | None:
-    """bol/kruidvat URLs carry the product name in the path; Amazon /dp/ URLs do not."""
+    """Many shops carry the product name in the path (/p/<name>/); marketplace /dp/ URLs do not."""
     path = urlparse(url).path
     m = re.search(r"/p/([^/]+)/", path) or re.search(r"/nl/([^/]+)/p/", path)
     return m.group(1).replace("-", " ") if m else None
 
 
 def clean_title(title: str, set_number: str) -> str:
-    """'LEGO Icons 10311 Orchidee, Kunstplanten ... | bol.com' -> 'Orchidee'-ish short name."""
+    """'LEGO Icons 10311 Orchidee, Kunstplanten ... | Shop' -> 'Orchidee'-ish short name."""
     t = htmllib.unescape(title)
-    t = re.split(r"\s[|:]\s|: Amazon|\s-\s(?:Amazon|bol\.com|Kruidvat)", t)[0]
+    t = re.split(r"\s[|:]\s", t)[0]
+    for shop in sorted({n for rid in PROFILE for n in (PROFILE[rid]["name"], _brand(PROFILE[rid]["domain"]))}, key=len, reverse=True):
+        t = re.sub(rf"\s*(?::|\s-)\s*{re.escape(shop)}\S*\s*$", "", t, flags=re.I)     # '... - Shop.nl' at the end
     t = re.sub(rf"(?<!\d){re.escape(set_number)}(?!\d)", "", t)
     t = re.sub(r"\bLEGO\b\s*®?", "", t, flags=re.I)
     t = re.split(r",|\s\(|\s–\s", t)[0]
@@ -622,7 +668,7 @@ def clean_title(title: str, set_number: str) -> str:
     return t[:80] or title[:80]
 
 
-def _amazon_results(page: str) -> list[tuple[str, str]]:
+def _marketplace_results(page: str) -> list[tuple[str, str]]:
     out = []
     for asin, chunk in re.findall(r'data-asin="(B[0-9A-Z]{9})"(.*?)(?=data-asin="B|$)', page, re.S):
         m = (re.search(r"<h2[^>]*>(.*?)</h2>", chunk, re.S) or re.search(r'aria-label="([^"]+)"', chunk)
@@ -636,16 +682,16 @@ def find_search_result(retailer: str, page: str, set_number: str, skip: set[str]
     """First search hit whose *title* passes title_check (set number, LEGO, no accessory/knock-off).
     skip: url_keys of links you blocked for this set; the next good hit is taken instead."""
     ok = lambda u: url_key(retailer, u) not in skip  # noqa: E731
-    if is_amazon(retailer):
-        for asin, title in _amazon_results(page):
-            if title_check(title, set_number)[0] == "ok" and ok(amazon_url(retailer, asin)):
-                return amazon_url(retailer, asin)
-    elif (reader := reader_of(retailer)) == "bol":
+    if is_marketplace(retailer):
+        for asin, title in _marketplace_results(page):
+            if title_check(title, set_number)[0] == "ok" and ok(product_code_url(retailer, asin)):
+                return product_code_url(retailer, asin)
+    elif (reader := reader_of(retailer)) == "partner":
         for href in dict.fromkeys(re.findall(r'href="(/(?:nl|be)/nl/p/[^"]+)"', page)):
-            url = bol_site_url(f"{site_root(retailer)}{href.split('?')[0]}")
+            url = partner_site_url(f"{site_root(retailer)}{href.split('?')[0]}")
             if title_check(f"lego {slug_title(url) or ''}", set_number)[0] == "ok" and ok(url):
                 return url
-    elif reader == "kruidvat":
+    elif reader == "retail":
         for href in dict.fromkeys(re.findall(r'href="(/nl/[^"]*?/p/\d+[^"]*)"', page)):
             url = f"{site_root(retailer)}{href.split('?')[0]}"
             if title_check(slug_title(url), set_number)[0] == "ok" and ok(url):
@@ -664,7 +710,7 @@ def find_search_result(retailer: str, page: str, set_number: str, skip: set[str]
 
 def _generic_result(page: str, domain: str, set_number: str) -> str | None:
     """Any shop: links on the shop's own domain whose link text or URL passes the title check;
-    otherwise the product tile around a link that mentions the set number (shops like Smyths Toys
+    otherwise the product tile around a link that mentions the set number (shops
     link to /p/<their own code> and put the set number elsewhere in the tile)."""
     return _generic_link(page, domain, set_number) or _generic_tile(page, domain, set_number) \
         or _generic_url_text(page, domain, set_number)
@@ -672,7 +718,7 @@ def _generic_result(page: str, domain: str, set_number: str) -> str | None:
 
 def _generic_url_text(page: str, domain: str, set_number: str) -> str | None:
     """A product URL of the shop anywhere in the page, also in the page's own data (JSON, with escaped
-    slashes): shops that build the page with JavaScript (e.g. Smyths Toys) often have the product's
+    slashes): shops that build the page with JavaScript often have the product's
     address only there. The URL itself must name the set (its slug) and pass the title check."""
     text = page.replace("\\u002F", "/").replace("\\/", "/")
     num = re.compile(rf"(?<!\d){re.escape(set_number)}(?!\d)")
@@ -743,8 +789,8 @@ def _generic_link(page: str, domain: str, set_number: str) -> str | None:
     return None
 
 
-def parse_brickset_page(page: str) -> dict:
-    """Best effort metadata from a public brickset.com/sets/<n>-1 page (fallback when no API key)."""
+def parse_set_data_page(page: str) -> dict:
+    """Best effort metadata from the public set page of the set data source (fallback when no API key)."""
     out: dict = {}
     t = _meta(page, "og:title") or _title(page) or ""
     m = re.match(r"\s*\d+-\d+:\s*(.*?)\s*(?:\|.*)?$", t)
@@ -763,7 +809,7 @@ def parse_brickset_page(page: str) -> dict:
         elif key == "year released" and val[:4].isdigit():
             out["year"] = int(val[:4])
         elif key == "pieces" and re.match(r"\d", val):
-            out["pieces"] = int(re.match(r"[\d,]+", val).group(0).replace(",", ""))
+            out["pieces"] = int(re.sub(r"\D", "", re.match(r"\d[\d,.\s]*", val).group(0)))
         elif key == "rrp":
             eur = re.search(r"([\d.,]+)\s*€|€\s*([\d.,]+)", val)
             if eur:
@@ -780,12 +826,12 @@ def retailer_from_url(url: str) -> str | None:
 
 
 def url_key(retailer: str, url: str) -> str:
-    """Stable identity of a product page (ASIN for Amazon, path without query otherwise)."""
-    if is_amazon(retailer):
+    """Stable identity of a product page (product code (ASIN) for a marketplace, path without query otherwise)."""
+    if is_marketplace(retailer):
         m = re.search(r"/(?:dp|gp/product)/([A-Z0-9]{10})", url)
         if m:
             return m.group(1)
-    if reader_of(retailer) == "bol":                   # the same product on bol.com/nl/nl and bol.com/be/nl
-        url = BOL_PATH_RE.sub(r"\1/nl/nl/", url)
+    if reader_of(retailer) == "partner" and (rx := partner_path_re()):   # the same product on /nl/nl/ and /be/nl/
+        url = rx.sub(r"\1/nl/nl/", url)
     parsed = urlparse(url)
     return parsed.path.rstrip("/").lower()

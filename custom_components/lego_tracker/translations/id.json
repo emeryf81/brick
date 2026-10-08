@@ -16,8 +16,8 @@
           "min_history_days": "Riwayat 'terendah'",
           "use_impersonation": "Tiru Chrome",
           "notify_service": "Layanan notify",
-          "brickset_api_key": "Kunci Brickset",
-          "rebrickable_api_key": "Kunci Rebrickable"
+          "set_data_api_key": "Kunci data set",
+          "parts_api_key": "Kunci basis data komponen"
         },
         "data_description": {
           "discount_threshold": "Mulai diskon ini sebuah set dianggap penawaran.",
@@ -31,8 +31,8 @@
           "min_history_days": "Hari harga sebelum 'terendah' dihitung.",
           "use_impersonation": "curl_cffi: jauh lebih sedikit blokir.",
           "notify_service": "Opsional; lebih baik: tab Notifikasi di panel.",
-          "brickset_api_key": "Opsional, gratis.",
-          "rebrickable_api_key": "Opsional, gratis."
+          "set_data_api_key": "Opsional, gratis.",
+          "parts_api_key": "Opsional, gratis."
         }
       }
     },
@@ -60,8 +60,8 @@
           "min_history_days": "Riwayat 'terendah'",
           "use_impersonation": "Tiru Chrome",
           "notify_service": "Layanan notify",
-          "brickset_api_key": "Kunci Brickset",
-          "rebrickable_api_key": "Kunci Rebrickable"
+          "set_data_api_key": "Kunci data set",
+          "parts_api_key": "Kunci basis data komponen"
         },
         "data_description": {
           "discount_threshold": "Mulai diskon ini sebuah set dianggap penawaran.",
@@ -75,8 +75,8 @@
           "min_history_days": "Hari harga sebelum 'terendah' dihitung.",
           "use_impersonation": "curl_cffi: jauh lebih sedikit blokir.",
           "notify_service": "Opsional; lebih baik: tab Notifikasi di panel.",
-          "brickset_api_key": "Opsional, gratis.",
-          "rebrickable_api_key": "Opsional, gratis."
+          "set_data_api_key": "Opsional, gratis.",
+          "parts_api_key": "Opsional, gratis."
         }
       }
     },
