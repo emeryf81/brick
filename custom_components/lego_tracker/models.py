@@ -595,7 +595,7 @@ def sold_summary(store: dict[str, Any], basis: str = "paid") -> dict[str, Any]:
     """Statistics of everything you sold: revenue, profit (against the price paid or the RRP), per year and
     per theme, the best and the worst sales and how long you kept a set."""
     sold = store.get("sold") or []
-    revenue = cost = 0.0
+    revenue = cost = total_profit = 0.0
     by_year: dict[str, dict[str, float]] = {}
     by_theme: dict[str, dict[str, float]] = {}
     rows, held = [], []
@@ -604,7 +604,9 @@ def sold_summary(store: dict[str, Any], basis: str = "paid") -> dict[str, Any]:
         base, est = _basis(r, basis)
         profit = price - base if r.get("price") is not None and base else None
         revenue += price
-        cost += base if r.get("price") is not None else 0
+        if profit is not None:                       # a sale without a known cost counts as revenue, not as profit
+            cost += base
+            total_profit += profit
         y = by_year.setdefault(str(_year_of(r.get("date")) or "?"), {"count": 0, "revenue": 0.0, "profit": 0.0})
         th = by_theme.setdefault(r.get("theme") or "Unknown", {"count": 0, "revenue": 0.0, "profit": 0.0})
         for d in (y, th):
@@ -622,8 +624,8 @@ def sold_summary(store: dict[str, Any], basis: str = "paid") -> dict[str, Any]:
     ranked = sorted((x for x in rows if x["profit"] is not None), key=lambda x: -x["profit"])
     rnd = lambda d: {k: {kk: round(vv, 2) for kk, vv in v.items()} for k, v in d.items()}  # noqa: E731
     return {
-        "count": len(sold), "revenue": round(revenue, 2), "cost": round(cost, 2), "profit": round(revenue - cost, 2),
-        "profit_pct": round((revenue - cost) / cost * 100, 1) if cost else None,
+        "count": len(sold), "revenue": round(revenue, 2), "cost": round(cost, 2), "profit": round(total_profit, 2),
+        "profit_pct": round(total_profit / cost * 100, 1) if cost else None,
         "avg_days_held": round(sum(held) / len(held)) if held else None,
         "by_year": rnd(dict(sorted(by_year.items()))),
         "by_theme": rnd(dict(sorted(by_theme.items(), key=lambda x: -x[1]["profit"]))),
@@ -958,7 +960,7 @@ def validate_backup(data: Any) -> dict[str, Any]:
         if num not in clean["sets"] or not isinstance(e, dict):
             raise LocalizedError("Collection item {number} without a set.", number=num)
     for rec in clean["sold"]:
-        if not isinstance(rec, dict) or not re.fullmatch(r"\d{3,7}", str(rec.get("set_number", ""))) \
+        if not isinstance(rec, dict) or not isinstance(rec.get("id"), str) or not re.fullmatch(r"\d{3,7}", str(rec.get("set_number", ""))) \
                 or not all(rec.get(k) is None or isinstance(rec[k], (int, float)) for k in ("price", "paid", "rrp", "value")):
             raise LocalizedError("Invalid sold set in the backup.")
     return clean

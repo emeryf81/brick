@@ -187,7 +187,7 @@ def health(coord: Any, repair: bool = False) -> list[dict[str, Any]]:
         if repair and fix is not None:
             fix(items)
 
-    add("orphan_offers", [n for n in offers if n not in sets], lambda xs: [offers.pop(n, None) for n in xs])
+    add("orphan_offers", [n for n in offers if n not in sets], None)        # history comes back when the set is added again
     add("orphan_collection", [n for n in coll if n not in sets], None)       # the set may come back from a backup: kept
     add("bad_set_numbers", [n for n in sets if normalize_set_number(n) != n], None)
     gone = sorted({f"{n}/{r}" for n, per in offers.items() for r in per if r not in RETAILERS and r != "lego_com"})
@@ -211,7 +211,7 @@ def health(coord: Any, repair: bool = False) -> list[dict[str, Any]]:
     qty = [n for n, e in coll.items() if e.get("items") and e.get("qty") != len(e["items"])]
     add("quantity_out_of_step", qty, lambda xs: [sync_copies(coll[n]) for n in xs])
     add("suspicious_piece_counts", [f"{n}: {s.get('pieces')}" for n, s in sets.items()
-                                    if s.get("pieces") and (s["pieces"] < 10 and (s.get("rrp") or 0) >= 15 or s["pieces"] > 12000)], None)
+                                    if s.get("pieces") and ((s["pieces"] < 10 and (s.get("rrp") or 0) >= 15) or s["pieces"] > 12000)], None)
     add("suspicious_rrp", [f"{n}: {s.get('rrp')}" for n, s in sets.items() if s.get("rrp") and not 0.5 <= s["rrp"] <= 2000], None)
     add("future_purchase_dates", [n for n, e in coll.items() for c in copies(e)
                                   if c.get("added") and c["added"] > time.strftime("%Y-%m-%d")], None)

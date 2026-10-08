@@ -895,3 +895,13 @@ def test_csv_piece_count_with_a_thousands_separator():
     text = "Number;Name;Pieces\n10256;Taj Mahal;5.923\n10270;Bookshop;2,504\n10297;Boutique Hotel;3 066\n10281;Bonsai;878\n"
     rows, _ = csv_import.parse_collection_csv(text)
     assert {r["set_number"]: r.get("pieces") for r in rows} == {"10256": 5923, "10270": 2504, "10297": 3066, "10281": 878}
+
+
+def test_a_sale_without_a_known_cost_is_revenue_not_profit():
+    st = models.new_store()
+    st["sold"] = [{"id": "a", "set_number": "10281", "price": 60, "date": "2025-01-01"},
+                  {"id": "b", "set_number": "10311", "price": 50, "paid": 40, "date": "2025-02-01"}]
+    s = models.sold_summary(st)
+    assert s["revenue"] == 110 and s["cost"] == 40 and s["profit"] == 10 and s["by_year"]["2025"]["profit"] == 10
+    with pytest.raises(ValueError):
+        models.validate_backup({"sets": {}, "sold": [{"set_number": "10281", "price": 1}]})      # a sale needs its id

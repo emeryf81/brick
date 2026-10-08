@@ -3402,10 +3402,11 @@ async def test_developer_data_check_schedule_jobs_and_sources(hass: HomeAssistan
     await ws.send_json({"id": 1, "type": "lego_tracker/dev/tool", "action": "health"})
     kinds = {f["kind"]: f for f in (await ws.receive_json())["result"]["findings"]}
     assert {"orphan_offers", "unsorted_history", "quantity_out_of_step", "suspicious_piece_counts"} <= set(kinds)
-    assert kinds["orphan_offers"]["repairable"] and not kinds["suspicious_piece_counts"]["repairable"]
+    assert kinds["quantity_out_of_step"]["repairable"] and not kinds["orphan_offers"]["repairable"]
+    assert not kinds["suspicious_piece_counts"]["repairable"]
     await ws.send_json({"id": 2, "type": "lego_tracker/dev/tool", "action": "health", "apply": True})
     await ws.receive_json()
-    assert "99999" not in c.store["offers"] and c.store["collection"]["10281"]["qty"] == 1
+    assert "99999" in c.store["offers"] and c.store["collection"]["10281"]["qty"] == 1      # history is never thrown away
     assert c.store["offers"]["10281"]["amazon_nl"]["history"] == [[100, 31.0], [200, 30.0]]
     assert c.store["sets"]["10281"]["pieces"] == 5                       # not safe to repair: left for you
     c.store["job_history"] = [{"kind": "refresh", "label": "Refreshing prices", "total": 2, "done": 2, "started": 100.0, "finished": 160.0}]
