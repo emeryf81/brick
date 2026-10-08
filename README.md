@@ -318,3 +318,6 @@ node --test tests/test_panel.cjs
 # translations: list missing strings per language
 python scripts/i18n_extract.py
 ```
+
+## License
+MIT, see [`LICENSE`](LICENSE). Trademark and font notes are in [`NOTICE`](NOTICE).
