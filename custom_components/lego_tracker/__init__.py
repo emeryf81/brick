@@ -25,7 +25,7 @@ from .const import (
 from .coordinator import LegoCoordinator
 from .i18n import T
 from .shops import (CONF_KEY_HOSTS, CONF_SETUP_VERSION, CONF_SHOP_PROFILE, apply_shop_options, domain_of, key_hosts,
-                    previous_settings, profile_ids, upgrade_options)
+                    legacy, previous_settings, profile_ids, upgrade_options)
 from .csv_import import analyze_csv, apply_import, importable_rows
 from .models import normalize_set_number
 from .websocket_api import async_register_websocket
@@ -114,6 +114,7 @@ async def _send_digest(hass: HomeAssistant, coord: LegoCoordinator) -> None:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up the coordinator, platforms, panel, services, and scheduled refreshes."""
+    await hass.async_add_executor_job(legacy)                              # read the file of old names off the event loop
     if (upgraded := upgrade_options(dict(entry.options))) is not None:      # names of options before 1.1
         hass.config_entries.async_update_entry(entry, options=upgraded)
     if (previous := previous_settings(dict(entry.options))) is not None:     # an installation from before 1.0.0
