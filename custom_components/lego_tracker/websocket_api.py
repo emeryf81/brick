@@ -52,6 +52,19 @@ def _compare_status(coord) -> dict[str, Any] | None:
             "last": max((v["last"] or 0 for v in out.values()), default=0) or None}
 
 
+def _names() -> dict[str, Any]:
+    """The names of the websites in the imported shop settings, for the panel's texts (the panel itself names none)."""
+    from . import compare
+    from .shops import SOURCES, domain_of, shop_with_reader, source_hosts
+
+    partner, official = shop_with_reader("partner"), shop_with_reader("lego")
+    return {"compare": {k: v[0] for k, v in compare.SOURCES.items()},
+            "readers": {k: compare.COMPARE_SITES[k]["reader"] for k in compare.SOURCES if k in compare.COMPARE_SITES},
+            "partner": {"id": partner, "name": RETAILERS[partner][0], "domain": domain_of(partner)} if partner in RETAILERS else None,
+            "official": RETAILERS[official][0] if official in RETAILERS else None,
+            "hosts": {k: h for k in SOURCES if (h := source_hosts((k,))[0])}}
+
+
 def _card(coord, num: str, with_history: bool = False) -> dict[str, Any]:
     """Build a panel set card with offers and optional price history and comparison data."""
     s = coord.store["sets"][num]
@@ -162,6 +175,7 @@ def ws_overview(hass, connection, msg):
         "threshold": coord.threshold,
         "themes": coord.all_themes(),
         "retailers": {k: v[0] for k, v in RETAILERS.items()},
+        "names": _names(),
         "sets": [_card(coord, n) for n in coord.store["sets"]],
         "summary": (coord.data or coord.compute())["summary"],
         "wishlist": (coord.data or coord.compute())["wishlist"],
