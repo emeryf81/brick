@@ -537,7 +537,13 @@ class LegoTrackerPanel extends HTMLElement {
       // only the userscript in this very page (not another frame or site), and only plain values
       if (e.origin !== location.origin || (e.source && e.source !== window) || !m || typeof m !== "object" || m.source !== "lego-tracker-userscript") return;
       const num = (v) => (Number.isFinite(+v) ? +v : 0), str = (v) => (typeof v === "string" ? v.slice(0, 80) : "");
-      if (m.type === "relay-pong") this.state.relayHere = { version: str(m.version), token: !!m.token, running: !!m.running, last: num(m.last), continuous: !!m.continuous, render: !!m.render };
+      if (m.type === "relay-pong") {
+        const before = (this.state.relayHere || {}).version;
+        this.state.relayHere = { version: str(m.version), token: !!m.token, running: !!m.running, last: num(m.last), continuous: !!m.continuous, render: !!m.render };
+        // the reply usually comes after the userscript page was drawn: show or hide its version warning now
+        const box = this.shadowRoot.getElementById("usold");
+        if (box && before !== this.state.relayHere.version) box.innerHTML = this.oldScriptInner();
+      }
       if (m.type === "continuous-status") {
         this.state.contRun = { on: !!m.on, running: !!m.running, idle: !!m.idle, other_tab: !!m.other_tab, done: num(m.done), ok: num(m.ok), fail: num(m.fail),
           found: num(m.found), next: num(m.next), shop: str(m.shop), set_number: str(m.set_number), error: str(m.error) };
@@ -2130,9 +2136,14 @@ class LegoTrackerPanel extends HTMLElement {
     const ex = tpl.replace("{query}", "LEGO+10281").replace("{number}", "10281").replace("{locale}", locale || "nl-be");
     return `${t("Example")}: <a href="${esc(ex)}" target="_blank" rel="noopener noreferrer">${esc(ex.length > 70 ? ex.slice(0, 70) + "…" : ex)} ↗</a>`;
   }
+  /** A warning when the userscript in this browser is another version than B.R.I.C.K. (it can't update itself from an older address). */
+  oldScriptInner() {
+    const here = this.state.relayHere, d = this.state.data;
+    if (!here || !here.version || !d || here.version === d.version) return "";
+    return `<div class="banner">⚠️ ${t("The userscript in this browser is version {old}, B.R.I.C.K. is version {new}. Install it again with the button below to get the new version.", { old: esc(here.version), new: esc(d.version) })}</div>`;
+  }
   vUserscript() {
     const origin = location.origin, url = `${origin}${this.state.data.userscript_url || ""}`, last = this.state.data.userscript_last;
-    const here = this.state.relayHere, old = here && here.version && here.version !== this.state.data.version;
     const ua = navigator.userAgent, browser = /Edg\//.test(ua) ? "edge" : /Firefox\//.test(ua) ? "firefox" : /Safari\//.test(ua) && !/Chrome\//.test(ua) ? "safari" : "chrome";
     const stores = { chrome: ["Chrome", "https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo"], edge: ["Edge", "https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd"], firefox: ["Firefox", "https://addons.mozilla.org/firefox/addon/tampermonkey/"], safari: ["Safari", "https://www.tampermonkey.net/?browser=safari"] };
     const step = (n, title, body) => `<div class="action" style="--i:${n}"><b><span class="st ok" style="margin-right:6px">${n}</span>${title}</b>${body}</div>`;
@@ -2145,7 +2156,7 @@ class LegoTrackerPanel extends HTMLElement {
       <ol style="margin:0 0 10px;padding-left:20px">${how.map((x) => `<li>${x}</li>`).join("")}</ol><div id="contbox">${this.contBoxInner()}</div></div>
       <div class="panel"><h3>🔁 ${t("Browser relay")}</h3><p>${t("While Home Assistant is open in a browser with the userscript, that browser fetches the shop pages that fail on the server in the background, calmly one by one, and sends the prices to Home Assistant. It runs automatically at most every few hours (Settings), or now with the button.")}</p><div id="relaybox">${this.relayBoxInner()}</div></div>
       <div class="panel"><h3>🧩 ${t("Send prices from your own browser")}</h3><p>${t("Shops block servers, but not your browser. The userscript reads the price and product title on every product page you visit and sends them to Home Assistant. That also works for shops that block servers, and the title helps the link check. Only products that are already tracked (same link or product code) are updated.")}</p>
-      ${old ? `<div class="banner">⚠️ ${t("The userscript in this browser is version {old}, B.R.I.C.K. is version {new}. Install it again with the button below to get the new version.", { old: esc(here.version), new: esc(this.state.data.version) })}</div>` : ""}
+      <div id="usold">${this.oldScriptInner()}</div>
       ${last ? `<div class="banner" style="background:color-mix(in srgb,var(--lt-green) 12%,var(--lt-card));border-color:color-mix(in srgb,var(--lt-green) 40%,transparent)">✅ ${t("Works: last price received {when} (set {number}, {price} at {shop}).", { when: ago(last.ts), number: esc(last.set_number), price: EUR(last.price), shop: esc(this.state.data.retailers[last.retailer] || last.retailer) })} <a data-goto="log/all" style="cursor:pointer">${t("Logbook")} →</a></div>` : `<div class="banner">${t("No price received through the userscript yet.")}</div>`}</div>
       <div class="actions">
       ${step(1, t("Install Tampermonkey"), `<p>${t("Free browser extension. For your browser ({browser}):", { browser: stores[browser][0] })}</p><a class="btn" href="${stores[browser][1]}" target="_blank" rel="noopener noreferrer">${t("Tampermonkey for {browser}", { browser: stores[browser][0] })} ↗</a><p style="font-size:12px">${t("Other browsers:")} ${Object.entries(stores).filter(([k]) => k !== browser).map(([, [n, u]]) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${n}</a>`).join(" · ")}. ${t("In Chrome/Edge also switch on “Allow user scripts” for the extension, or developer mode.")}</p>`)}
