@@ -197,17 +197,27 @@ def validate_settings(data: Any) -> dict[str, Any]:
     return out
 
 
-def previous_settings(options: dict[str, Any]) -> dict[str, Any] | None:
-    """An installation from before version 1.0.0 keeps the shops it used: they are carried over once (the terms
-    still have to be accepted before anything is fetched). New installations start without shops."""
+def read_previous_settings() -> dict[str, Any] | None:
+    """The shop settings of versions before 1.0.0, from data/previous_shop_settings.json (blocking I/O: run it in
+    the executor)."""
     import json
     from pathlib import Path
 
-    if options.get(CONF_SHOP_PROFILE) or options.get(CONF_SETUP_VERSION):
+    try:
+        return json.loads((Path(__file__).parent / "data" / "previous_shop_settings.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def previous_settings(options: dict[str, Any], previous: dict[str, Any] | None) -> dict[str, Any] | None:
+    """An installation from before version 1.0.0 keeps the shops it used: they are carried over once (the terms
+    still have to be accepted before anything is fetched). New installations start without shops. `previous` is
+    what read_previous_settings() returned."""
+    if options.get(CONF_SHOP_PROFILE) or options.get(CONF_SETUP_VERSION) or previous is None:
         return None
     try:
-        return validate_settings(json.loads((Path(__file__).parent / "data" / "previous_shop_settings.json").read_text("utf-8")))
-    except (OSError, ValueError):
+        return validate_settings(previous)
+    except (ValueError, TypeError, AttributeError):
         return None
 
 
@@ -217,12 +227,16 @@ KEY_SOURCES = {"set_data_api_key": ("set_data_api",), "parts_api_key": ("parts_a
                "partner_client_id": ("partner_api_token", "partner_api"), "partner_client_secret": ("partner_api_token", "partner_api")}
 
 
+DROPPED_OPTIONS = ("use_impersonation",)       # options that no longer exist (1.2.3: the Chrome imitation)
+
+
 def upgrade_options(options: dict[str, Any]) -> dict[str, Any] | None:
     """Options of a version before 1.1 with the current names (API keys, the hosts they may go to, the
-    comparison sites in use, the imported settings). None when nothing changes."""
+    comparison sites in use, the imported settings), without options that no longer exist. None when nothing
+    changes."""
     old = legacy()
     names, ids = old.get("options") or {}, old.get("compare_ids") or {}
-    new = {k: v for k, v in options.items() if k not in names}
+    new = {k: v for k, v in options.items() if k not in names and k not in DROPPED_OPTIONS}
     for k, v in options.items():
         if k in names:
             new.setdefault(names[k], v)            # an option under its current name wins over its old name

@@ -8,6 +8,7 @@ import json
 import logging
 import math
 import re
+import secrets
 import time
 from collections.abc import Awaitable, Callable
 from datetime import date, timedelta
@@ -27,7 +28,7 @@ from .const import (
     CONF_COMPARE, CONF_BLOCK_WORDS, CYCLE_CHOICES, CONF_WATCH_CYCLE, WATCH_CYCLE_CHOICES, WATCH_LIMIT,
     FULL_REFRESH_GAP, MANUAL_GAP, CONF_DEAL_MIN_SCORE, CONF_DEAL_ATL, CONF_DEAL_TARGET, DEFAULT_DEAL_MIN_SCORE, CONF_DEV_FIXED_TIMES, CONF_DEV_FULL_REFRESH, CONF_DEV_FREE_CYCLE, CONF_DEV_WATCH_UNLIMITED, CONF_ALLOW_WORDS, CONF_COMPARE_SOURCES, COMPARE_FRESH_HOURS, COMPARE_MISSING_HOURS, COMPARE_NET_ERRORS, COMPARE_PAUSE_HOURS,
     CONF_PARTNER_CLIENT_ID, CONF_PARTNER_CLIENT_SECRET, CONF_PARTNER_COUNTRY, CONF_RELAY, CONF_RELAY_HOURS, DEFAULT_RELAY_HOURS, CONF_MARKET, CONF_TICKER, TICKER_DEFAULT, TICKER_GOOD_SCORE, TICKER_RELOAD, LEGO_RETIRED_REST, CONF_DEAL_FILTER, DEAL_FILTER_DEFAULT, CONF_SCAN,
-    CONF_AUTO_REFRESH, CONF_SET_DATA_KEY, CONF_LANGUAGE, CONF_REFRESH_MODE, CONF_SPREAD_HOURS, DEFAULT_REFRESH_MODE, DEFAULT_SPREAD_HOURS, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, CONF_CUSTOM_SHOPS, CONF_DIGEST_TIME, CONF_NO_AUTOPAUSE, CONF_SHOP_SEARCH, CONF_VALUE_SOURCE, DEFAULT_DIGEST_TIME, GENERIC_SHOPS, CONF_DISCOUNT_THRESHOLD, CONF_PARTS_KEY, CONF_REFRESH_TIMES, CONF_IMPERSONATE, CONF_NOTIFY, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
+    CONF_AUTO_REFRESH, CONF_SET_DATA_KEY, CONF_LANGUAGE, CONF_REFRESH_MODE, CONF_SPREAD_HOURS, DEFAULT_REFRESH_MODE, DEFAULT_SPREAD_HOURS, CONF_LEGO_LOCALE, DEFAULT_LEGO_LOCALE, DEFAULT_SEARCH, CONF_CUSTOM_SHOPS, CONF_DIGEST_TIME, CONF_NO_AUTOPAUSE, CONF_SHOP_SEARCH, CONF_VALUE_SOURCE, DEFAULT_DIGEST_TIME, GENERIC_SHOPS, CONF_DISCOUNT_THRESHOLD, CONF_PARTS_KEY, CONF_REFRESH_TIMES, CONF_NOTIFY, CONF_MIN_HISTORY_DAYS, CONF_RETAILERS,
     DEFAULT_REFRESH_TIMES, DEFAULT_DISCOUNT_THRESHOLD, DEFAULT_MIN_HISTORY_DAYS,
     DOMAIN, EVENT_JOB_DONE, EVENT_HIGH_DISCOUNT, EVENT_NEW_LOW, EVENT_TARGET_HIT, RETAILERS, STORAGE_KEY,
     STORAGE_VERSION,
@@ -48,6 +49,7 @@ from .shops import SEARCH, valid_search
 from .parsers import BUILTIN_WORDS, KNOCKOFF_RE, find_search_result, is_search_url, search_url, accessory_word, set_custom_words, clean_title, normalize_url, retailer_from_url, url_key
 
 _LOGGER = logging.getLogger(__name__)
+USERSCRIPT_KEY = "userscript_key"
 
 
 class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -68,7 +70,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.scan: dict[str, dict[str, Any]] = {}
         self.scan_info: dict[str, Any] = {"busy": False, "next": 0.0, "error": None, "day": "", "today": 0, "src": 0}
         self.store: dict[str, Any] = new_store()
-        self.fetcher = Fetcher(hass, bool(self.opt(entry, CONF_IMPERSONATE, True)))
+        self.fetcher = Fetcher(hass)
         self.fetcher.no_autopause = set(self.opt(entry, CONF_NO_AUTOPAUSE, []) or [])
         self._partner_api: PartnerApi | None = None
         self._partner_found: dict[str, dict[str, Any]] = {}
@@ -122,9 +124,11 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self.hass.async_add_executor_job(catalog.load)
         set_language(self.language)
         set_custom_words(self.opt(self.entry, CONF_BLOCK_WORDS, []), self.opt(self.entry, CONF_ALLOW_WORDS, []))
-        await self.fetcher.async_setup()
         if (data := await self._store.async_load()):
             self.store = {**new_store(), **data}
+        if not isinstance(self.store.get(USERSCRIPT_KEY), str):
+            self.store[USERSCRIPT_KEY] = secrets.token_urlsafe(24)    # the secret part of the userscript's address
+            self._store.async_delay_save(lambda: self.store, 5)
         if (db := await self._setdb_store.async_load()):
             self.setdb = db.get("sets") or {}
             self.setdb_info.update(ts=db.get("ts", 0), count=len(self.setdb))
@@ -2129,7 +2133,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "shop_settings": self.shop_settings_info(),
             "discount_threshold": self.threshold, "min_history_days": int(self.opt(self.entry, CONF_MIN_HISTORY_DAYS, DEFAULT_MIN_HISTORY_DAYS)),
             "auto_refresh": bool(o.get(CONF_AUTO_REFRESH, True)), "refresh_times": ", ".join(f"{h:02d}:{m:02d}" for h, m in self.refresh_times),
-            "digest_time": str(o.get(CONF_DIGEST_TIME, DEFAULT_DIGEST_TIME))[:5], "use_impersonation": bool(o.get(CONF_IMPERSONATE, True)),
+            "digest_time": str(o.get(CONF_DIGEST_TIME, DEFAULT_DIGEST_TIME))[:5],
             "notify_service": o.get(CONF_NOTIFY, "") or "", "value_source": o.get(CONF_VALUE_SOURCE, "shop_first"),
             "keys": {k: {"set": bool(o.get(k)), "masked": mask(o.get(k) or "")} for k in self.SECRET_KEYS},
             "shops": shops, "transport": self.fetcher.transport,
@@ -2212,7 +2216,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     except (TypeError, ValueError) as err:
                         raise LocalizedError("{field}: not a number", field=k) from err
             opts[CONF_TICKER] = tk
-        for key in ("auto_refresh", "use_impersonation", CONF_RELAY, CONF_COMPARE, CONF_MARKET, CONF_DEV_FIXED_TIMES, CONF_DEV_FULL_REFRESH,
+        for key in ("auto_refresh", CONF_RELAY, CONF_COMPARE, CONF_MARKET, CONF_DEV_FIXED_TIMES, CONF_DEV_FULL_REFRESH,
                     CONF_DEV_FREE_CYCLE, CONF_DEV_WATCH_UNLIMITED):
             if key in fields:
                 opts[key] = bool(fields[key])
@@ -3413,7 +3417,15 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return rows_to_csv(collection_rows(self.store, self.compute()["statuses"]), COLLECTION_COLUMNS)
 
     def export_backup(self) -> dict[str, Any]:
-        return {"version": 1, "exported": today_iso(), **copy.deepcopy(self.store)}
+        data = {"version": 1, "exported": today_iso(), **copy.deepcopy(self.store)}
+        data.pop(USERSCRIPT_KEY, None)            # the address of this installation's userscript stays here
+        return data
+
+    @property
+    def userscript_path(self) -> str:
+        """The userscript's address: secret per installation, so Tampermonkey can fetch it without logging in
+        while nobody else can read this installation's address and shops from it."""
+        return f"/api/{DOMAIN}/userscript/{self.store[USERSCRIPT_KEY]}/brick.user.js"
 
     def import_backup(self, data: Any, merge: bool = False) -> dict[str, int]:
         clean = copy.deepcopy(validate_backup(data))
@@ -3428,6 +3440,7 @@ class LegoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             known = {r.get("id") for r in self.store.setdefault("sold", [])}
             self.store["sold"].extend(r for r in clean["sold"] if r.get("id") not in known)
         else:
+            clean[USERSCRIPT_KEY] = self.store[USERSCRIPT_KEY]
             self.store = clean
         self._rename_market_source()          # a backup from before 0.9.19 still has the old label
         self.push_update()

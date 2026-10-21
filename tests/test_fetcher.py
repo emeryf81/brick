@@ -1,4 +1,4 @@
-"""Fetcher against a local server: block cooldown, transports."""
+"""Fetcher against a local server: block cooldown, redirects, oversized pages."""
 import asyncio
 import time
 
@@ -27,13 +27,11 @@ async def server(aiohttp_server):
     return state
 
 
-@pytest.mark.parametrize("impersonate", [True, False])
-async def test_fetch_and_cooldown(hass, server, impersonate):
-    f = Fetcher(hass, impersonate)
+async def test_fetch_and_cooldown(hass, server):
+    f = Fetcher(hass)
     f.min_delay = 0
     f.domain_gap = f.search_gap = 0
-    await f.async_setup()
-    assert f.transport.startswith("curl_cffi") == impersonate
+    assert f.transport == "aiohttp"
     parsed, err = await f.fetch_offer("bol", server["url"])
     assert err is None and parsed.price == 12.34
 
@@ -53,7 +51,7 @@ async def test_fetch_and_cooldown(hass, server, impersonate):
 
 
 async def test_captcha_page_counts_as_block(hass, server):
-    f = Fetcher(hass, False)
+    f = Fetcher(hass)
     f.min_delay = 0
     f.domain_gap = f.search_gap = 0
     server["body"] = "<html>Type the characters you see in this image</html>"
@@ -62,8 +60,7 @@ async def test_captcha_page_counts_as_block(hass, server):
     await f.async_close()
 
 
-@pytest.mark.parametrize("impersonate", [True, False])
-async def test_redirects_stay_on_the_same_site(hass, aiohttp_server, impersonate):
+async def test_redirects_stay_on_the_same_site(hass, aiohttp_server):
     async def handler(request):
         if request.path == "/same":
             raise web.HTTPFound("/p")
@@ -74,10 +71,9 @@ async def test_redirects_stay_on_the_same_site(hass, aiohttp_server, impersonate
     app = web.Application()
     app.router.add_get("/{tail:.*}", handler)
     srv = await aiohttp_server(app)
-    f = Fetcher(hass, impersonate)
+    f = Fetcher(hass)
     f.min_delay = 0
     f.domain_gap = f.search_gap = 0
-    await f.async_setup()
     parsed, err = await f.fetch_offer("bol", str(srv.make_url("/same")))
     assert err is None and parsed.price == 12.34 and f.final_url["bol"].endswith("/p")
     parsed, err = await f.fetch_offer("bol", str(srv.make_url("/away")))
@@ -86,13 +82,12 @@ async def test_redirects_stay_on_the_same_site(hass, aiohttp_server, impersonate
 
 
 async def test_lego_offer_without_set_number_is_refused(hass):
-    f = Fetcher(hass, False)
+    f = Fetcher(hass)
     parsed, err = await f.fetch_offer("lego_com", "https://www.lego.com/nl-be/product/flower-bouquet")
     assert parsed is None and "set number" in err
 
 
-@pytest.mark.parametrize("impersonate", [True, False])
-async def test_oversized_pages_are_refused(hass, aiohttp_server, impersonate, monkeypatch):
+async def test_oversized_pages_are_refused(hass, aiohttp_server, monkeypatch):
     from custom_components.lego_tracker import client
 
     monkeypatch.setattr(client, "MAX_BODY", 5000)
@@ -111,10 +106,9 @@ async def test_oversized_pages_are_refused(hass, aiohttp_server, impersonate, mo
     app = web.Application()
     app.router.add_get("/{tail:.*}", handler)
     srv = await aiohttp_server(app)
-    f = Fetcher(hass, impersonate)
+    f = Fetcher(hass)
     f.min_delay = 0
     f.domain_gap = f.search_gap = 0
-    await f.async_setup()
     parsed, err = await f.fetch_offer("bol", str(srv.make_url("/big")))
     assert parsed is None and "over" in err
     t0 = time.time()                                       # the transfer itself stops: no waiting for 4 s of data
@@ -148,7 +142,7 @@ async def test_bot_wall_on_the_lego_product_page_pauses_the_shop(hass):
     from unittest.mock import AsyncMock
 
     wall = "<html><head><title>Pardon Our Interruption</title><script>window.isImpervaSpaSupport</script></head></html>"
-    f = Fetcher(hass, False)
+    f = Fetcher(hass)
     f.min_delay = 0
     f.domain_gap = f.search_gap = 0
     f._get = AsyncMock(side_effect=[(200, "<html><body>no results</body></html>"), (200, wall)])

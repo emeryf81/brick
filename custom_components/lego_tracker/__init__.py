@@ -23,9 +23,9 @@ from .const import (
     STATIC_URL,
 )
 from .coordinator import LegoCoordinator
-from .i18n import T
+from .i18n import T, preload as i18n_preload
 from .shops import (CONF_KEY_HOSTS, CONF_SETUP_VERSION, CONF_SHOP_PROFILE, apply_shop_options, domain_of, key_hosts,
-                    legacy, previous_settings, profile_ids, upgrade_options)
+                    legacy, previous_settings, profile_ids, read_previous_settings, upgrade_options)
 from .csv_import import analyze_csv, apply_import, importable_rows
 from .models import normalize_set_number
 from .websocket_api import async_register_websocket
@@ -114,10 +114,15 @@ async def _send_digest(hass: HomeAssistant, coord: LegoCoordinator) -> None:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up the coordinator, platforms, panel, services, and scheduled refreshes."""
-    await hass.async_add_executor_job(legacy)                              # read the file of old names off the event loop
+    # files are read in the executor, never in the event loop: the names of earlier versions, the translations
+    await hass.async_add_executor_job(legacy)
+    await hass.async_add_executor_job(i18n_preload)
     if (upgraded := upgrade_options(dict(entry.options))) is not None:      # names of options before 1.1
         hass.config_entries.async_update_entry(entry, options=upgraded)
-    if (previous := previous_settings(dict(entry.options))) is not None:     # an installation from before 1.0.0
+    old_file = None
+    if not (entry.options.get(CONF_SHOP_PROFILE) or entry.options.get(CONF_SETUP_VERSION)):
+        old_file = await hass.async_add_executor_job(read_previous_settings)
+    if (previous := previous_settings(dict(entry.options), old_file)) is not None:     # an installation from before 1.0.0
         # the shops it already knew stay as you set them (installations that never stored them knew the first six
         # shops of that file);
         # shops it didn't know yet are switched on once, as a new shop always was

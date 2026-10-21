@@ -1,6 +1,7 @@
 """Websocket API used by the sidebar panel."""
 from __future__ import annotations
 
+import hmac
 import json
 import re
 import time
@@ -184,7 +185,7 @@ def ws_overview(hass, connection, msg):
         "retailer_stats": coord.retailer_stats(),
         **coord.job_info(),
         "language": coord.language, "languages": _languages(),
-        "userscript_last": coord.store.get("userscript_last"), "relay_last": coord.store.get("relay_last"),
+        "userscript_url": coord.userscript_path, "userscript_last": coord.store.get("userscript_last"), "relay_last": coord.store.get("relay_last"),
         "relay": {"enabled": coord.relay_enabled, "pending": coord.relay_items(100)["total"] if coord.relay_enabled else 0,
                   "continuous": coord.continuous_items(1)["counts"] if coord.relay_enabled else {},
                   "heartbeat": coord.store.get("relay_heartbeat")},
@@ -985,19 +986,24 @@ class RelayView(HomeAssistantView):
 class UserscriptView(HomeAssistantView):
     """Serves a Tampermonkey userscript generated for this HA instance and the configured shops.
 
-    No auth: Tampermonkey fetches it outside HA. It contains no secrets (the token is entered
-    by the user inside Tampermonkey)."""
+    Tampermonkey fetches it (and its updates) without logging in to Home Assistant, so the address carries a
+    random key of this installation instead: without the key there is no script. The script itself holds no
+    secrets (the token is entered by the user inside Tampermonkey)."""
 
-    url = "/api/lego_tracker/lego-tracker.user.js"
+    url = "/api/lego_tracker/userscript/{key}/brick.user.js"
     name = "api:lego_tracker:userscript"
     requires_auth = False
 
-    async def get(self, request: web.Request) -> web.Response:
+    async def get(self, request: web.Request, key: str) -> web.Response:
         from . import VERSION
+        from .coordinator import USERSCRIPT_KEY
         from .i18n import tr
         from .shops import all_domains, readers_by_domain
 
         hass = request.app[KEY_HASS]
+        coord = _coord(hass)
+        if coord is None or not hmac.compare_digest(key.encode(), str(coord.store.get(USERSCRIPT_KEY, "")).encode()):
+            return web.Response(status=404)
         template = await hass.async_add_executor_job(
             (Path(__file__).parent / "userscript.template.js").read_text, "utf-8")
         base = f"{request.scheme}://{request.host}"
@@ -1009,7 +1015,7 @@ class UserscriptView(HomeAssistantView):
         matches += f"\n// @include      {base}/*\n// @include      *://*/{PANEL_URL}*"
         body = (template.replace("{{VERSION}}", VERSION).replace("{{MATCHES}}", matches)
                 .replace("{{READERS}}", json.dumps(readers_by_domain(), sort_keys=True))
-                .replace("{{HA_URL}}", base).replace("{{SELF_URL}}", base + self.url))
+                .replace("{{HA_URL}}", base).replace("{{SELF_URL}}", base + coord.userscript_path))
         # {{t:English}} -> translated text, {{tj:English}} -> translated JS string literal
         body = re.sub(r"\{\{tj:(.+?)\}\}", lambda m: json.dumps(tr(m.group(1))), body)
         body = re.sub(r"\{\{t:(.+?)\}\}", lambda m: tr(m.group(1)), body)

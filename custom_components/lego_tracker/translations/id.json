@@ -14,7 +14,6 @@
           "refresh_times": "Waktu tetap",
           "digest_time": "Ringkasan harian",
           "min_history_days": "Riwayat 'terendah'",
-          "use_impersonation": "Tiru Chrome",
           "notify_service": "Layanan notify",
           "set_data_api_key": "Kunci data set",
           "parts_api_key": "Kunci basis data komponen"
@@ -29,7 +28,6 @@
           "refresh_times": "Mis. 07:30, 19:30.",
           "digest_time": "Waktu ringkasan harian.",
           "min_history_days": "Hari harga sebelum 'terendah' dihitung.",
-          "use_impersonation": "curl_cffi: jauh lebih sedikit blokir.",
           "notify_service": "Opsional; lebih baik: tab Notifikasi di panel.",
           "set_data_api_key": "Opsional, gratis.",
           "parts_api_key": "Opsional, gratis."
@@ -58,7 +56,6 @@
           "refresh_times": "Waktu tetap",
           "digest_time": "Ringkasan harian",
           "min_history_days": "Riwayat 'terendah'",
-          "use_impersonation": "Tiru Chrome",
           "notify_service": "Layanan notify",
           "set_data_api_key": "Kunci data set",
           "parts_api_key": "Kunci basis data komponen"
@@ -73,7 +70,6 @@
           "refresh_times": "Mis. 07:30, 19:30.",
           "digest_time": "Waktu ringkasan harian.",
           "min_history_days": "Hari harga sebelum 'terendah' dihitung.",
-          "use_impersonation": "curl_cffi: jauh lebih sedikit blokir.",
           "notify_service": "Opsional; lebih baik: tab Notifikasi di panel.",
           "set_data_api_key": "Opsional, gratis.",
           "parts_api_key": "Opsional, gratis."

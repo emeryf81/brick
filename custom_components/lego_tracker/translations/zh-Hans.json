@@ -14,7 +14,6 @@
           "refresh_times": "固定时间",
           "digest_time": "每日摘要",
           "min_history_days": "“历史最低”所需历史",
-          "use_impersonation": "模拟 Chrome",
           "notify_service": "通知服务",
           "set_data_api_key": "套装数据密钥",
           "parts_api_key": "零件数据库密钥"
@@ -29,7 +28,6 @@
           "refresh_times": "例如 07:30, 19:30。",
           "digest_time": "每日摘要的时间。",
           "min_history_days": "“历史最低”生效前需要的价格天数。",
-          "use_impersonation": "curl_cffi：大大减少被封锁。",
           "notify_service": "可选；更好的方式是面板中的通知标签。",
           "set_data_api_key": "可选，免费。",
           "parts_api_key": "可选，免费。"
@@ -58,7 +56,6 @@
           "refresh_times": "固定时间",
           "digest_time": "每日摘要",
           "min_history_days": "“历史最低”所需历史",
-          "use_impersonation": "模拟 Chrome",
           "notify_service": "通知服务",
           "set_data_api_key": "套装数据密钥",
           "parts_api_key": "零件数据库密钥"
@@ -73,7 +70,6 @@
           "refresh_times": "例如 07:30, 19:30。",
           "digest_time": "每日摘要的时间。",
           "min_history_days": "“历史最低”生效前需要的价格天数。",
-          "use_impersonation": "curl_cffi：大大减少被封锁。",
           "notify_service": "可选；更好的方式是面板中的通知标签。",
           "set_data_api_key": "可选，免费。",
           "parts_api_key": "可选，免费。"

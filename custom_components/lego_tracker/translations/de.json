@@ -14,7 +14,6 @@
           "refresh_times": "Feste Zeiten",
           "digest_time": "Tägliche Zusammenfassung",
           "min_history_days": "Historie für „Tiefstpreis“",
-          "use_impersonation": "Chrome imitieren",
           "notify_service": "Notify-Dienst",
           "set_data_api_key": "Schlüssel Setdaten",
           "parts_api_key": "Schlüssel Teiledatenbank"
@@ -29,7 +28,6 @@
           "refresh_times": "Z. B. 07:30, 19:30.",
           "digest_time": "Uhrzeit der täglichen Zusammenfassung.",
           "min_history_days": "Tage mit Preisen, bevor „Tiefstpreis“ zählt.",
-          "use_impersonation": "curl_cffi: viel weniger Sperren.",
           "notify_service": "Optional; besser: der Tab Benachrichtigungen im Panel.",
           "set_data_api_key": "Optional, kostenlos.",
           "parts_api_key": "Optional, kostenlos."
@@ -58,7 +56,6 @@
           "refresh_times": "Feste Zeiten",
           "digest_time": "Tägliche Zusammenfassung",
           "min_history_days": "Historie für „Tiefstpreis“",
-          "use_impersonation": "Chrome imitieren",
           "notify_service": "Notify-Dienst",
           "set_data_api_key": "Schlüssel Setdaten",
           "parts_api_key": "Schlüssel Teiledatenbank"
@@ -73,7 +70,6 @@
           "refresh_times": "Z. B. 07:30, 19:30.",
           "digest_time": "Uhrzeit der täglichen Zusammenfassung.",
           "min_history_days": "Tage mit Preisen, bevor „Tiefstpreis“ zählt.",
-          "use_impersonation": "curl_cffi: viel weniger Sperren.",
           "notify_service": "Optional; besser: der Tab Benachrichtigungen im Panel.",
           "set_data_api_key": "Optional, kostenlos.",
           "parts_api_key": "Optional, kostenlos."
