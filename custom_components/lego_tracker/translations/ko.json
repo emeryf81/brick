@@ -14,7 +14,6 @@
           "refresh_times": "고정 시간",
           "digest_time": "일일 요약",
           "min_history_days": "'최저가' 기록 기간",
-          "use_impersonation": "Chrome 흉내",
           "notify_service": "알림 서비스",
           "set_data_api_key": "세트 데이터 키",
           "parts_api_key": "부품 데이터베이스 키"
@@ -29,7 +28,6 @@
           "refresh_times": "예: 07:30, 19:30.",
           "digest_time": "일일 요약 시간.",
           "min_history_days": "'최저가'로 인정되기 전 가격 기록 일수.",
-          "use_impersonation": "curl_cffi: 차단이 훨씬 적습니다.",
           "notify_service": "선택 사항; 패널의 알림 탭이 더 좋습니다.",
           "set_data_api_key": "선택 사항, 무료.",
           "parts_api_key": "선택 사항, 무료."
@@ -58,7 +56,6 @@
           "refresh_times": "고정 시간",
           "digest_time": "일일 요약",
           "min_history_days": "'최저가' 기록 기간",
-          "use_impersonation": "Chrome 흉내",
           "notify_service": "알림 서비스",
           "set_data_api_key": "세트 데이터 키",
           "parts_api_key": "부품 데이터베이스 키"
@@ -73,7 +70,6 @@
           "refresh_times": "예: 07:30, 19:30.",
           "digest_time": "일일 요약 시간.",
           "min_history_days": "'최저가'로 인정되기 전 가격 기록 일수.",
-          "use_impersonation": "curl_cffi: 차단이 훨씬 적습니다.",
           "notify_service": "선택 사항; 패널의 알림 탭이 더 좋습니다.",
           "set_data_api_key": "선택 사항, 무료.",
           "parts_api_key": "선택 사항, 무료."

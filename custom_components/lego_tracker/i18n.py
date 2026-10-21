@@ -25,6 +25,8 @@ CURRENT = {"lang": DEFAULT_LANGUAGE}
 
 
 def load(lang: str) -> dict[str, str]:
+    """The translations of one language. Home Assistant reads them all with preload() in the executor when the
+    integration starts, so tr() never reads a file in the event loop; the read here only serves tests and scripts."""
     if lang == "en" or lang not in LANGUAGES:
         return {}
     if lang not in _CACHE:
@@ -34,6 +36,12 @@ def load(lang: str) -> dict[str, str]:
             _LOGGER.warning("Translation file for %s unavailable: %s", lang, err)
             _CACHE[lang] = {}
     return _CACHE[lang]
+
+
+def preload() -> None:
+    """Read every translation file once (blocking I/O: run it in the executor)."""
+    for lang in LANGUAGES:
+        load(lang)
 
 
 def resolve(lang: str | None, ha_language: str | None = None) -> str:

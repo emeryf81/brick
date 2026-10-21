@@ -94,20 +94,17 @@ def check_url(url: str, home: str) -> None:
 
 # After a block we stop asking that retailer for a while: hammering makes bot protection stricter.
 COOLDOWN_HOURS = (1, 3, 6, 12, 24)
-CURL_REQUIREMENT = "curl_cffi>=0.7.0"
 
 
 class Fetcher:
     """Polite fetcher: one request at a time per retailer, jittered delay, block cooldown.
 
-    Transport is either aiohttp, or curl_cffi impersonating Chrome's TLS/HTTP2 fingerprint
-    (much less likely to be blocked). curl_cffi is installed on demand and is optional.
+    Requests go through Home Assistant's own aiohttp session; the fetcher never disguises itself to get past a
+    shop's protection.
     """
 
-    def __init__(self, hass: Any, use_impersonation: bool = True) -> None:
+    def __init__(self, hass: Any) -> None:
         self._hass = hass
-        self._use_impersonation = use_impersonation
-        self._curl_ok: bool | None = None
         self._sessions: dict[str, Any] = {}
         self._warmed: set[str] = set()
         self._locks: dict[str, asyncio.Lock] = {}
@@ -133,25 +130,7 @@ class Fetcher:
 
     @property
     def transport(self) -> str:
-        return "curl_cffi (Chrome impersonation)" if self._curl_ok else "aiohttp"
-
-    async def async_setup(self) -> None:
-        if not self._use_impersonation:
-            self._curl_ok = False
-            return
-        try:
-            import curl_cffi  # noqa: F401
-        except ImportError:
-            try:
-                from homeassistant.requirements import async_process_requirements
-
-                await async_process_requirements(self._hass, "lego_tracker", [CURL_REQUIREMENT], is_built_in=False)
-                import curl_cffi  # noqa: F401
-            except Exception as err:  # noqa: BLE001 - optional dependency, never fatal
-                _LOGGER.warning("curl_cffi unavailable, falling back to aiohttp (more likely to be blocked): %s", err)
-                self._curl_ok = False
-                return
-        self._curl_ok = True
+        return "aiohttp"
 
     async def async_close(self) -> None:
         for sess in self._sessions.values():
@@ -166,14 +145,9 @@ class Fetcher:
     def _session(self, retailer: str) -> Any:
         """One cookie jar per retailer, so consent/session cookies persist between polls."""
         if retailer not in self._sessions:
-            if self._curl_ok:
-                from curl_cffi.requests import AsyncSession
+            from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
-                self._sessions[retailer] = AsyncSession(impersonate="chrome", timeout=30)
-            else:
-                from homeassistant.helpers.aiohttp_client import async_create_clientsession
-
-                self._sessions[retailer] = async_create_clientsession(self._hass)
+            self._sessions[retailer] = async_create_clientsession(self._hass)
         return self._sessions[retailer]
 
     async def _request(self, retailer: str, url: str, referer: str | None = None, binary: bool = False) -> tuple[int, Any]:
@@ -186,44 +160,22 @@ class Fetcher:
         home = redirect_home(retailer, url)
         for _hop in range(MAX_REDIRECTS + 1):
             check_url(url, home)
-            if self._curl_ok:
-                # streamed: a body over MAX_BODY is never held in memory as a whole
-                resp = await sess.get(url, headers=headers, allow_redirects=False, stream=True)
-                complete = False
+            async with sess.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=60 if binary else 30),
+                                allow_redirects=False) as resp:
+                status, loc = resp.status, resp.headers.get("Location")
+                if status in REDIRECTS and loc:
+                    url = urljoin(url, loc)
+                    continue
+                _too_big(resp.headers.get("Content-Length"))
+                buf = bytearray()             # read(n) may return early: read until the end or past the limit
+                while len(buf) <= MAX_BODY and (chunk := await resp.content.read(min(65536, MAX_BODY + 1 - len(buf)))):
+                    buf += chunk
+                _too_big(len(buf))
+                raw = bytes(buf)
                 try:
-                    status, loc = resp.status_code, resp.headers.get("location")
-                    if status in REDIRECTS and loc:
-                        url = urljoin(url, loc)
-                        continue
-                    _too_big(resp.headers.get("content-length"))
-                    chunks, size = [], 0
-                    async for chunk in resp.aiter_content():
-                        size += len(chunk)
-                        _too_big(size)
-                        chunks.append(chunk)
-                    raw, charset = b"".join(chunks), resp.encoding
-                    complete = True
-                finally:
-                    if not complete and getattr(resp, "quit_now", None) is not None:
-                        resp.quit_now.set()       # stop the transfer itself (redirect body, too big, error)
-                    await resp.aclose()
-            else:
-                async with sess.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=60 if binary else 30),
-                                    allow_redirects=False) as resp:
-                    status, loc = resp.status, resp.headers.get("Location")
-                    if status in REDIRECTS and loc:
-                        url = urljoin(url, loc)
-                        continue
-                    _too_big(resp.headers.get("Content-Length"))
-                    buf = bytearray()             # read(n) may return early: read until the end or past the limit
-                    while len(buf) <= MAX_BODY and (chunk := await resp.content.read(min(65536, MAX_BODY + 1 - len(buf)))):
-                        buf += chunk
-                    _too_big(len(buf))
-                    raw = bytes(buf)
-                    try:
-                        charset = resp.get_encoding()
-                    except Exception:  # noqa: BLE001 - unknown / undetectable charset
-                        charset = resp.charset
+                    charset = resp.get_encoding()
+                except Exception:  # noqa: BLE001 - unknown / undetectable charset
+                    charset = resp.charset
             self.final_url[retailer] = url
             if binary:
                 return status, raw
@@ -250,8 +202,6 @@ class Fetcher:
     async def _get(self, retailer: str, url: str, search: bool = False, binary: bool = False) -> tuple[int, Any]:
         if not ready():          # the one gate every request to a shop or comparison site passes
             raise NotReady(T("no shop settings imported (or their terms not accepted): nothing is fetched"))
-        if self._curl_ok is None:
-            await self.async_setup()
         site = site_of(url)
         lock = self._locks.setdefault(site, asyncio.Lock())      # one request at a time per site
         async with lock:
@@ -322,7 +272,7 @@ class Fetcher:
             status, page = await self._get(retailer, url)
         except Aborted:
             return None, None, 0, T("paused: the job was stopped")
-        except Exception as err:  # noqa: BLE001 - aiohttp and curl_cffi raise different types
+        except Exception as err:  # noqa: BLE001 - network, TLS and decoding errors
             return None, None, 0, T("network error: {error}", error=str(err)[:120])
         size = len(page or "")
         if status in (403, 429, 503):

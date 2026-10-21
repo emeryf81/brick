@@ -917,3 +917,10 @@ def test_shop_settings_written_before_the_new_name_are_accepted():
     example = json.loads((Path(__file__).parent.parent / "examples" / "brick-shops.example.json").read_text("utf-8"))
     old = shops.validate_settings({**example, "format": "lot-shop-settings"})
     assert old["format"] == "brick-shop-settings" and old["shops"] == shops.validate_settings(example)["shops"]
+
+
+def test_the_chrome_imitation_option_is_dropped():
+    """1.2.3 has no Chrome imitation any more: its stored option goes away once, the rest stays."""
+    from lego_pkg import shops
+    assert shops.upgrade_options({"use_impersonation": True, "auto_refresh": False}) == {"auto_refresh": False}
+    assert shops.upgrade_options({"auto_refresh": False}) is None

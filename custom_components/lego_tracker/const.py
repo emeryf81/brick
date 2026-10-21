@@ -6,7 +6,7 @@ STORAGE_KEY = f"{DOMAIN}.data"
 STORAGE_VERSION = 1
 
 PANEL_URL = "brick"
-API_LEVEL = 10         # raise together with API_LEVEL in the panel when the panel needs new server commands
+API_LEVEL = 11         # raise together with API_LEVEL in the panel when the panel needs new server commands
 PANEL_ELEMENT = "lego-tracker-panel"
 STATIC_URL = f"/{DOMAIN}_static"
 OFFICIAL = "official"      # the source of data read on the official LEGO shop (its RRP, image, name, pieces)
@@ -17,7 +17,6 @@ CONF_RETAILERS = "retailers"
 CONF_DIGEST_TIME = "digest_time"
 CONF_SET_DATA_KEY = "set_data_api_key"
 CONF_MIN_HISTORY_DAYS = "min_history_days"
-CONF_IMPERSONATE = "use_impersonation"
 CONF_NOTIFY = "notify_service"
 CONF_PARTS_KEY = "parts_api_key"
 CONF_PARTNER_CLIENT_ID = "partner_client_id"    # the partner API of the shop read as "partner"

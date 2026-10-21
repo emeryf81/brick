@@ -14,7 +14,6 @@
           "refresh_times": "Fixed times",
           "digest_time": "Daily digest",
           "min_history_days": "History for 'lowest ever'",
-          "use_impersonation": "Imitate Chrome",
           "notify_service": "Notify service",
           "set_data_api_key": "Set data key",
           "parts_api_key": "Parts database key"
@@ -29,7 +28,6 @@
           "refresh_times": "E.g. 07:30, 19:30.",
           "digest_time": "Time of the daily summary.",
           "min_history_days": "Days of prices before 'lowest ever' counts.",
-          "use_impersonation": "curl_cffi: far fewer blocks.",
           "notify_service": "Optional; the Notifications tab in the panel is better.",
           "set_data_api_key": "Optional, free.",
           "parts_api_key": "Optional, free."
@@ -58,7 +56,6 @@
           "refresh_times": "Fixed times",
           "digest_time": "Daily digest",
           "min_history_days": "History for 'lowest ever'",
-          "use_impersonation": "Imitate Chrome",
           "notify_service": "Notify service",
           "set_data_api_key": "Set data key",
           "parts_api_key": "Parts database key"
@@ -73,7 +70,6 @@
           "refresh_times": "E.g. 07:30, 19:30.",
           "digest_time": "Time of the daily summary.",
           "min_history_days": "Days of prices before 'lowest ever' counts.",
-          "use_impersonation": "curl_cffi: far fewer blocks.",
           "notify_service": "Optional; the Notifications tab in the panel is better.",
           "set_data_api_key": "Optional, free.",
           "parts_api_key": "Optional, free."

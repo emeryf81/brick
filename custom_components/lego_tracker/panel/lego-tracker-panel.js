@@ -78,7 +78,7 @@ const signPct = (v) => (v == null ? "–" : `${v > 0 ? "+" : ""}${v.toLocaleStri
 const DATE = (ts, o = { day: "2-digit", month: "short" }) => new Date(ts * 1000).toLocaleDateString(LOC, o);
 const TIME = (ts) => new Date(ts * 1000).toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" });
 /** What this panel needs from the server (API_LEVEL in const.py). Different = Home Assistant still runs older code. */
-const API_LEVEL = 10;
+const API_LEVEL = 11;
 /** The comparison sites of the imported shop settings: id → name (filled from the server, see load()). */
 const SRC = {};
 /** How a price was read, as one letter: ⓤ your own browser (userscript), ⓒ a comparison site, ⓜ the market value, ⌂ the shop's own site. */
@@ -537,7 +537,13 @@ class LegoTrackerPanel extends HTMLElement {
       // only the userscript in this very page (not another frame or site), and only plain values
       if (e.origin !== location.origin || (e.source && e.source !== window) || !m || typeof m !== "object" || m.source !== "lego-tracker-userscript") return;
       const num = (v) => (Number.isFinite(+v) ? +v : 0), str = (v) => (typeof v === "string" ? v.slice(0, 80) : "");
-      if (m.type === "relay-pong") this.state.relayHere = { version: str(m.version), token: !!m.token, running: !!m.running, last: num(m.last), continuous: !!m.continuous, render: !!m.render };
+      if (m.type === "relay-pong") {
+        const before = (this.state.relayHere || {}).version;
+        this.state.relayHere = { version: str(m.version), token: !!m.token, running: !!m.running, last: num(m.last), continuous: !!m.continuous, render: !!m.render };
+        // the reply usually comes after the userscript page was drawn: show or hide its version warning now
+        const box = this.shadowRoot.getElementById("usold");
+        if (box && before !== this.state.relayHere.version) box.innerHTML = this.oldScriptInner();
+      }
       if (m.type === "continuous-status") {
         this.state.contRun = { on: !!m.on, running: !!m.running, idle: !!m.idle, other_tab: !!m.other_tab, done: num(m.done), ok: num(m.ok), fail: num(m.fail),
           found: num(m.found), next: num(m.next), shop: str(m.shop), set_number: str(m.set_number), error: str(m.error) };
@@ -2112,7 +2118,6 @@ class LegoTrackerPanel extends HTMLElement {
             <span class="hint muted">${t("Words or phrases that may appear in the title of a real set, e.g. a set with a light brick.")}</span></label>
           <label style="grid-column:1/-1">${t("Try a product title")}<input id="o_ftest" placeholder="LMB verlichtingsset voor LEGO 10368"><span class="hint" id="o_fres"></span></label>
         </div></div>
-      <div class="panel"><h3>🛠️ ${t("Technical")}</h3><div class="form"><label class="chk"><input type="checkbox" id="o_imp" ${st.use_impersonation ? "checked" : ""}> ${t("Imitate the Chrome browser (curl_cffi) – now: {transport}", { transport: esc(st.transport) })}</label></div></div>
       <div class="panel" style="position:sticky;bottom:12px;z-index:2;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button class="btn" id="o_save">💾 ${t("Save settings")}</button><span class="muted" style="font-size:13px">${t("After saving the integration restarts briefly (a running job stops).")}</span></div>`;
   }
   /** Turn a pasted search-result URL into a template: the set number becomes {query} / {number}. */
@@ -2131,8 +2136,14 @@ class LegoTrackerPanel extends HTMLElement {
     const ex = tpl.replace("{query}", "LEGO+10281").replace("{number}", "10281").replace("{locale}", locale || "nl-be");
     return `${t("Example")}: <a href="${esc(ex)}" target="_blank" rel="noopener noreferrer">${esc(ex.length > 70 ? ex.slice(0, 70) + "…" : ex)} ↗</a>`;
   }
+  /** A warning when the userscript in this browser is another version than B.R.I.C.K. (it can't update itself from an older address). */
+  oldScriptInner() {
+    const here = this.state.relayHere, d = this.state.data;
+    if (!here || !here.version || !d || here.version === d.version) return "";
+    return `<div class="banner">⚠️ ${t("The userscript in this browser is version {old}, B.R.I.C.K. is version {new}. Install it again with the button below to get the new version.", { old: esc(here.version), new: esc(d.version) })}</div>`;
+  }
   vUserscript() {
-    const origin = location.origin, url = `${origin}/api/lego_tracker/lego-tracker.user.js`, last = this.state.data.userscript_last;
+    const origin = location.origin, url = `${origin}${this.state.data.userscript_url || ""}`, last = this.state.data.userscript_last;
     const ua = navigator.userAgent, browser = /Edg\//.test(ua) ? "edge" : /Firefox\//.test(ua) ? "firefox" : /Safari\//.test(ua) && !/Chrome\//.test(ua) ? "safari" : "chrome";
     const stores = { chrome: ["Chrome", "https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo"], edge: ["Edge", "https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd"], firefox: ["Firefox", "https://addons.mozilla.org/firefox/addon/tampermonkey/"], safari: ["Safari", "https://www.tampermonkey.net/?browser=safari"] };
     const step = (n, title, body) => `<div class="action" style="--i:${n}"><b><span class="st ok" style="margin-right:6px">${n}</span>${title}</b>${body}</div>`;
@@ -2145,6 +2156,7 @@ class LegoTrackerPanel extends HTMLElement {
       <ol style="margin:0 0 10px;padding-left:20px">${how.map((x) => `<li>${x}</li>`).join("")}</ol><div id="contbox">${this.contBoxInner()}</div></div>
       <div class="panel"><h3>🔁 ${t("Browser relay")}</h3><p>${t("While Home Assistant is open in a browser with the userscript, that browser fetches the shop pages that fail on the server in the background, calmly one by one, and sends the prices to Home Assistant. It runs automatically at most every few hours (Settings), or now with the button.")}</p><div id="relaybox">${this.relayBoxInner()}</div></div>
       <div class="panel"><h3>🧩 ${t("Send prices from your own browser")}</h3><p>${t("Shops block servers, but not your browser. The userscript reads the price and product title on every product page you visit and sends them to Home Assistant. That also works for shops that block servers, and the title helps the link check. Only products that are already tracked (same link or product code) are updated.")}</p>
+      <div id="usold">${this.oldScriptInner()}</div>
       ${last ? `<div class="banner" style="background:color-mix(in srgb,var(--lt-green) 12%,var(--lt-card));border-color:color-mix(in srgb,var(--lt-green) 40%,transparent)">✅ ${t("Works: last price received {when} (set {number}, {price} at {shop}).", { when: ago(last.ts), number: esc(last.set_number), price: EUR(last.price), shop: esc(this.state.data.retailers[last.retailer] || last.retailer) })} <a data-goto="log/all" style="cursor:pointer">${t("Logbook")} →</a></div>` : `<div class="banner">${t("No price received through the userscript yet.")}</div>`}</div>
       <div class="actions">
       ${step(1, t("Install Tampermonkey"), `<p>${t("Free browser extension. For your browser ({browser}):", { browser: stores[browser][0] })}</p><a class="btn" href="${stores[browser][1]}" target="_blank" rel="noopener noreferrer">${t("Tampermonkey for {browser}", { browser: stores[browser][0] })} ↗</a><p style="font-size:12px">${t("Other browsers:")} ${Object.entries(stores).filter(([k]) => k !== browser).map(([, [n, u]]) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${n}</a>`).join(" · ")}. ${t("In Chrome/Edge also switch on “Allow user scripts” for the extension, or developer mode.")}</p>`)}
@@ -2555,7 +2567,7 @@ class LegoTrackerPanel extends HTMLElement {
         notify_service: $("o_notify").value.trim(),
         digest_time: $("o_digest").value, refresh_mode: d.mode, spread_hours: +$("o_spread").value, watch_cycle_min: +$("o_wcycle").value,
         ...(d.mode === "times" ? { refresh_times: $("o_times").value } : {}),
-        value_source: (root.querySelector("input[name=vsrc]:checked") || {}).value || "shop_first", use_impersonation: $("o_imp").checked,
+        value_source: (root.querySelector("input[name=vsrc]:checked") || {}).value || "shop_first",
         retailers: d.shops.filter((x) => x.enabled).map((x) => x.id), no_autopause: d.shops.filter((x) => !x.autopause).map((x) => x.id),
         custom_shops: d.custom, shop_search: Object.fromEntries(d.shops.filter((x) => x.builtin).map((x) => [x.id, x.search === x.default_search ? "" : this.toTemplate(x.search || "")])),
         lego_locale: ($("o_locale").value || "nl-be").trim(), language: $("o_lang").value,

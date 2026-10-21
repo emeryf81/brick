@@ -14,7 +14,6 @@
           "refresh_times": "Heures fixes",
           "digest_time": "Résumé quotidien",
           "min_history_days": "Historique « plus bas »",
-          "use_impersonation": "Imiter Chrome",
           "notify_service": "Service notify",
           "set_data_api_key": "Clé données de sets",
           "parts_api_key": "Clé base de pièces"
@@ -29,7 +28,6 @@
           "refresh_times": "P. ex. 07:30, 19:30.",
           "digest_time": "Heure du résumé quotidien.",
           "min_history_days": "Jours de prix avant que « le plus bas » compte.",
-          "use_impersonation": "curl_cffi : beaucoup moins de blocages.",
           "notify_service": "Optionnel ; mieux : l'onglet Notifications du panneau.",
           "set_data_api_key": "Optionnel, gratuit.",
           "parts_api_key": "Optionnel, gratuit."
@@ -58,7 +56,6 @@
           "refresh_times": "Heures fixes",
           "digest_time": "Résumé quotidien",
           "min_history_days": "Historique « plus bas »",
-          "use_impersonation": "Imiter Chrome",
           "notify_service": "Service notify",
           "set_data_api_key": "Clé données de sets",
           "parts_api_key": "Clé base de pièces"
@@ -73,7 +70,6 @@
           "refresh_times": "P. ex. 07:30, 19:30.",
           "digest_time": "Heure du résumé quotidien.",
           "min_history_days": "Jours de prix avant que « le plus bas » compte.",
-          "use_impersonation": "curl_cffi : beaucoup moins de blocages.",
           "notify_service": "Optionnel ; mieux : l'onglet Notifications du panneau.",
           "set_data_api_key": "Optionnel, gratuit.",
           "parts_api_key": "Optionnel, gratuit."

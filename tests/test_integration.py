@@ -459,11 +459,23 @@ async def test_csv_update_job_and_title_from_userscript(hass: HomeAssistant, ent
 async def test_userscript_is_generated(hass: HomeAssistant, entry, hass_client_no_auth):
     await _setup(hass, entry)
     client = await hass_client_no_auth()
-    resp = await client.get("/api/lego_tracker/lego-tracker.user.js")
+    c = hass.data[DOMAIN][entry.entry_id]
+    path = c.userscript_path
+    assert path.startswith("/api/lego_tracker/userscript/") and len(c.store["userscript_key"]) >= 30
+    resp = await client.get(path)
     assert resp.status == 200
     text = await resp.text()
     assert "// ==UserScript==" in text and "@match        https://www.dreamland.be/*" in text
-    assert "{{" not in text and "@updateURL" in text and "title: titleOf(document)" in text
+    assert "{{" not in text and f"@updateURL    http://127.0.0.1:{client.port}{path}" in text and "title: titleOf(document)" in text
+    # without this installation's key there is no script: the old open address and a wrong key give nothing
+    assert (await client.get("/api/lego_tracker/lego-tracker.user.js")).status == 404
+    assert (await client.get("/api/lego_tracker/userscript/wrong-key/brick.user.js")).status == 404
+    # the key is not part of a backup, and restoring a backup keeps it
+    key = c.store["userscript_key"]
+    backup = c.export_backup()
+    assert "userscript_key" not in backup
+    c.import_backup(backup)
+    assert c.store["userscript_key"] == key
 
 
 async def test_lego_com_is_first_source(hass: HomeAssistant, entry, no_network):
@@ -788,7 +800,7 @@ async def test_language_setting_translates_outbound_texts(hass: HomeAssistant, e
     with pytest.raises(ValueError, match="niet"):
         c.update_offer("99999", "bol", manual_price=1)
     client = await hass_client_no_auth()
-    text = await (await client.get("/api/lego_tracker/lego-tracker.user.js")).text()
+    text = await (await client.get(c.userscript_path)).text()
     assert "{{" not in text and "B.R.I.C.K." in text
     await ws.send_json({"id": 2, "type": "lego_tracker/settings/set", "fields": {"language": "xx"}})
     assert not (await ws.receive_json())["success"]
@@ -913,7 +925,8 @@ async def test_browser_relay_list_and_results(hass: HomeAssistant, entry, no_net
 
 async def test_userscript_has_relay_and_ha_include(hass: HomeAssistant, entry, hass_client_no_auth):
     await _setup(hass, entry)
-    text = await (await (await hass_client_no_auth()).get("/api/lego_tracker/lego-tracker.user.js")).text()
+    path = hass.data[DOMAIN][entry.entry_id].userscript_path
+    text = await (await (await hass_client_no_auth()).get(path)).text()
     assert "// @include      *://*/brick*" in text and "/api/lego_tracker/relay" in text and "{{" not in text
 
 
@@ -1561,7 +1574,7 @@ async def test_manual_actions_wait_two_minutes(hass: HomeAssistant, entry, no_ne
 async def test_fetcher_spaces_requests_per_site():
     from custom_components.lego_tracker.client import Fetcher
 
-    f = Fetcher(None, use_impersonation=False)
+    f = Fetcher(None)
     f.last_request["bol.com"] = time.time()
     assert 25 < f.next_free("https://www.bol.com/nl/nl/p/x/") <= 30
     assert f.next_free("https://www.amazon.nl/dp/B0") == 0
@@ -1701,7 +1714,7 @@ async def test_links_from_sitemap_ean_and_redirect(hass: HomeAssistant, entry, n
     assert seen[-1].endswith("text=5702017583556") and c.store["offers"]["60510"]["kruidvat_be"]["url"].endswith("/p/123")
 
     # a search that jumps straight to the product page (redirect) is taken
-    f = Fetcher(None, use_impersonation=False)
+    f = Fetcher(None)
     f.final_url["kruidvat_be"] = "https://www.kruidvat.be/nl/lego-city-brandweerkazerne-60510/p/777"
     page = "<html><title>LEGO City 60510 Brandweerkazerne | Kruidvat</title></html>"
     assert f._landed_on_product("kruidvat_be", "https://www.kruidvat.be/nl/search?text=60510", page, "60510").endswith("/p/777")
@@ -2533,7 +2546,7 @@ async def test_smyths_toys_built_in(hass: HomeAssistant, no_network):
     assert search_url("smyths_be", "11504") == "https://www.smythstoys.com/be/nl-be/search?text=11504"
     p = parse_page("smyths_be", page, "11504")
     assert p.price == 37.99 and "11504" in p.title
-    f = Fetcher(None, use_impersonation=False)
+    f = Fetcher(None)
     f.final_url["smyths_be"] = product
     assert f._landed_on_product("smyths_be", search_url("smyths_be", "11504"), page, "11504") == product
     # a search that jumps to a page you blocked for this set is no result: other ways may find another link

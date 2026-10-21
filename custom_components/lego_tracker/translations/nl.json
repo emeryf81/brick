@@ -14,7 +14,6 @@
           "refresh_times": "Vaste tijdstippen",
           "digest_time": "Dagelijkse samenvatting",
           "min_history_days": "Historiek 'laagste ooit'",
-          "use_impersonation": "Chrome nabootsen",
           "notify_service": "Notify-service",
           "set_data_api_key": "Sleutel setgegevens",
           "parts_api_key": "Sleutel onderdelendatabank"
@@ -29,7 +28,6 @@
           "refresh_times": "Bv. 07:30, 19:30.",
           "digest_time": "Tijdstip van de dagelijkse samenvatting.",
           "min_history_days": "Dagen prijzen voor 'laagste ooit' telt.",
-          "use_impersonation": "curl_cffi: veel minder blokkades.",
           "notify_service": "Optioneel; beter via het tabblad Meldingen in het paneel.",
           "set_data_api_key": "Optioneel, gratis.",
           "parts_api_key": "Optioneel, gratis."
@@ -58,7 +56,6 @@
           "refresh_times": "Vaste tijdstippen",
           "digest_time": "Dagelijkse samenvatting",
           "min_history_days": "Historiek 'laagste ooit'",
-          "use_impersonation": "Chrome nabootsen",
           "notify_service": "Notify-service",
           "set_data_api_key": "Sleutel setgegevens",
           "parts_api_key": "Sleutel onderdelendatabank"
@@ -73,7 +70,6 @@
           "refresh_times": "Bv. 07:30, 19:30.",
           "digest_time": "Tijdstip van de dagelijkse samenvatting.",
           "min_history_days": "Dagen prijzen voor 'laagste ooit' telt.",
-          "use_impersonation": "curl_cffi: veel minder blokkades.",
           "notify_service": "Optioneel; beter via het tabblad Meldingen in het paneel.",
           "set_data_api_key": "Optioneel, gratis.",
           "parts_api_key": "Optioneel, gratis."
